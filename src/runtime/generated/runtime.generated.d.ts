@@ -335,13 +335,14 @@ declare module "@termcraft/runtime" {
       readonly titleColor?: keyof ThemeTokens;
   }
   /**
-   * A titled, bordered column container (design-system §3.2). Default draws a
-   * single-line border in `border` with an optional `title` in `foreground` bold —
-   * the engine's `box()` defaults. `borderColor`/`titleColor` accept semantic tokens
-   * so a caller renders the design's variants (an active/popup panel uses an `accent`
-   * border + `accentHi` title; an error panel a `danger` border; a welded sub-panel a
-   * `foregroundMuted` title). Colors resolve from tokens; the mandatory `id` flows to
-   * the element for host geometry.
+   * A titled, bordered column container (design-system §3.2). Draws the design's rounded
+   * frame (`box()`'s own default, `design/termcraft-engine.js:47`) with an optional `title`
+   * space-padded into the top border (`:52`'s `' '+title+' '`), or no caption at all when
+   * `title` is absent or empty — matching the engine's own `if(o.title){…}` guard.
+   * `borderColor`/`titleColor` accept semantic tokens so a caller renders the design's variants
+   * (an active/popup panel uses an `accent` border + `accentHi` title; an error panel a
+   * `danger` border; a welded sub-panel a `foregroundMuted` title). Colors resolve from
+   * tokens; the mandatory `id` flows to the element for host geometry.
    */
   function Panel(props: PanelProps): React.ReactNode;
 

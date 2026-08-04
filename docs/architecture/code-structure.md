@@ -12,7 +12,8 @@ convention makes on top. The executable roots (`main.tsx`, `demo.tsx`) and the
 `entrypoint/` ring that owns their lifecycle have landed, `core`'s own Kernel is
 fully self-assembled behind a public `core/index.ts` boundary (kernel-assembly
 WP-1) — `createKernel`, the seven-machine/mailbox/capability wiring, and a real
-command handler registry answering all 43 command kinds — and the production
+command handler registry answering all 44 command kinds (43 → 44, chat-scroll spec
+§6.1: `chat.load-older`) — and the production
 adapter graph mapping `store`/`agent`/`gate`/`host` onto `core/ports/` has landed
 too (MVP gap closeout WP-2). `src/entrypoint/model/create-shell.ts` (WP-4) is the
 composition root that builds a real `KernelDeps` from that graph and constructs a
@@ -376,7 +377,8 @@ final group's own heading spells out which is which).
   `createUiRoot`, `createUiDeps`, and the UI-declared `KernelPort`
 - `src/ui/app/model/root.tsx`, `src/ui/app/ui/App.tsx` — the disposable OpenTUI
   root seam and reactive application root that phase 8 composes
-- `src/ui/app/model/keymap.ts`, `src/ui/app/model/intent.ts`, and
+- `src/ui/app/model/keymap.ts`, `src/ui/app/model/intent.ts`,
+  `src/ui/app/model/primary-input.ts`, `src/ui/text-input/model/`, and
   `src/ui/preview/model/interaction.ts` — the interaction ownership boundary from
   terminal input through exact Kernel commands and displayed-frame geometry tokens
 

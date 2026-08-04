@@ -14,6 +14,26 @@ export interface ScreenInput {
   readonly projectId: UUIDv7 | null;
   readonly trust: "trusted" | "untrusted-read-only" | null;
   readonly terminal: Readonly<{ w: number; h: number }>;
+  /**
+   * Whether the composition root is going to open a project it already knows is on disk
+   * (`UiEnv.projectExists`, itself `ShellLaunchV1.existing`), and that open is still
+   * outstanding — neither abandoned nor already landed (`UiLocalState.startupOpenPending` in
+   * `ui/app/model/deps.ts` clears it either way). Deliberately NOT `ProjectMirror.opening`: that
+   * only turns true once the command is admitted, so between UI mount and admission `projectId`
+   * is null and `opening` is false — Home would flash for a frame. The composition root knows
+   * this synchronously, before the UI mounts; that fact is the input.
+   */
+  readonly startupOpenPending: boolean;
+  /** `ProjectMirror.openFailure !== null` — a blocked open, which Home owns. */
+  readonly openFailed: boolean;
+  /**
+   * Whether the auto-shown trust prompt (spec §3.1, 2026-08-03 trust-prompt-on-open fix) has
+   * already been answered this session (`ui/app/model/deps.ts`'s `UiLocalState
+   * .trustPromptDismissed`, set by the `trust-accept`/`trust-decline` intents). Starts `false` on
+   * every process launch — see that atom's own doc comment for why there is no in-session way
+   * to flip it back.
+   */
+  readonly trustPromptDismissed: boolean;
 }
 
 /**
@@ -25,12 +45,25 @@ export interface ScreenInput {
  * conflating the true needs-trust state with the brief pre-`ready` opening/recovering window
  * (snapshot `trust` is null throughout both). When the typed snapshot lands the derivation
  * tightens to the project machine's own phase without changing this screen set.
+ *
+ * The `projectId === null` + `startupOpenPending` case is the Workspace's "opening" state — NOT a
+ * new `ScreenKind`, which is why the transition to a filled Workspace is a re-render rather than
+ * a remount.
  */
 export function deriveScreen(input: ScreenInput): ScreenKind {
   // Below the minimum frame the enlarge placeholder replaces everything (design §9).
   if (input.terminal.w < MIN_FRAME.w || input.terminal.h < MIN_FRAME.h) return "enlarge";
-  if (input.projectId === null) return "home";
-  if (input.trust === "untrusted-read-only") return "read-only";
+  if (input.projectId === null) {
+    // An existing project's destination IS the Workspace — mount it now and let it fill,
+    // rather than parking on Home for the whole ready sequence (up to ~30s,
+    // `docs/architecture/flows/launch.md`). A blocked open drops back to Home, which owns
+    // `HomeOpenFailurePanel` and the ⏎ retry.
+    if (input.startupOpenPending && !input.openFailed) return "workspace";
+    return "home";
+  }
+  if (input.trust === "untrusted-read-only") {
+    return input.trustPromptDismissed ? "read-only" : "trust-prompt";
+  }
   if (input.trust === null) return "trust-prompt";
   return "workspace";
 }
@@ -43,6 +76,8 @@ export function deriveScreen(input: ScreenInput): ScreenKind {
 export function createScreenAtom(deps: {
   readonly project: () => ProjectMirror;
   readonly terminal: () => Readonly<{ w: number; h: number }>;
+  readonly startupOpenPending: () => boolean;
+  readonly trustPromptDismissed: () => boolean;
 }): Computed<ScreenKind> {
   return computed(() => {
     const project = deps.project();
@@ -50,6 +85,9 @@ export function createScreenAtom(deps: {
       projectId: project.projectId,
       trust: project.trust,
       terminal: deps.terminal(),
+      startupOpenPending: deps.startupOpenPending(),
+      openFailed: project.openFailure !== null,
+      trustPromptDismissed: deps.trustPromptDismissed(),
     });
   }, "ui.mirror.screen");
 }

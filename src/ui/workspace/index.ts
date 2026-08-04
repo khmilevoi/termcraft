@@ -13,10 +13,12 @@ export type { CellPoint, CellSize } from "./model/preview-geometry";
 export {
   chatColumnWidth,
   previewFrameOrigin,
+  previewPaneHeight,
   previewPaneWidth,
   previewRegionSize,
+  previewTabStripWidth,
 } from "./model/preview-geometry";
 export type { TabEntry } from "./model/tabs";
 export { deriveTabs, neighbourTabSlug, tabWidth, tabsOverflow } from "./model/tabs";
-export type { WorkspaceDeps, WorkspaceLocalState } from "./types";
+export type { ChatViewport, WorkspaceDeps, WorkspaceLocalState } from "./types";
 export { Workspace } from "./ui/Workspace";

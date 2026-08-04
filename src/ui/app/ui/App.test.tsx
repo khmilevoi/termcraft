@@ -5,7 +5,7 @@ import { MouseButtons } from "@opentui/core/testing";
 import type { PreviewFrameV1 } from "core/ports";
 import type { EventPayloadByKindV1 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
-import type { HomeAgentHealth } from "ui/home";
+import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import { FRESH_CHAT_LABEL } from "ui/popups";
 import { requestGeometry } from "ui/preview";
@@ -65,7 +65,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
   test("the startup probe surfaces a missing agent without a manual recheck, and r re-checks it (M15, finding §2.7)", async () => {
     const kernel = createFakeKernel();
     // The probe itself reports the CLI missing on its first call (the startup probe
-    // `createUiDeps` now fires — no manual `local.homeHealth.set` needed to reach this state,
+    // `createUiDeps` now fires — no manual `local.agentHealth.set` needed to reach this state,
     // reproducing a real phase-8 probe's first reading) and recovers on the second call (the
     // `r` re-check).
     let calls = 0;
@@ -260,7 +260,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
 
   test("paints agent · model · effort on the first frame, before any probe resolves (finding §2.7, phase-8 Task 13)", async () => {
     const kernel = createFakeKernel();
-    const neverResolves = () => new Promise<HomeAgentHealth>(() => {});
+    const neverResolves = () => new Promise<AgentHealth>(() => {});
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 40 },
@@ -417,7 +417,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       height: 36,
     });
     open = renderer;
-    await renderer.waitFor(() => homeSubmitAllowed(deps.local.homeHealth()));
+    await renderer.waitFor(() => homeSubmitAllowed(deps.local.agentHealth()));
 
     await renderer.act(() => renderer.mockInput.typeText("/"));
     const menu = await renderer.waitForFrame(
@@ -789,6 +789,10 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       pageDescriptors: [readyPage()],
     });
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // The trust prompt is already answered — without this, `trust: "untrusted-read-only"` alone
+    // resolves `deps.screen()` to `"trust-prompt"` (Task 1, 2026-08-03), so the app root would
+    // render `TrustPrompt` instead of the read-only Workspace this test asserts on.
+    deps.local.trustPromptDismissed.set(true);
     const renderer = await createReactTestRenderer(<App deps={deps} />, {
       width: 120,
       height: 36,
@@ -832,7 +836,7 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     // renders identically during `checking`, so Enter below needs the outcome to have actually
     // settled to something that allows submit (the default test probe resolves to `advisory`,
     // never `ready` — fix round 1, Finding 1), not merely the first seeded frame.
-    await renderer.waitFor(() => homeSubmitAllowed(deps.local.homeHealth()));
+    await renderer.waitFor(() => homeSubmitAllowed(deps.local.agentHealth()));
 
     await renderer.act(() => renderer.mockInput.typeText("build a dashboard"));
     expect(await renderer.waitForFrame((frame) => frame.includes("build a dashboard"))).toContain(
@@ -1104,5 +1108,146 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       "pin.create",
       "project.setTrust",
     ]);
+  });
+});
+
+describe("workspace-first launch (2026-08-02)", () => {
+  const existingEnv = {
+    root: "/tmp/existing",
+    workspaceIdentity: "local",
+    projectExists: true,
+  } as const;
+
+  test("an existing project mounts the Workspace shell, not Home, before anything opens", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+
+    const text = await renderer.waitForFrame(
+      (frame) => frame.includes("opening project…") && frame.includes("OPENING"),
+    );
+    expect(text).toContain("opening project…");
+    expect(text).toContain("OPENING");
+    // Home is not mounted at all on this path — the cursor-adjusted "escribe the TUI…" is the
+    // same substring the rest of this file uses to prove Home's placeholder is/isn't on screen
+    // (the literal leading "D" is covered by the cursor whenever Home IS live).
+    expect(text).not.toContain("escribe the TUI you want to design");
+  });
+
+  test("a fresh directory still lands on Home", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+
+    const text = await renderer.waitForFrame((frame) =>
+      frame.includes("escribe the TUI you want to design"),
+    );
+    expect(text).toContain("escribe the TUI you want to design");
+  });
+
+  test("a blockOpen drops the opening Workspace back to Home with its failure panel", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    // The pre-emit checkpoint: `deriveScreen` already mounts "workspace" for this pending,
+    // project-less startup open (Task 3), and the Workspace's own opening chrome (Task 5's
+    // "OPENING" chip) now renders for it — this guarantees the App has actually settled before
+    // the blockOpen below, and confirms both the routing and the chrome it drives.
+    expect(deps.screen()).toBe("workspace");
+    await renderer.waitForFrame((frame) => frame.includes("OPENING"));
+
+    await renderer.act(() =>
+      kernel.emit(
+        event("kernel.stateChanged", {
+          modelId: "kernel.project.state",
+          action: "kernel.project.blockOpen",
+          previousTag: "opening",
+          nextTag: "blocked",
+          metadata: {
+            reason: "manifest-read-failed",
+            failure: {
+              code: "PERSISTENCE_FAILED",
+              retryable: true,
+              safeMessage: "project.toml could not be read",
+              details: {},
+            },
+          },
+        }),
+      ),
+    );
+
+    const text = await renderer.waitForFrame((frame) =>
+      frame.includes("project.toml could not be read"),
+    );
+    expect(text).toContain("escribe the TUI you want to design");
+    expect(text).toContain("project.toml could not be read");
+    expect(text).not.toContain("OPENING");
+  });
+
+  test("an abandoned startup open lands on a Home that names the failure", async () => {
+    // THE REGRESSION TEST for branch review finding 2 (2026-08-03). `run-app.ts`'s two startup
+    // failure branches never reach the Kernel's `kernel.project.blockOpen`, so
+    // `ProjectMirror.openFailure` stays null for them — and `HomeOpenFailurePanel`, gated on that
+    // one field, used to render nothing at all here: the user was dropped on a bare Home with the
+    // only diagnostic sitting in a trace file. `App.tsx` now composes the mirror's field with
+    // `local.startupOpenFailure` (written by `abandonStartupOpen`) into the same prop, so the
+    // panel fires for this path too.
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.waitForFrame((frame) => frame.includes("OPENING"));
+
+    await renderer.act(() =>
+      deps.abandonStartupOpen({
+        reason: "startup-open-rejected",
+        safeMessage: "request rejected (PROJECT_UNTRUSTED)",
+      }),
+    );
+
+    const text = await renderer.waitForFrame((frame) =>
+      frame.includes("request rejected (PROJECT_UNTRUSTED)"),
+    );
+    // Home is live (its placeholder is on screen, cursor-adjusted as everywhere else in this
+    // file) and the panel is on it, carrying both halves of the failure: the `reason` slug as the
+    // box title and the message as its second line.
+    expect(text).toContain("escribe the TUI you want to design");
+    expect(text).toContain("startup-open-rejected");
+    expect(text).toContain("request rejected (PROJECT_UNTRUSTED)");
+    expect(text).toContain("this folder's project could not be opened");
+    expect(text).not.toContain("OPENING");
+    // The invariant the fix must not break: nothing was written into the mirror. The panel is on
+    // screen purely through the UI-local reading, with Kernel truth still null.
+    expect(deps.mirror.project().openFailure).toBeNull();
+  });
+
+  test("finishOpen turns the opening Workspace into a filled one", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 }, existingEnv);
+    const renderer = await createReactTestRenderer(<App deps={deps} clock={() => 0} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.waitForFrame((frame) => frame.includes("opening project…"));
+
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+
+    const text = await renderer.waitForFrame((frame) => frame.includes("Main"));
+    expect(text).not.toContain("opening project…");
+    expect(text).toContain("Main");
   });
 });

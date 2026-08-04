@@ -29,25 +29,18 @@ export interface AppShell {
 }
 
 /**
- * What the composition root learned while opening the caller's project, and threw away before
- * this existed (Gap D). Both facts have to be captured INSIDE `openOrCreateProject`: by the time
- * the UI mounts, `.termcraft/` exists on disk in both cases — the shell just created it — so
- * nothing downstream can re-derive them.
+ * What the composition root learned while opening the caller's project (Gap D). `existing` has to
+ * be captured INSIDE `openOrCreateProject`: by the time the UI mounts, `.termcraft/` exists on
+ * disk in both cases — the shell just created it — so nothing downstream can re-derive it.
  *
- * `hasContent` is the routing predicate: the project holds anything to view or edit — at least
- * one page, or at least one chat. Its real purpose is the CLONE (pages present, zero chats, since
- * `chats/` is git-ignored as of fix-bundle §2.5), which is exactly the case that most needs the
- * Workspace; `createProject` always mints the first chat header, so "exists but is empty" is
- * practically unreachable and Home stays reachable essentially only for a genuinely fresh
- * directory. `true` also for an EXISTING project whose content could not actually be confirmed
- * (a manifest or chat-listing read failed, fix round 1 Finding 1,
- * `create-shell.ts`'s `resolveShellLaunch`) — never fabricated as "nothing here" just because the
- * disk could not answer; the Kernel's own open sequence gets the chance to surface the real
- * failure instead of a silent Home.
+ * It was briefly paired with a `hasContent` routing predicate (one manifest read plus one
+ * `ChatStore.list()` before the Kernel was even constructed). Spec 2026-08-02 collapsed the two:
+ * `deriveScreen` routes on the same `existing` fact, so a second, weaker predicate could only
+ * ever disagree with it — and the case it existed to separate, an existing-but-empty project, is
+ * practically unreachable since `createProject` always mints the first chat header.
  */
 export interface ShellLaunchV1 {
   readonly existing: boolean;
-  readonly hasContent: boolean;
 }
 
 /**

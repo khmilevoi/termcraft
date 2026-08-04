@@ -4,6 +4,7 @@ import { installConsoleTee, resumeConsolePassthrough } from "infrastructure/debu
 import type { TeeSink } from "infrastructure/debug-log";
 import { createFakeKernel } from "ui/testing";
 
+import type { UiDeps } from "./deps";
 import { UI_RENDERER_CONFIG, UiRootError, createUiRoot } from "./root";
 
 describe("createUiRoot", () => {
@@ -92,6 +93,49 @@ describe("createUiRoot", () => {
 
     expect(result).toBeInstanceOf(UiRootError);
     expect(destroyed).toBe(1);
+  });
+
+  test("the handle can abandon a startup open the composition root never landed", async () => {
+    // `not.toThrow()` alone would pass for an empty method body — this asserts the actual
+    // observable effect instead (branch review finding 2, 2026-08-02 fix wave): the same
+    // technique `run-app.test.ts`'s `abandonRecordingAdapters` uses, capturing the real `deps`
+    // off the rendered React element's own props, since `createUiRoot` never returns `deps`
+    // itself on the handle.
+    let capturedDeps: UiDeps | undefined;
+    const result = await createUiRoot({
+      port: createFakeKernel(),
+      env: { root: ".", workspaceIdentity: "local", projectExists: true },
+      adapters: {
+        createRenderer: () => Promise.resolve({ width: 120, height: 36, destroy: () => undefined }),
+        createRoot: () => ({
+          render: (node: unknown) => {
+            capturedDeps = (node as { props: { deps: UiDeps } }).props.deps;
+          },
+          unmount: () => undefined,
+        }),
+      },
+    });
+
+    expect(result).not.toBeInstanceOf(Error);
+    if (result instanceof Error) return;
+    if (capturedDeps === undefined) throw new Error("expected render() to capture deps");
+    // An existing project mounts the Workspace with the startup open still pending
+    // (`deps.ts`'s `startupOpenPending = atom(env.projectExists, ...)`, `deriveScreen`'s
+    // `startupOpenPending && !openFailed` branch).
+    expect(capturedDeps.local.startupOpenPending()).toBe(true);
+    expect(capturedDeps.screen()).toBe("workspace");
+    const failure = {
+      reason: "startup-open-rejected",
+      safeMessage: "request rejected (PROJECT_UNTRUSTED)",
+    };
+    result.abandonStartupOpen(failure);
+    // The observable effect: the pending flag clears, the screen falls back to Home, and the
+    // reason the handle was handed reaches the atom Home's own failure panel is fed from
+    // (branch review finding 2, 2026-08-03) — the handle forwards the value, it does not drop it.
+    expect(capturedDeps.local.startupOpenPending()).toBe(false);
+    expect(capturedDeps.screen()).toBe("home");
+    expect(capturedDeps.local.startupOpenFailure()).toEqual(failure);
+    result.dispose();
   });
 });
 

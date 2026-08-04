@@ -16,6 +16,7 @@ import { hostFailureCodeOf, isDesignRenderFailure } from "ui/preview";
 import type {
   AgentIdentity,
   CapabilityState,
+  ChatHistoryMirror,
   ChatRecord,
   ChatsMirror,
   ExportMirror,
@@ -76,13 +77,24 @@ export interface Mirror {
   readonly previewNotice: Computed<PreviewNoticeMirror | null>;
   readonly chats: Atom<ChatsMirror>;
   /**
-   * The ACTIVE chat's persisted tail (WP-10 Task 7), fed by `chat.records`. A single bulk-replace
-   * atom, not a keyed `Map<chatId, records[]>` cache: the slice deliberately holds only the
-   * active chat's records (the Reatom "bulk replace is `atom.set`" guidance, RTM rules) — a
-   * re-switch back to a chat reloads its tail from a fresh `chat.records` (Task 5/6) rather than
-   * showing a cached copy, trading one re-load for avoiding unbounded UI memory (MVP tradeoff).
+   * The ACTIVE chat's loaded history window — see {@link ChatHistoryMirror}. Grows backwards
+   * through `chat.records.older` (chat-scroll spec §6.5) and forwards through `chat.records`,
+   * which now MERGES by `recordId` rather than bulk-replacing: `handlers/turn.ts` reloads the
+   * tail after every turn, so a replace would collapse a window paged three pages back on
+   * every agent reply. Still one `atom.set` with a new array.
    */
-  readonly records: Atom<readonly ChatRecord[]>;
+  readonly history: Atom<ChatHistoryMirror>;
+  /**
+   * The outcome of the most recent `chat.records.older` — the failure, or `null` for a success
+   * and after every chat switch. A Kernel fact, so it belongs here and not in UI-local state;
+   * `Workspace.tsx` reads it to retire its own loading latch (chat-scroll spec §6.6).
+   *
+   * Separate from {@link ChatHistoryMirror} on purpose: it is the only thing a FAILED page
+   * changes, and folding it in would force a window write on an event that learned nothing
+   * about the window — which is exactly what spec §7 forbids ("`prevCursor` is left as it was
+   * so the load can be retried. No records are lost.").
+   */
+  readonly lastOlderPageFailure: Atom<FailureDtoV1 | null>;
   readonly pinsByPage: Atom<ReadonlyMap<string, readonly PinDtoV1[]>>;
   readonly selection: Atom<SelectionMirror>;
   readonly diagnostics: Atom<ReadonlyMap<UUIDv7, DiagnosticDtoV1>>;
@@ -98,6 +110,7 @@ export interface Mirror {
 const IDLE_TURN: TurnMirror = { phase: "idle" };
 const NO_PREVIEW: PreviewMirror = { phase: "none" };
 const IDLE_EXPORT: ExportMirror = { phase: "idle" };
+const EMPTY_HISTORY: ChatHistoryMirror = { records: [], prevCursor: null, totalRecordCount: 0 };
 const EMPTY_PROJECT: ProjectMirror = {
   projectId: null,
   activePageSlug: null,
@@ -112,6 +125,28 @@ function withEntry<K, V>(source: ReadonlyMap<K, V>, key: K, value: V): ReadonlyM
   const next = new Map(source);
   next.set(key, value);
   return next;
+}
+
+/**
+ * A newer tail page folded into the window: same-id records are superseded in place by the
+ * incoming copy, everything the client holds ABOVE the page is untouched, and the page lands
+ * at the tail (chat-scroll spec §6.5).
+ */
+function mergeTail(
+  held: readonly ChatRecord[],
+  incoming: readonly ChatRecord[],
+): readonly ChatRecord[] {
+  const incomingIds = new Set(incoming.map((record) => record.recordId));
+  return [...held.filter((record) => !incomingIds.has(record.recordId)), ...incoming];
+}
+
+/** An older page folded in: whatever the client does not already hold, ahead of what it does. */
+function mergeOlder(
+  held: readonly ChatRecord[],
+  incoming: readonly ChatRecord[],
+): readonly ChatRecord[] {
+  const heldIds = new Set(held.map((record) => record.recordId));
+  return [...incoming.filter((record) => !heldIds.has(record.recordId)), ...held];
 }
 
 /**
@@ -236,7 +271,8 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
       : null;
   }, "ui.mirror.previewNotice");
   const chats = atom<ChatsMirror>({ activeChatId: null, summaries: new Map() }, "ui.mirror.chats");
-  const records = atom<readonly ChatRecord[]>([], "ui.mirror.records");
+  const history = atom<ChatHistoryMirror>(EMPTY_HISTORY, "ui.mirror.history");
+  const lastOlderPageFailure = atom<FailureDtoV1 | null>(null, "ui.mirror.lastOlderPageFailure");
   const pinsByPage = atom<ReadonlyMap<string, readonly PinDtoV1[]>>(
     new Map(),
     "ui.mirror.pinsByPage",
@@ -332,7 +368,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         chats.set({ activeChatId: payload.activeChatId, summaries: new Map() });
         agentIdentity.set(agentIdentityFromSnapshot(payload));
         // A fresh snapshot is the authoritative reset point; transient slices (turn, preview,
-        // selection, export, pins, diagnostics, records) are rebuilt from the events that follow
+        // selection, export, pins, diagnostics, history) are rebuilt from the events that follow
         // it — there is no replay (§9), so a subscription started mid-turn simply starts idle.
         turn.set(IDLE_TURN);
         preview.set(NO_PREVIEW);
@@ -340,7 +376,8 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         exportAtom.set(IDLE_EXPORT);
         pinsByPage.set(new Map());
         diagnostics.set(new Map());
-        records.set([]);
+        history.set(EMPTY_HISTORY);
+        lastOlderPageFailure.set(null);
         return;
       }
       case "kernel.capabilitiesChanged": {
@@ -617,19 +654,58 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         for (const removed of p.removedChatIds) summaries.delete(removed);
         chats.set({ activeChatId: p.activeChatId, summaries });
         project.set({ ...project(), activeChatId: p.activeChatId });
-        // The mirror's `records` slice holds only the ACTIVE chat's tail (Task 7 design
-        // decision) — moving `activeChatId` to a different chat makes the current tail stale
+        // The mirror's `history` slice holds only the ACTIVE chat's window (Task 7 design
+        // decision) — moving `activeChatId` to a different chat makes the current window stale
         // (it belongs to the chat that was just left). The newly-active chat's own tail arrives
         // as a follow-on `chat.records` from the same Kernel operation (Task 5/6), so clearing
         // here never leaves the UI without an eventual correct tail.
-        if (p.activeChatId !== previousActiveChatId) records.set([]);
+        if (p.activeChatId !== previousActiveChatId) {
+          history.set(EMPTY_HISTORY);
+          lastOlderPageFailure.set(null);
+        }
         return;
       }
       case "chat.records": {
         const p = envelope.payload;
         // Fenced to the active chat, the same pattern the turn cases use for a stale/late
-        // arrival (`mirror.ts`'s turnId fence): a tail for a since-switched-away chat is a no-op.
-        if (p.chatId === chats().activeChatId) records.set(p.records);
+        // arrival: a tail for a since-switched-away chat is a no-op.
+        if (p.chatId !== chats().activeChatId) return;
+        const held = history();
+        const records = mergeTail(held.records, p.records);
+        // KEEP the further-back cursor when the client already holds records this page does
+        // not contain: those are older, so its own cursor points further back than the fresh
+        // tail's does. Taking the incoming one would walk the paging back down toward the
+        // tail and re-request pages the window already has.
+        //
+        // ONLY when its generation still matches the fresh tail's own cursor (review finding
+        // I4): a rebuild-from-byte-zero (a truncated trailing record, a same-length branch
+        // switch, §7.4) bumps the chat index's generation, and `loadChatIndexBefore` hard-
+        // refuses a stale-generation cursor (`ChatIndexCursorStaleError`). A held cursor from
+        // before the rebuild would then be re-served forever — discarding the valid one this
+        // fresh tail carries — and every retry after it would fail permanently.
+        const kept = records.length - p.records.length;
+        const keepHeld = kept > 0 && held.prevCursor?.generation === p.prevCursor?.generation;
+        history.set({
+          records,
+          prevCursor: keepHeld ? held.prevCursor : p.prevCursor,
+          totalRecordCount: p.totalRecordCount,
+        });
+        return;
+      }
+      case "chat.records.older": {
+        const p = envelope.payload;
+        if (p.chatId !== chats().activeChatId) return;
+        lastOlderPageFailure.set(p.failure);
+        // A failed page learned nothing — the window and the cursor stay exactly as they were
+        // so the load can be retried (spec §7). Its outcome still reached the mirror above,
+        // which is what retires the UI's own loading latch.
+        if (p.failure !== null) return;
+        const held = history();
+        history.set({
+          records: mergeOlder(held.records, p.records),
+          prevCursor: p.prevCursor,
+          totalRecordCount: p.totalRecordCount,
+        });
         return;
       }
       case "selection.changed": {
@@ -726,7 +802,8 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
     preview,
     previewNotice,
     chats,
-    records,
+    history,
+    lastOlderPageFailure,
     pinsByPage,
     selection,
     diagnostics,

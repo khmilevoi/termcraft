@@ -7,7 +7,7 @@ import { z } from "zod";
  * transition-table entry, and contract tests".
  *
  * The list is transcribed verbatim from §8.1 in its declared order. Its length is
- * asserted at 43 by the closure test so a member cannot be silently added or dropped.
+ * asserted at 44 by the closure test so a member cannot be silently added or dropped.
  *
  * `CapabilityId` is exactly this union (§10.1) — the identity is enforced as a
  * compile-time check in `core/capabilities`, not restated as a second list.
@@ -22,6 +22,7 @@ export const COMMAND_KINDS_V1 = [
   "turn.cancel",
   "chat.create",
   "chat.switch",
+  "chat.load-older",
   "model.select",
   "page.renameTitle",
   "page.removePlan",
@@ -60,8 +61,15 @@ export const COMMAND_KINDS_V1 = [
 
 export type CommandKindV1 = (typeof COMMAND_KINDS_V1)[number];
 
-/** The exact member count §8.1 fixes. A drifted union fails the closure test, not a review. */
-export const COMMAND_KIND_COUNT = 43;
+/**
+ * The exact member count §8.1 fixes. A drifted union fails the closure test, not a
+ * review. 43 -> 44 (chat-scroll spec §6.1): `chat.load-older` asks for the page of
+ * records before a cursor the client was previously given. It is a command, not a plain
+ * read, because it crosses the same guard/capability boundary every other chat operation
+ * does, and its answer travels as an event for the same reason `chat.records` does —
+ * `AcceptedCommandV1` is a closed object with no payload slot.
+ */
+export const COMMAND_KIND_COUNT = 44;
 
 const COMMAND_KIND_SET: ReadonlySet<string> = new Set(COMMAND_KINDS_V1);
 

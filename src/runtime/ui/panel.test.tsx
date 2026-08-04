@@ -60,4 +60,18 @@ describe("Panel bordered container (design-system §3.2)", () => {
     expect(top.startsWith("╭─ Часы ")).toBe(true);
     expect(top.endsWith("╮")).toBe(true);
   });
+
+  test("an empty title draws no caption at all — an unbroken top border", async () => {
+    // design/termcraft-engine.js:52 — `if(o.title){…}` skips the caption entirely for a
+    // falsy title; a naive `=== undefined` guard treats `""` as present and punches two
+    // spaces (`' '+''+' '`) into the border instead.
+    const frame = await renderNodeOnce(
+      <Panel id="p" title="">
+        <Text id="body">x</Text>
+      </Panel>,
+      { w: 12, h: 4 },
+    );
+    const top = frame.rows[0]?.map((run) => run.text).join("") ?? "";
+    expect(top).toBe(`╭${"─".repeat(10)}╮`);
+  });
 });

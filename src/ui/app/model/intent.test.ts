@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 
 import { uuidv7 } from "infrastructure/uuid";
 import { TEST_SHA, TEST_TS, createFakeKernel, event, resetEventSeq, snapshot } from "ui/testing";
+import type { TextEditorHandle } from "ui/text-input";
 
 import { createUiDeps } from "./deps";
 import { applyIntent } from "./intent";
@@ -10,21 +11,30 @@ beforeEach(() => resetEventSeq());
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/**
+ * A recording stand-in for a mounted editor, appending to the caller's own `calls` array.
+ *
+ * ONE helper rather than the five identical inline literals this file used to carry: that
+ * duplication is why `TextEditorHandle`'s `clear`/`focus`/`blur` could sit dead in the interface
+ * for three tasks with every fake still dutifully implementing them.
+ */
+function recordingHandle(calls: string[]): TextEditorHandle {
+  const state = { text: "" };
+  return {
+    setText: (text) => {
+      state.text = text;
+      calls.push(`setText:${text}`);
+    },
+    text: () => state.text,
+    deleteCharBackward: () => calls.push("deleteCharBackward"),
+  };
+}
+
 function dispatchedKinds(kernel: { dispatched: readonly unknown[] }): string[] {
   return kernel.dispatched.map((raw) => (raw as { kind: string }).kind);
 }
 
 describe("applyIntent — text inputs", () => {
-  test("home-input / backspace edit the prompt atom", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    applyIntent({ kind: "home-input", ch: "h" }, deps);
-    applyIntent({ kind: "home-input", ch: "i" }, deps);
-    expect(deps.local.prompt()).toBe("hi");
-    applyIntent({ kind: "home-backspace" }, deps);
-    expect(deps.local.prompt()).toBe("h");
-  });
-
   test("home-submit dispatches project.create carrying the prompt as text", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(
@@ -108,6 +118,9 @@ describe("applyIntent — text inputs", () => {
   test("composer-submit dispatches turn.start and clears the composer once accepted", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER the
+    // primary input rather than the prompt.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     deps.local.composer.set("make it blue");
     applyIntent({ kind: "composer-submit" }, deps);
     expect(dispatchedKinds(kernel)).toEqual(["turn.start"]);
@@ -160,6 +173,41 @@ describe("applyIntent — text inputs", () => {
     await tick();
     // A rejection must not discard what the user typed.
     expect(deps.local.composer()).toBe("make it blue");
+  });
+
+  test("the post-accept clear reaches the mounted editor, not only the mirror", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER the
+    // primary input rather than the prompt.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    const calls: string[] = [];
+    deps.local.composerEditor.set(recordingHandle(calls));
+    deps.local.composer.set("send me");
+    applyIntent({ kind: "composer-submit" }, deps);
+    await tick();
+    expect(deps.local.composer()).toBe("");
+    expect(calls).toEqual(["setText:"]);
+  });
+
+  test("slash-open writes the '/' into both sides, so there is one writer for that transition", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    const calls: string[] = [];
+    deps.local.composerEditor.set(recordingHandle(calls));
+    applyIntent({ kind: "slash-open" }, deps);
+    expect(deps.local.composer()).toBe("/");
+    expect(calls).toEqual(["setText:/"]);
+  });
+
+  test("home-backspace drives the editor handle rather than slicing the mirror", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const calls: string[] = [];
+    deps.local.promptEditor.set(recordingHandle(calls));
+    applyIntent({ kind: "home-backspace" }, deps);
+    // In `blocked` the editor is blurred and receives no keys, so this intent is the ONLY route
+    // that can empty the prompt — and `q` stays inert until it is empty (keymap.ts, fix round 3).
+    expect(calls).toEqual(["deleteCharBackward"]);
   });
 });
 
@@ -374,6 +422,8 @@ describe("applyIntent — F6 compose-repair", () => {
     );
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.focus.set("preview");
+    const calls: string[] = [];
+    deps.local.composerEditor.set(recordingHandle(calls));
 
     applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
 
@@ -384,6 +434,9 @@ describe("applyIntent — F6 compose-repair", () => {
     expect(deps.local.focus()).toBe("composer");
     // Nothing is sent — the design says so on the frame ("nothing is sent — you press ⏎").
     expect(kernel.dispatched).toHaveLength(0);
+    // §7.4: the repair fill is an external write and must land on both sides — the mounted
+    // editor's handle carries the SAME text the mirror ends up holding.
+    expect(calls).toEqual([`setText:${deps.local.composer()}`]);
   });
 
   test("says the entry is unknown when the descriptor list does not name the page", () => {
@@ -392,6 +445,9 @@ describe("applyIntent — F6 compose-repair", () => {
     // printing a slug-derived path that cannot exist (task 16).
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER —
+    // not the Home prompt — the surface `setPrimaryInput` writes to.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.focus.set("preview");
 
@@ -404,13 +460,19 @@ describe("applyIntent — F6 compose-repair", () => {
   test("appends below a blank line rather than overwriting an existing draft", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A `projectId` is what moves `deriveScreen` off Home, which is what makes the COMPOSER the
+    // primary input rather than the prompt.
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
     deps.mirror.apply(circuitOpened({ hostFailureCode: "DESIGN_RENDER_FAILED" }));
     deps.local.composer.set("my own words");
+    const calls: string[] = [];
+    deps.local.composerEditor.set(recordingHandle(calls));
 
     applyIntent({ kind: "action-execute", actionId: "preview.repair" }, deps);
 
     expect(deps.local.composer().startsWith("my own words\n\n")).toBe(true);
     expect(deps.local.composer()).toContain(CRASH);
+    expect(calls).toEqual([`setText:${deps.local.composer()}`]);
   });
 
   test("no-ops when the preview is not in an error phase", () => {
@@ -445,7 +507,7 @@ describe("applyIntent — F6 compose-repair", () => {
 });
 
 describe("applyIntent — slash menu", () => {
-  test("opening and typing filters rows and selects the first enabled row", () => {
+  test("opening selects the first enabled row", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.mirror.apply(
@@ -472,46 +534,6 @@ describe("applyIntent — slash menu", () => {
     expect(deps.local.composer()).toBe("/");
     expect(deps.local.overlay()).toBe("slash-menu");
     expect(deps.local.slashSelection()).toBe(1); // skips disabled /new onto /chats
-
-    applyIntent({ kind: "slash-input", ch: "e" }, deps);
-    expect(deps.local.composer()).toBe("/e");
-    expect(deps.local.slashSelection()).toBe(0);
-  });
-
-  test("typing past every match leaves slash mode instead of stranding an invisible, inert menu", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
-
-    applyIntent({ kind: "slash-open" }, deps);
-    expect(deps.local.overlay()).toBe("slash-menu");
-
-    // `/z` matches no command. The menu correctly draws nothing for an empty row set, which is
-    // exactly what made the old behaviour invisible: the overlay stayed open, Enter kept routing
-    // to `slash-submit`, and it returned silently with no row to run.
-    applyIntent({ kind: "slash-input", ch: "z" }, deps);
-
-    expect(deps.local.overlay()).toBeNull();
-    // The character is kept — leaving slash mode must not eat what the user typed.
-    expect(deps.local.composer()).toBe("/z");
-
-    // And from here the keymap resolves keys against a null overlay, so typing continues as
-    // ordinary composer input rather than as more slash input.
-    applyIntent({ kind: "composer-input", ch: "z" }, deps);
-    expect(deps.local.composer()).toBe("/zz");
-    expect(deps.local.overlay()).toBeNull();
-  });
-
-  test("a prefix that still matches keeps the menu open", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "trusted" }));
-
-    applyIntent({ kind: "slash-open" }, deps);
-    applyIntent({ kind: "slash-input", ch: "e" }, deps);
-
-    expect(deps.local.overlay()).toBe("slash-menu");
-    expect(deps.local.composer()).toBe("/e");
   });
 
   test("arrows wrap across enabled rows and never land on inert rows", () => {
@@ -590,6 +612,10 @@ describe("applyIntent — slash menu", () => {
         capabilities: [{ id: "chat.create", target: null, state: { available: true } }],
       }),
     );
+    // The trust prompt is already answered — without this, `trust: "untrusted-read-only"` alone
+    // resolves `deps.screen()` to `"trust-prompt"` (Task 1, 2026-08-03), not `"read-only"`, which
+    // this test's own name claims to exercise.
+    deps.local.trustPromptDismissed.set(true);
     deps.local.composer.set("/new");
     deps.local.overlay.set("slash-menu");
     deps.local.slashSelection.set(0);
@@ -615,20 +641,6 @@ describe("applyIntent — slash menu on Home (§3.10, phase-8 Task 17)", () => {
     expect(deps.local.overlay()).toBe("slash-menu");
     // /model (unavailable — v1.0) is skipped; selection lands on /exit, the working row.
     expect(deps.local.slashSelection()).toBe(1);
-  });
-
-  test("slash-input and slash-backspace edit the Home prompt while the menu stays open", () => {
-    const kernel = createFakeKernel();
-    const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    applyIntent({ kind: "slash-open" }, deps);
-
-    applyIntent({ kind: "slash-input", ch: "e" }, deps);
-    expect(deps.local.prompt()).toBe("/e");
-    expect(deps.local.composer()).toBe("");
-
-    applyIntent({ kind: "slash-backspace" }, deps);
-    expect(deps.local.prompt()).toBe("/");
-    expect(deps.local.overlay()).toBe("slash-menu");
   });
 
   test("slash-submit on /exit clears the Home prompt and requests shutdown, dispatching nothing", () => {
@@ -687,19 +699,55 @@ describe("applyIntent — chats and trust", () => {
     expect(deps.local.overlay()).toBeNull();
   });
 
-  test("trust accept and decline dispatch the exact project.setTrust payloads", () => {
+  test("trust accept and decline dispatch the exact project.setTrust payloads and mark the prompt answered once accepted", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(
       kernel,
       { w: 120, h: 36 },
       { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
     );
+    expect(deps.local.trustPromptDismissed()).toBe(false);
     applyIntent({ kind: "trust-accept" }, deps);
+    // Not marked answered synchronously with the dispatch call — only once it RESOLVES accepted
+    // (fix round 2, Finding 2), mirroring `dispatchHomeSubmit`'s own fix (`home-submit`) exactly.
+    await tick();
+    expect(deps.local.trustPromptDismissed()).toBe(true);
     applyIntent({ kind: "trust-decline" }, deps);
+    await tick();
     expect(kernel.dispatched.map((raw) => (raw as { payload: unknown }).payload)).toEqual([
       { trust: "trusted", workspaceIdentity: "workspace-id" },
       { trust: "untrusted-read-only", workspaceIdentity: "workspace-id" },
     ]);
+    expect(deps.local.trustPromptDismissed()).toBe(true);
+  });
+
+  test("trust-accept does not mark the prompt answered when the Kernel rejects project.setTrust (fix round 2, Finding 2)", async () => {
+    const kernel = createFakeKernel();
+    // The exact race the finding named: a `STALE_REVISION` rejection during the ready sequence
+    // must not move the screen to `"read-only"` irreversibly when trust was never actually
+    // granted — `trustPromptDismissed` only ever goes `false -> true` for the rest of the run, so
+    // a premature `true` here would mean the user could never be re-asked this session.
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7() as never,
+      status: "rejected",
+      currentRevision: "0",
+      code: "STALE_REVISION",
+      reasons: [{ code: "STALE_REVISION", requiredRevision: "1" }],
+    });
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      { root: "/project", workspaceIdentity: "workspace-id", projectExists: false },
+    );
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), trust: "untrusted-read-only" }));
+    expect(deps.screen()).toBe("trust-prompt");
+
+    applyIntent({ kind: "trust-accept" }, deps);
+    await tick();
+
+    expect(deps.local.trustPromptDismissed()).toBe(false);
+    expect(deps.screen()).toBe("trust-prompt");
   });
 
   test("popup dismissal closes the overlay without reaching lower Esc layers", () => {
@@ -767,7 +815,7 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
     );
     applyIntent({ kind: "home-recheck" }, deps);
     await tick();
-    expect(deps.local.homeHealth()).toEqual({ kind: "ready", agent: "claude" });
+    expect(deps.local.agentHealth()).toEqual({ kind: "ready", agent: "claude" });
   });
 
   test("home-recheck reflects a still-missing agent from the probe", async () => {
@@ -777,7 +825,7 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
     );
     applyIntent({ kind: "home-recheck" }, deps);
     await tick();
-    expect(deps.local.homeHealth()).toEqual({
+    expect(deps.local.agentHealth()).toEqual({
       kind: "missing",
       agent: "claude",
       detail: "claude CLI not found",
@@ -816,6 +864,10 @@ describe("applyIntent — pin draft", () => {
         trust: "untrusted-read-only",
       }),
     );
+    // The trust prompt is already answered — without this, `trust: "untrusted-read-only"` alone
+    // resolves `deps.screen()` to `"trust-prompt"` (Task 1, 2026-08-03), not `"read-only"`, which
+    // is the screen this test means to exercise.
+    deps.local.trustPromptDismissed.set(true);
     deps.interaction.pendingPin.set({ geometryToken: uuidv7(), point: { x: 1, y: 1 } });
     deps.local.pinDraft.set("must not save");
     deps.local.overlay.set("pin-input");
@@ -823,6 +875,45 @@ describe("applyIntent — pin draft", () => {
     applyIntent({ kind: "pin-save" }, deps);
 
     expect(kernel.dispatched).toHaveLength(0);
+  });
+});
+
+describe("chat scroll intents (chat-scroll spec §5.5)", () => {
+  function fakeViewport() {
+    const calls: (-1 | 1)[] = [];
+    return {
+      calls,
+      viewport: {
+        scrollByPage: (direction: -1 | 1) => calls.push(direction),
+        scrollToBottom: () => {},
+        atBottom: () => true,
+        anchorFromBottom: () => 0,
+        restoreAnchor: () => {},
+      },
+    };
+  }
+
+  test("PgUp scrolls the published viewport up a page", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const fake = fakeViewport();
+    deps.local.chatViewport.set(fake.viewport);
+    applyIntent({ kind: "action-execute", actionId: "chat.scroll-up" }, deps);
+    expect(fake.calls).toEqual([-1]);
+  });
+
+  test("PgDn scrolls it down a page", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    const fake = fakeViewport();
+    deps.local.chatViewport.set(fake.viewport);
+    applyIntent({ kind: "action-execute", actionId: "chat.scroll-down" }, deps);
+    expect(fake.calls).toEqual([1]);
+  });
+
+  test("with no viewport published the key is inert, not a crash", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    expect(() =>
+      applyIntent({ kind: "action-execute", actionId: "chat.scroll-up" }, deps),
+    ).not.toThrow();
   });
 });
 

@@ -6,6 +6,7 @@ import { COMMAND_KINDS_V1, type CommandKindV1 } from "./command-kind";
 import { commandPayloadSchemaFor, commandPayloadSchemas } from "./command-payload";
 
 const SHA = "a".repeat(40);
+const TEST_UUID = uuidv7();
 
 interface Fixture {
   readonly valid: unknown;
@@ -84,6 +85,15 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
   "chat.switch": {
     valid: { chatId: uuidv7() },
     breaks: [{ chatId: uuidv7(), extra: 1 }, { chatId: "not-a-uuid" }, {}],
+  },
+  "chat.load-older": {
+    valid: { chatId: uuidv7(), cursor: { generation: 2, beforeOffset: 8192 } },
+    breaks: [
+      { chatId: uuidv7() },
+      { chatId: uuidv7(), cursor: null },
+      { chatId: uuidv7(), cursor: { generation: 2, beforeOffset: 8192 }, extra: 1 },
+      { chatId: "not-a-uuid", cursor: { generation: 0, beforeOffset: 0 } },
+    ],
   },
   "model.select": {
     valid: { backend: "claude", model: "claude-opus-4-8", effort: "high" },
@@ -547,4 +557,13 @@ describe("page.reorder — exact permutation of listed slugs", () => {
   test("accepts the empty permutation", () => {
     expect(schema.safeParse({ pageSlugs: [] }).success).toBe(true);
   });
+});
+
+test("chat.load-older takes the chat id and the cursor the client was given", () => {
+  const schema = commandPayloadSchemaFor("chat.load-older");
+  expect(
+    schema.safeParse({ chatId: TEST_UUID, cursor: { generation: 2, beforeOffset: 8192 } }).success,
+  ).toBe(true);
+  expect(schema.safeParse({ chatId: TEST_UUID }).success).toBe(false);
+  expect(schema.safeParse({ chatId: TEST_UUID, cursor: null }).success).toBe(false);
 });

@@ -100,7 +100,11 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     //     a CSI sequence (`\x1b[1;5C`), and this one delivered a bare `\x1b[C`. `ctrl+b`/`ctrl+n`
     //     are C0 control bytes (0x02 / 0x0E) — one byte, no encoding to get wrong;
     //   - neither can be typed into the composer: `printableChar` rejects every code below 0x20;
-    //   - the arrows stay as aliases, so the chord still works wherever it IS encoded;
+    //   - the ctrl+arrow aliases were DROPPED when the composer became a real editor
+    //     (2026-08-03): `ctrl+left`/`ctrl+right` are OpenTUI's own `word-backward`/`word-forward`
+    //     bindings, and `resolveHotkey` runs ahead of every input branch, so keeping them would
+    //     have made Ctrl+Left switch pages from inside a text field. Neither alias was ever drawn
+    //     — both entries carry `hint: false` — so nothing on screen named them;
     //   - `ctrl+e` (export) and `ctrl+p` (preview) already establish the ctrl+letter vocabulary.
     // NOT hinted in the status bar: `Workspace.tsx`'s `hintKeys` renders the design's own key
     // rows verbatim, and adding a key the design never drew there would diverge from every
@@ -110,7 +114,6 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     hotkey: {
       id: "page.prev",
       key: "ctrl+b",
-      aliases: ["ctrl+left"],
       label: "prev page",
       capability: null,
       hint: false,
@@ -122,11 +125,84 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     hotkey: {
       id: "page.next",
       key: "ctrl+n",
-      aliases: ["ctrl+right"],
       label: "next page",
       capability: null,
       hint: false,
     },
+  },
+  {
+    // SCROLLING THE CHAT STREAM FROM THE KEYBOARD (chat-scroll spec §5.5). Like
+    // `page.prev`/`page.next` above, this is a DESIGN EXTENSION and is recorded as one:
+    // §3.8's two hotkey tiers name no chat key at all, and the design's own
+    // `▲ N earlier messages` indicator (`design/termcraft-engine.js:569`) leads nowhere.
+    // Design iteration 10 decides only whether these keys are DRAWN in the status-bar key
+    // row; the binding itself is this project's.
+    //
+    // HINTED, UNLIKE `page.prev`/`page.next` ABOVE (chat-scroll spec §11 answer 7): every one
+    // of the design's seven `wsStatus(...)` calls lists `PgUp`/`PgDn` in its key row
+    // (`design/28-chat-scroll.dc.html:46`, e.g. `design/termcraft-engine.js:1541`), so —
+    // unlike the page-step keys above, which the design never draws at all — these two are
+    // NOT excluded from `hintKeys()` (`ui/workspace/ui/Workspace.tsx`).
+    //
+    // DIVERGENCE (closest faithful mapping, CLAUDE.md "design is a source of truth"): the
+    // design's own status row shows ONE combined hint, `PgUp/PgDn` paired with the single
+    // label `scroll` (`design/termcraft-engine.js:1541` etc.,
+    // `wsStatus(...,keys:[['PgUp/PgDn','scroll'],...])`). `Workspace.tsx`'s `hintKeys()` and
+    // this file's own `HotkeyAction` shape have no mechanism to merge two registry entries
+    // into one combined glyph/label tuple — every other hint in this file is one glyph, one
+    // label, 1:1 with one action, and building a merge mechanism for this single pair is out
+    // of scope for the task that dropped `hint: false` below (chat-scroll spec, Task 12). So
+    // the status bar renders TWO separate entries, `PgUp scroll up` and `PgDn scroll down`
+    // (this registry's own glyph/label pair below — `Workspace.tsx`'s `hotkeyGlyph` renders
+    // `pageup`/`pagedown` as `PgUp`/`PgDn`, review finding I5), rather than the design's one
+    // `PgUp/PgDn scroll`.
+    //
+    // WHY `PgUp`/`PgDn` CANONICAL, `ctrl+u` AN ALIAS:
+    //   - it must be GLOBAL tier: the composer owns focus by default, so a bare letter would
+    //     be swallowed as text — the same hazard `keymap.ts`'s `home-recheck` note records;
+    //   - `PgUp`/`PgDn` arrive as multi-character CSI sequences, which `printableChar`
+    //     rejects on length alone, so they can never reach the composer as input;
+    //   - `ctrl+u` is a C0 control byte (0x15): one byte, no encoding to get wrong, and below
+    //     0x20 so `printableChar` rejects it too;
+    //   - `ctrl+`-arrows are deliberately NOT bound — they were dead on the maintainer's
+    //     terminal, which is exactly why `page.prev`/`page.next` are `ctrl+b`/`ctrl+n`.
+    //
+    // NO `ctrl+d` ALIAS HERE (review finding I3, fix round 1) — an earlier version of this row
+    // gave `chat.scroll-down` the same C0-byte alias treatment as `chat.scroll-up`'s `ctrl+u`,
+    // reading only the encoding argument above and missing that the design already assigns `^D`
+    // a DIFFERENT meaning: `design/termcraft-engine.js:1525` (`o.following===false` branch) and
+    // both `wsScrollMid`/`wsScrollLive`'s own key rows (`:1557`,`:1605`) bind it to "follow
+    // latest", not "page down". `chat.follow-latest` below is the real `^D`; this entry keeps
+    // only its PgDn glyph.
+    id: "chat.scroll-up",
+    execution: { kind: "local", effect: "chat-scroll-up" },
+    hotkey: {
+      id: "chat.scroll-up",
+      key: "pageup",
+      aliases: ["ctrl+u"],
+      label: "scroll up",
+      capability: null,
+    },
+  },
+  {
+    id: "chat.scroll-down",
+    execution: { kind: "local", effect: "chat-scroll-down" },
+    hotkey: {
+      id: "chat.scroll-down",
+      key: "pagedown",
+      label: "scroll down",
+      capability: null,
+    },
+  },
+  {
+    // FOLLOW LATEST (design iteration 10 answers 2/6, review finding I2/I3): `^D`,
+    // `design/termcraft-engine.js:1525,1557,1602`. Bound GLOBAL tier and unconditionally
+    // resolvable — same reasoning as the scroll pair above — so it always jumps the chat
+    // viewport to its tail; `Workspace.tsx`'s `hintKeys()` decides when to DRAW it (only while
+    // `!following`, matching every mockup that shows it), not `resolveKey`.
+    id: "chat.follow-latest",
+    execution: { kind: "local", effect: "chat-follow-latest" },
+    hotkey: { id: "chat.follow-latest", key: "ctrl+d", label: "follow", capability: null },
   },
   {
     id: "preview.tweaks",

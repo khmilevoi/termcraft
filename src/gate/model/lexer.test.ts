@@ -359,9 +359,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // `host/adapters/mount-tree-revision.ts` and its own `mount-tree-revision.test.ts`, taking
     // it to 897; design-tree-phase-1b-migration task 10 adds
     // `store/model/migration-fixture.test.ts`, taking it to 898. Additional files from tasks 1–9
-    // bring the count to 917 — update BOTH this number and the count quoted in
-    // `lexer.oracle.test.ts` when the corpus grows.
-    expect(files.length).toBe(917);
+    // bring the count to 917. Merging `main`'s own independent work (chat-scroll pagination,
+    // the `TextEditor` input-editing rewrite, the `ui/agent-health` extraction, and more)
+    // brings it to 929 — update BOTH this number and the count quoted in `lexer.oracle.test.ts`
+    // when the corpus grows.
+    expect(files.length).toBe(929);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

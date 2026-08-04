@@ -52,6 +52,7 @@ import {
 } from "core/preview";
 import { createPageRemovePlanLedger } from "core/project/model/page-remove-plan";
 import { type FailureDtoV1, type UUIDv7, eventPayloadV1SchemaByKind } from "core/protocol";
+import type { ChatRecord } from "entities/chat";
 import type { Clock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 
@@ -319,6 +320,27 @@ function onlyEvent(events: readonly PublishableEventV1[]): PublishableEventV1 {
   return event;
 }
 
+/**
+ * Seeds `chatStore` with a fresh chat carrying `recordCount` `user` records, through the
+ * SAME `create()` + `seedRecords()` surface {@link createFakeChatStore} already exposes —
+ * `chat.load-older` tests below reuse `buildTestContext`/`onlyLaunch`/`onlyEvent` verbatim
+ * (this file's own header note: two doubles, no second harness), so this is only a small
+ * fixture-building convenience, not a competing construction path.
+ */
+async function seedChat(chatStore: FakeChatStore, recordCount: number): Promise<string> {
+  const header = await chatStore.create();
+  if ("code" in header) throw new Error("expected chat creation to succeed");
+  const records: ChatRecord[] = Array.from({ length: recordCount }, (_, index) => ({
+    kind: "user",
+    recordId: uuidv7(),
+    turnId: uuidv7(),
+    text: `message ${index}`,
+    ts: new Date(1_700_000_000_000 + index).toISOString(),
+  }));
+  chatStore.seedRecords(header.chatId, records);
+  return header.chatId;
+}
+
 describe("chatHandlers['chat.create']", () => {
   test("returns a synchronous started outcome with no admission events, launches exactly one operation, and never touches a Kernel-held mutator", () => {
     const { handlerContext, getLaunches, getMutatorCalls } = buildTestContext();
@@ -366,6 +388,7 @@ describe("chatHandlers['chat.create']", () => {
       chatId: payload.activeChatId,
       records: [],
       prevCursor: null,
+      totalRecordCount: 0,
     });
   });
 
@@ -465,7 +488,11 @@ describe("chatHandlers['chat.switch']", () => {
     const mutationsStub = createChatMutationsStub();
     const chatId = uuidv7();
     const header: ChatHeaderV1 = { chatId, createdAt: "2024-06-01T00:00:00.000Z" };
-    const chatReader = createChatReaderStub(chatId, header, { records: [], prevCursor: null });
+    const chatReader = createChatReaderStub(chatId, header, {
+      records: [],
+      prevCursor: null,
+      totalRecordCount: 0,
+    });
     const { handlerContext, projectStore, getLaunches } = buildTestContext({
       chatMutations: mutationsStub,
       chatReader,
@@ -500,7 +527,12 @@ describe("chatHandlers['chat.switch']", () => {
     expect(eventPayloadV1SchemaByKind["chat.records"].safeParse(recordsEvent.payload).success).toBe(
       true,
     );
-    expect(recordsEvent.payload).toEqual({ chatId, records: [], prevCursor: null });
+    expect(recordsEvent.payload).toEqual({
+      chatId,
+      records: [],
+      prevCursor: null,
+      totalRecordCount: 0,
+    });
   });
 
   test("when the tail loads with records, its launched operation maps them in order into chat.records and derives the summary's displayName from the first user record", async () => {
@@ -530,6 +562,7 @@ describe("chatHandlers['chat.switch']", () => {
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     });
     const { handlerContext, getLaunches } = buildTestContext({
       chatMutations: mutationsStub,
@@ -572,6 +605,7 @@ describe("chatHandlers['chat.switch']", () => {
         },
       ],
       prevCursor: null,
+      totalRecordCount: 2,
     });
   });
 
@@ -679,7 +713,7 @@ describe("chatHandlers['chat.switch']", () => {
         return {
           header,
           async loadTail() {
-            return { records: [], prevCursor: null };
+            return { records: [], prevCursor: null, totalRecordCount: 0 };
           },
           async loadBefore() {
             throw new Error("not used in this test");
@@ -713,5 +747,90 @@ describe("chatHandlers['chat.switch']", () => {
     await callPromise;
 
     expect(readMarker()).toBe(1);
+  });
+});
+
+describe("chat.load-older (chat-scroll spec §6.4)", () => {
+  test("loads the page before the cursor and publishes it", async () => {
+    const { handlerContext, chatStore, getLaunches } = buildTestContext();
+    const chatId = await seedChat(chatStore, 12);
+    const cursor = { generation: 0, beforeOffset: 6 };
+
+    chatHandlers["chat.load-older"]({ chatId, cursor }, handlerContext);
+    const launch = onlyLaunch(getLaunches());
+    const events = await launch.run();
+
+    const call = chatStore.calls.find((c) => c.method === "loadBefore");
+    expect(call).toMatchObject({ chatId, cursor });
+
+    const event = onlyEvent(events);
+    expect(event.kind).toBe("chat.records.older");
+    // The shared oracle fake (`createFakeChatStore`) mints `fake-chat-N` ids, not a real
+    // UUIDv7 — this file's own header explains why that fake never satisfies
+    // `eventPayloadV1SchemaByKind`'s `chatId: uuidv7Schema` on its own; the field-by-field
+    // checks below are the id-format-agnostic equivalent.
+    const payload = event.payload as {
+      readonly chatId: string;
+      readonly failure: unknown;
+      readonly totalRecordCount: number;
+    };
+    expect(payload.chatId).toBe(chatId);
+    expect(payload.failure).toBeNull();
+    expect(payload.totalRecordCount).toBe(12);
+  });
+
+  test("a loadBefore failure rides the same event and loses no cursor", async () => {
+    const { handlerContext, chatStore, getLaunches } = buildTestContext();
+    const chatId = await seedChat(chatStore, 12);
+    const failure: FailureDtoV1 = {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "page unreadable",
+      details: {},
+    };
+    chatStore.failNext("loadBefore", failure);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    chatHandlers["chat.load-older"](
+      { chatId, cursor: { generation: 0, beforeOffset: 6 } },
+      handlerContext,
+    );
+    const events = await onlyLaunch(getLaunches()).run();
+
+    expect(warnSpy).toHaveBeenCalled();
+    const event = onlyEvent(events);
+    expect(event.kind).toBe("chat.records.older");
+    const payload = event.payload as {
+      readonly failure: { readonly safeMessage: string } | null;
+      readonly records: readonly unknown[];
+    };
+    expect(payload.failure?.safeMessage).toBe("page unreadable");
+    expect(payload.records).toEqual([]);
+    warnSpy.mockRestore();
+  });
+
+  test("an open failure fails the same way", async () => {
+    const { handlerContext, chatStore, getLaunches } = buildTestContext();
+    const chatId = await seedChat(chatStore, 3);
+    const failure: FailureDtoV1 = {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: "chat unreadable",
+      details: {},
+    };
+    chatStore.failNext("open", failure);
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    chatHandlers["chat.load-older"](
+      { chatId, cursor: { generation: 0, beforeOffset: 1 } },
+      handlerContext,
+    );
+    const events = await onlyLaunch(getLaunches()).run();
+
+    expect(warnSpy).toHaveBeenCalled();
+    const event = onlyEvent(events);
+    const payload = event.payload as { readonly failure: { readonly safeMessage: string } | null };
+    expect(payload.failure?.safeMessage).toBe("chat unreadable");
+    warnSpy.mockRestore();
   });
 });

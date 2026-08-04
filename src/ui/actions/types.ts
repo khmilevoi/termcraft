@@ -10,7 +10,10 @@ export type UiActionExecution =
         | "exit"
         | "compose-repair"
         | "page-prev"
-        | "page-next";
+        | "page-next"
+        | "chat-scroll-up"
+        | "chat-scroll-down"
+        | "chat-follow-latest";
     }
   | {
       readonly kind: "command";

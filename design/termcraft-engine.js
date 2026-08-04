@@ -132,27 +132,38 @@ export class Engine {
   // mode: undefined (ready) · 'checking' (health probe in flight, ⏎ refused)
   //       'slash' (/ typed — Home-anchored command menu) · 'slash-one' (/e → one row)
   //       'slash-none' (no row matches — the menu does not open, / stays literal text)
-  home(w,h,mode){ const P=this.pal; const b=this.mk(w,h); const cx=Math.floor(w/2);
+  home(w,h,mode,opts){ const P=this.pal; const b=this.mk(w,h); const cx=Math.floor(w/2);
     const checking = mode==='checking';
     const typed = mode==='slash' ? '/' : mode==='slash-one' ? '/e' : mode==='slash-none' ? '/mo'
                 : checking ? 'a system monitor for my homelab' : null;
-    const iw=Math.min(w-16,84); const ix=Math.floor((w-iw)/2); const boxH=6;
+    const iw=Math.min(w-16,84); const ix=Math.floor((w-iw)/2);
+    const grown = !!(opts && opts.rows && opts.rows.length>1);
+    const editorRows = grown? opts.rows.length : 1;
+    const boxH = grown? editorRows+5 : 6;
     const iy=Math.floor(h/2)-1;
     const logo='❯ termcraft'; this.text(b,cx-Math.floor(logo.length/2),iy-4,logo,{fg:P.amber,bold:true});
     const tag='design terminal UIs by describing them'; this.text(b,cx-Math.floor(tag.length/2),iy-3,tag,{fg:P.dim});
     this.box(b,ix,iy,iw,boxH,{title:'describe',fg:P.amber,titleFg:P.amberHi});
-    this.text(b,ix+2,iy+1,'❯ ',{fg:P.amber,bold:true});
-    if(typed!==null){ this.text(b,ix+4,iy+1,typed,{fg:P.fg}); this.put(b,ix+4+typed.length,iy+1,'█',{fg:P.amber,blink:true}); }
-    else { this.text(b,ix+4,iy+1,'Describe the TUI you want to design…',{fg:P.faint}); this.put(b,ix+4,iy+1,'█',{fg:P.amber,blink:true}); }
-    this.text(b,ix+2,iy+2,'⏎ create',{fg:checking?P.faint:P.dim});
-    if(checking) this.text(b,ix+11,iy+2,'· ⠹ checking codex — up to 20s',{fg:P.amberDim});
-    let acx=ix+2; const yy=iy+4;
+    let createY, selY;
+    if(grown){
+      this.editorBlock(b,ix+4,iy+1,ix+iw-2,{rows:opts.rows,cursor:opts.cursor,focused:true,cursorPainted:true,sel:opts.sel,hiddenAbove:opts.hiddenAbove,hiddenBelow:opts.hiddenBelow});
+      createY=iy+editorRows+1; selY=iy+editorRows+3;
+    } else {
+      this.text(b,ix+2,iy+1,'❯ ',{fg:P.amber,bold:true});
+      if(typed!==null){ this.text(b,ix+4,iy+1,typed,{fg:P.fg}); this.put(b,ix+4+typed.length,iy+1,'█',{fg:P.amber,blink:true}); }
+      else { this.text(b,ix+4,iy+1,'Describe the TUI you want to design…',{fg:P.faint}); this.put(b,ix+4,iy+1,'█',{fg:P.amber,blink:true}); }
+      createY=iy+2; selY=iy+4;
+    }
+    this.text(b,ix+2,createY,'⏎ create',{fg:checking?P.faint:P.dim});
+    if(checking) this.text(b,ix+11,createY,'· ⠹ checking codex — up to 20s',{fg:P.amberDim});
+    let acx=ix+2; const yy=selY;
     const sel=(lbl,val)=>{ this.text(b,acx,yy,lbl,{fg:P.faint}); acx+=lbl.length+1; this.text(b,acx,yy,'‹'+val+'›',{fg:P.amberHi,bold:true}); acx+=val.length+3; };
     sel('agent','codex'); sel('model','gpt-5.5'); sel('effort','high');
     if(acx+10<=ix+iw-2) this.text(b,acx,yy,'· / model',{fg:P.faint});
-    if(mode==='slash'||mode==='slash-one'){
-      const rows=this.slashRows(typed,{scope:'home'});
-      if(rows.length) this.slashBox(b,ix,iy+boxH,Math.min(42,iw),rows,typed==='/'?'commands':typed);
+    const menuTyped = (grown && opts.slashFilter!==undefined) ? opts.slashFilter : typed;
+    if((mode==='slash'||mode==='slash-one') || (grown && opts.slashFilter!==undefined)){
+      const rows=this.slashRows(menuTyped,{scope:'home'});
+      if(rows.length) this.slashBox(b,ix,iy+boxH,Math.min(42,iw),rows,menuTyped==='/'?'commands':menuTyped);
     }
     const left=[{t:' HOME ',fg:P.bg,bg:P.amber,bold:true}];
     if(checking) left.push({t:' ⠹ checking codex — ⏎ disabled ',fg:P.amberHi,bg:P.line,bold:true});
@@ -194,8 +205,53 @@ export class Engine {
       blocking?[['r','re-check'],['⏎','create','dis'],['q','quit']]:[['r','re-check'],['⏎','create'],['q','quit']]);
     return this.render(b); }
 
+  // ---- iteration 12 · agent-health badge, shared by the workspace bar wherever it appears.
+  // ready draws nothing (matches Home). checking/advisory read amber-on-line; blocked/missing
+  // read bg-on-red — missing is invented here from homeErr's own takeover vocabulary, since no
+  // workspace badge shape existed for it before. opt.short drops the agent name for 80 columns.
+  agentBadge(kind,detail,opt){ opt=opt||{}; const P=this.pal; const a=opt.short?'':' codex';
+    if(kind==='checking') return {hint:'⠹ checking'+a,hintFg:P.amberHi,hintBg:P.line};
+    if(kind==='ready') return null;
+    if(kind==='advisory'){ const t=detail==='sandbox'?'sandbox degraded':'health unconfirmed'; return {hint:'⚠ '+t,hintFg:P.amberHi,hintBg:P.line}; }
+    if(kind==='blocked'){ const t=detail==='latched'?(opt.short?'unavailable':'codex unavailable'):(opt.short?'not signed in':'codex not signed in'); return {hint:'✗ '+t,hintFg:P.bg,hintBg:P.red}; }
+    if(kind==='missing') return {hint:'✗ '+(opt.short?'not found':'codex not found'),hintFg:P.bg,hintBg:P.red};
+    return null; }
+
+  // A bare status-bar strip, for documenting each health badge shape on its own — not a frame.
+  badgeStrip(kind,detail){ const P=this.pal; const w=60,h=2; const b=this.mk(w,h);
+    const hb=this.agentBadge(kind,detail);
+    const left=[{t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true},{t:'  main ',fg:P.dim}];
+    if(hb) left.push({t:' '+hb.hint+' ',fg:hb.hintFg,bg:hb.hintBg,bold:true});
+    left.push({t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true});
+    this.statusBar(b,h-1,left,[['F2','full'],['F3','tweaks'],['F4','act']]);
+    return this.render(b); }
+
+  // ---- iteration 12 · Workspace mounted before the project has opened. projectId is null but
+  // this is the Workspace shell, not Home: empty tab strip (no ghost — that only exists mid-turn),
+  // empty chat (no header line — agent identity is unknown), composer stays live but ⏎ is refused.
+  // Nothing here is measurable and there is no cancel, so the preview carries a static line, not a
+  // spinner — a spinner is turn vocabulary (§14) and nothing here is a turn. o.health carries the
+  // probe's outcome so the bar can show it; omit for the plain mid-open frame.
+  wsOpening(w,h,o){ o=o||{}; const P=this.pal; const b=this.mk(w,h); const narrow=w<100;
+    const s=this.paneShell(b,w,h,{tabs:[],right:''});
+    this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2)-1,'opening project…',{fg:P.amber,bold:true});
+    this.ctr(b,s.dx,s.dw,s.dy+Math.floor(s.dh/2)+1,"reading .termcraft — preview arrives when it's ready",{fg:P.faint});
+    this.chatSeq(b,0,s.chatW,s.frameH,{seq:[],header:false,placeholder:'project opening…'});
+    const hb=this.agentBadge((o.health&&o.health.kind)||'checking', o.health&&o.health.detail, {short:narrow});
+    const left=[];
+    if(!narrow) left.push({t:' codex · gpt5.5 · high ',fg:P.bg,bg:P.amber,bold:true});
+    left.push({t:'  '+(narrow?'opening…':'opening project…')+' ',fg:P.amber,bold:true});
+    if(!narrow) left.push({t:' '+w+'×'+h+' ',fg:P.dim});
+    if(hb) left.push({t:' '+hb.hint+' ',fg:hb.hintFg,bg:hb.hintBg,bold:true});
+    left.push({t:' OPENING ',fg:P.bg,bg:P.amber,bold:true});
+    this.statusBar(b,h-1,left,[['⏎','send','dis']]);
+    return this.render(b); }
+
   // ---- WORKSPACE (idle / gen) ----
-  workspace(w,h,state){ const P=this.pal; const b=this.mk(w,h); const gen=state==='gen';
+  // o.health (idle only — a running turn always outranks it): the persistent hint-slot badge for
+  // a fully open project whose agent probe read something other than ready. Omit for byte-identical
+  // output to every frame drawn before this iteration.
+  workspace(w,h,state,o){ o=o||{}; const P=this.pal; const b=this.mk(w,h); const gen=state==='gen';
     const chatW=Math.round(w*0.37);
     const div=chatW-1; const frameH=h-1;
     this.box(b,0,0,chatW,frameH,{title: gen?'❯ chat · working':'❯ chat · codex', fg:gen?P.amberDim:P.border, titleFg:P.amber});
@@ -212,6 +268,7 @@ export class Engine {
     const mode = gen? {t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true} : {t:' STATIC ',fg:P.amberHi,bg:P.line,bold:true};
     const left=[mode,{t:'  main ',fg:P.dim},{t:' '+w+'×'+h+' ',fg:P.dim}];
     if(gen) left.push({t:' ⚠ turn running — export locked ',fg:P.amberHi,bg:P.line,bold:true});
+    else if(o.health){ const hb=this.agentBadge(o.health.kind,o.health.detail); if(hb) left.push({t:' '+hb.hint+' ',fg:hb.hintFg,bg:hb.hintBg,bold:true}); }
     const keys = gen? [['esc','cancel'],['F2','full']]
                     : [['F2','full'],['F3','tweaks'],['F4','act']];
     if(w<100){ this.statusBar(b,h-1,[mode,{t:' main ',fg:P.dim}], gen?[['esc','cancel']]:[['F3','tweak'],['F4','act']]); }
@@ -1138,12 +1195,16 @@ export class Engine {
   // (fills the composer with file · error · attempt count and moves focus there — sends nothing).
   // o.retry===false is the variant where no session can be restarted: F5 is drawn disabled with
   // its reason and marked 'dis' in the status key row, and repair is the only route out.
-  wsHostCrash(w,h,o){ o=o||{}; const P=this.pal; const b=this.mk(w,h); const retry=o.retry!==false;
+  // o.agentDead (iteration 12): the probe has separately read the agent as blocked/missing. Preview
+  // halt still outranks health in the hint slot — one badge, and this one is already the point of
+  // the frame — so nothing there changes. What does change is the one line that would otherwise be
+  // false: F6's own promise to run. Default false renders byte-identical to before this iteration.
+  wsHostCrash(w,h,o){ o=o||{}; const P=this.pal; const b=this.mk(w,h); const retry=o.retry!==false; const agentDead=!!o.agentDead;
     const s=this.paneShell(b,w,h,{right:'main · Current design · uncommitted',rightFg:P.amberHi,rightBold:true});
     const err='PAGE_RENDER_FAILED: TypeError: ctx.spy is not a function while mounting <ProcessTable> — host exited 1';
     const bw=Math.min(s.dw-6,66), cwid=bw-6;
     const eLines=this.wrapLines(err,cwid-2);
-    const bh=eLines.length+17;
+    const bh=eLines.length+17+(agentDead?2:0);
     const bx=s.dx+Math.floor((s.dw-bw)/2), by=s.dy+Math.max(0,Math.floor((s.dh-bh)/2));
     this.fillRect(b,bx,by,bw,bh,{ch:' ',bg:P.bg});
     this.box(b,bx,by,bw,bh,{title:'preview host · halted',fg:P.red,titleFg:P.red,bg:P.bg});
@@ -1163,7 +1224,8 @@ export class Engine {
       if(d2){ this.text(b,lx+20,y,d2,{fg:P.faint,bg:P.bg}); y++; } };
     keyRow('F5','retry preview', retry?'re-establish the host and mount again':'unavailable in this session',
                                  retry?'a broken design will die again':'repair is the only route out', !retry);
-    keyRow('F6','repair…','write the failure into the composer','nothing is sent — you press ⏎');
+    keyRow('F6','repair…','write the failure into the composer', agentDead?'codex is not signed in — nothing runs until it is':'nothing is sent — you press ⏎');
+    if(agentDead){ y++; this.text(b,lx,y,'✗ codex not signed in — F6 fills the composer, but nothing runs yet',{fg:P.red,bg:P.bg}); y++; }
     this.chatSeq(b,0,s.chatW,s.frameH,{seq:[
       {role:'❯ you'},{body:'add a spy hook to the process table'},{gap:1},
       {role:'● codex'},{status:'✓ wrote main/page.tsx',c:P.dim},{status:'✓ Gate accepted',c:P.dim},{gap:1},
@@ -1407,6 +1469,400 @@ export class Engine {
     this.text(b,lx,y,'index lock:',{fg:P.dim,bg:P.bg}); this.text(b,lx+12,y,'⏎ Retry',{fg:P.amber,bg:P.bg,bold:true}); y++;
     this.text(b,lx,y,'after a failed commit, status refreshes — hooks may edit files',{fg:P.faint,bg:P.bg});
     this.v1CommitStatus(b,w,h,{seg:'Current design · uncommitted',keys:[['esc','close']]});
+    return this.render(b); }
+
+  // ---- 28 CHAT SCROLL ----
+  // A 1–2 col track pinned to the viewport's right edge; thumb is solid █ with ▀/▄ at
+  // half-cell precision so its size/position stay proportional without a numeric readout
+  // (the brief: a ratio is available where a count is not). Arrows off, hides if size>=1.
+  scrollbar(b,x,y0,h,startFrac,endFrac){ const P=this.pal; if(h<=0) return;
+    for(let i=0;i<h;i++) this.put(b,x,y0+i,'│',{fg:P.line});
+    const total=h*2; let s=Math.max(0,Math.min(total,Math.round(startFrac*total))), e=Math.max(0,Math.min(total,Math.round(endFrac*total)));
+    if(e<=s) e=Math.min(total,s+1);
+    for(let r=0;r<h;r++){ const top=r*2, bot=r*2+1; const topCov=top>=s&&top<e, botCov=bot>=s&&bot<e;
+      let ch=null; if(topCov&&botCov) ch='█'; else if(topCov) ch='▀'; else if(botCov) ch='▄';
+      if(ch) this.put(b,x,y0+r,ch,{fg:P.amberDim}); } }
+
+  // The message stream as a real scroll viewport. Reuses chatSeq's row vocabulary
+  // (role/body/status/think/fold/pins/system/gap) but the top row is now a stateful,
+  // reachable target, not a summary: 'more' (▲ N earlier — not yet loaded from disk,
+  // mouse-down or reaching it pages), 'loading', 'error' (PgUp retries — the same
+  // gesture that requested the page), 'start' (true beginning, nothing to reach) or
+  // 'none' (mid-buffer — rows above the viewport edge are not counted anywhere in this
+  // design, so nothing is drawn; see the brief on why that count can't exist). The
+  // sequence gives up its rightmost column to the scrollbar. The pinned row above the
+  // composer doubles as the "away from newest" banner when o.following===false — the
+  // same slot §08 uses for pin-attach text, one more state it already knew how to hold.
+  chatViewport(b,chatX,chatW,frameH,o){ o=o||{}; const P=this.pal;
+    const tx=chatX+1, sbX=chatX+chatW-2, maxX=sbX-1, iw=maxX-tx+1;
+    let y=1;
+    if(o.header!==false){ this.text(b,tx,y,'● codex',{fg:o.offline?P.faint:P.green,bold:true});
+      const meta=o.headerMeta||'ratatui · connected'; if((9+meta.length)<=chatW-2) this.ctext(b,chatX+9,y,meta,{fg:P.faint},maxX); y+=2; }
+    const top=o.top||{mode:'none'}; const topY=y;
+    if(top.mode==='more'){ this.ctext(b,tx,y,'▲ '+top.n+' earlier messages',{fg:P.amberDim,bold:true},maxX);
+      this.put(b,maxX,y,'▲',{fg:P.amberDim}); y+=2; }
+    else if(top.mode==='loading'){ this.ctext(b,tx,y,'⠹ loading earlier messages…',{fg:P.amberDim,bold:true},maxX); y+=2; }
+    else if(top.mode==='error'){ this.ctext(b,tx,y,'✗ '+(top.err||'chat file could not be read'),{fg:P.red,bold:true},maxX);
+      this.ctext(b,tx,y+1,'PgUp retries',{fg:P.faint},maxX); y+=3; }
+    else if(top.mode==='start'){ this.ctr(b,tx,iw,y,'╌╌╌ start of chat ╌╌╌',{fg:P.faint}); y+=2; }
+    const composerTop=frameH-(o.composerH||4);
+    (o.seq||[]).forEach(e=>{ if(y>=composerTop-1) return;
+      if(e.gap){ y+=e.gap; return; }
+      if(e.head!==undefined){ this.ctext(b,tx,y,e.head,{fg:P.faint,bold:true},maxX); y++; return; }
+      if(e.think!==undefined){ y+=this.thinkRow(b,tx,y,e,maxX,iw,composerTop-1-y); return; }
+      if(e.fold!==undefined){ this.foldRow(b,tx,y,e,maxX); y++; return; }
+      if(e.role!==undefined){ this.ctext(b,tx,y,e.role,{fg:e.role[0]==='❯'?P.amber:P.green,bold:true},maxX); y++; return; }
+      const txt=e.body!==undefined?e.body:(e.status!==undefined?e.status:e.system);
+      const col=e.c||(e.system!==undefined?P.faint:P.fg); const lines=this.wrapLines(txt,iw);
+      for(let li=0;li<lines.length&&y<composerTop-1;li++){ this.ctext(b,tx,y,lines[li],{fg:col,bold:!!e.bold},maxX);
+        if(e.spark&&li===lines.length-1){ const sx=tx+lines[li].length+1; if(sx+5<=maxX) this.spark(b,sx,y,[3,5,7,6,8],false); } y++; } });
+    if(o.scroll){ this.scrollbar(b,sbX,topY,Math.max(0,composerTop-1-topY),o.scroll.pos,o.scroll.pos+o.scroll.size); }
+    this.put(b,chatX,composerTop,'├',{fg:P.border}); this.hline(b,chatX+1,composerTop,chatW-2,{fg:P.border}); this.put(b,chatX+chatW-1,composerTop,'┤',{fg:P.border});
+    if(o.composerMeta){ const cm=o.composerMeta;
+      this.text(b,chatX+2,composerTop,' '+cm.model+' ',{fg:P.amberHi,bold:true});
+      const tag=' ctx '+cm.ctx+'% ', rx=chatX+chatW-3-tag.length;
+      this.text(b,rx,composerTop,' ctx ',{fg:P.faint,bg:P.bg}); this.text(b,rx+5,composerTop,cm.ctx+'% ',{fg:P.fg,bold:true,bg:P.bg}); }
+    if(o.following===false) this.ctext(b,tx,composerTop+1,o.followBanner||'▼ scrolled up · ^D follow latest',{fg:o.followBannerFg||P.amberHi,bold:true},maxX);
+    else if(o.attach) this.ctext(b,tx,composerTop+1,o.attach,{fg:o.attachFg||P.amberHi,bold:true},maxX);
+    else if(o.chip) this.chipTag(b,tx,composerTop+1,o.chip,{glyph:o.chipGlyph});
+    const dis=o.composerDisabled;
+    this.text(b,tx,composerTop+2,'❯ ',{fg:dis?P.faint:P.amber,bold:true});
+    this.ctext(b,chatX+3,composerTop+2,o.placeholder||'Ask for changes…',{fg:P.faint},maxX);
+    if(!dis) this.put(b,chatX+3,composerTop+2,'█',{fg:P.amber,blink:true}); }
+
+  // state 1 · at the bottom, older history not loaded — the reachable ▲ N row.
+  wsScrollLoaded(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    this.chatViewport(b,0,s.chatW,s.frameH,{top:{mode:'more',n:8}, seq:this.baseSeq().concat([{gap:1},
+      {role:'❯ you'},{body:'now widen the process table columns'},{gap:1},
+      {role:'● codex'},{status:'✓ widened the process table',c:P.dim}]),
+      scroll:{pos:0.78,size:0.22}, composerMeta:{model:'codex · gpt5.5 · high',ctx:44}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['PgUp/PgDn','scroll'],['F3','tweaks'],['F4','interact']]});
+    return this.render(b); }
+
+  // state 2 · scrolled up mid-history, following disengaged. Nothing is loading and the
+  // true start hasn't been reached, so the top row has nothing to say — ordinary content
+  // sits flush against the viewport edge. The banner in the pinned row is the only tell.
+  wsScrollMid(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    this.chatViewport(b,0,s.chatW,s.frameH,{top:{mode:'none'}, seq:[
+      {role:'❯ you'},{body:'and the memory gauge should read in GB, not percent'},{gap:1},
+      {role:'● codex'},{status:'✓ switched memory gauge to GB',c:P.dim},{gap:1},
+      {role:'❯ you'},{body:'good — now the network sparkline'},{gap:1},
+      {role:'● codex'},{status:'✓ added network sparkline',c:P.dim}],
+      scroll:{pos:0.4,size:0.28}, following:false, followBanner:'▼ scrolled up · ^D follow latest',
+      composerMeta:{model:'codex · gpt5.5 · high',ctx:51}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['PgUp/PgDn','scroll'],['^D','follow'],['F3','tweaks']]});
+    return this.render(b); }
+
+  // state 3 · an older page loading. Spinner replaces the row; no count while in flight.
+  wsScrollLoading(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    this.chatViewport(b,0,s.chatW,s.frameH,{top:{mode:'loading'}, seq:this.baseSeq(),
+      scroll:{pos:0.05,size:0.3}, composerMeta:{model:'codex · gpt5.5 · high',ctx:44}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['PgUp/PgDn','scroll'],['F3','tweaks'],['F4','interact']]});
+    return this.render(b); }
+
+  // state 4 · that load failed. Terse, bounded, no path — same bound every failure
+  // surface here respects — and the retry gesture is named on the row itself.
+  wsScrollFailed(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    this.chatViewport(b,0,s.chatW,s.frameH,{top:{mode:'error',err:'chat file could not be read'}, seq:this.baseSeq(),
+      scroll:{pos:0.05,size:0.3}, composerMeta:{model:'codex · gpt5.5 · high',ctx:44}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['PgUp/PgDn','scroll · retry'],['F3','tweaks']]});
+    return this.render(b); }
+
+  // state 5 · the start of the chat reached — informational, not a target: no arrow,
+  // dashed rule instead, faint. Thumb pins flush to the top of the track.
+  wsScrollStart(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    this.chatViewport(b,0,s.chatW,s.frameH,{top:{mode:'start'}, seq:[
+      {role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},
+      {role:'● codex'},{status:'✓ created page main',c:P.dim},{status:'✓ resources + processes',c:P.dim}],
+      scroll:{pos:0,size:0.42}, composerMeta:{model:'codex · gpt5.5 · high',ctx:44}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['PgDn','scroll'],['F3','tweaks'],['F4','interact']]});
+    return this.render(b); }
+
+  // state 6 · scrolled away while a turn runs — the live block grows off-screen below.
+  // The banner is the same vocabulary as state 2, just more insistent (amberHi): it
+  // cannot say what arrived, only that the pane is not following it.
+  wsScrollLive(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{chatTitle:'❯ chat · working',chatBorderFg:P.amberDim,right:'⠹ generating',rightFg:P.amber,rightBold:true});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:true});
+    this.chatViewport(b,0,s.chatW,s.frameH,{top:{mode:'none'}, seq:[
+      {role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},
+      {role:'● codex'},{status:'✓ created page main',c:P.dim},{status:'✓ resources + processes',c:P.dim},{gap:1},
+      {role:'❯ you'},{body:'add a network throughput sparkline'},{gap:1},
+      {role:'● codex'},{status:'✓ added network sparkline',c:P.dim}],
+      scroll:{pos:0.3,size:0.22}, following:false, followBanner:'▼ turn running below · ^D follow latest', followBannerFg:P.amberHi,
+      composerDisabled:true, placeholder:'generating… esc to cancel', composerMeta:{model:'codex · gpt5.5 · high',ctx:63}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},
+      keys:[['PgUp/PgDn','scroll'],['^D','follow'],['esc','cancel']]});
+    return this.render(b); }
+
+  // 80-col narrow — unlike ws-pins-80, which drops its scrollback row outright because
+  // it competes with pin text for the same width, the scroll row here has the row to
+  // itself and the label fits at 27 usable columns, so narrow keeps the full vocabulary:
+  // the ▲ N row and the 1-col scrollbar both survive.
+  wsScrollNarrow(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    this.chatViewport(b,0,s.chatW,s.frameH,{top:{mode:'more',n:8}, seq:this.baseSeq(),
+      scroll:{pos:0.7,size:0.3}, composerMeta:{model:'codex · gpt5.5 · high',ctx:44}});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['PgUp/PgDn','scroll'],['F3','tweak'],['F4','act']]});
+    return this.render(b); }
+
+  // ==== §29 · input editing — cursor, multi-line, growth, scroll, selection ====
+  // Additive only: chatSeq, chatViewport, drawChat, home(3-arg calls), wsPinInput and
+  // slashMenu are byte-for-byte untouched, so every frame in §01-§28 renders exactly as
+  // before. home() gains a 4th, optional `opts` argument used only by the new frames
+  // below — every existing call site passes 3 args and takes the old path unchanged.
+
+  // The load-bearing primitive: the cell the cursor sits over. Past the end of the text
+  // this is the same solid blinking block §01/§03/§08 already draw over empty space —
+  // unchanged. Mid-text there is now a character under it, drawn in reverse video
+  // (amber fill, bg-coloured glyph) and still blinking. This is a drawn approximation of
+  // the terminal's own hardware block cursor, not an instruction the implementation can
+  // enforce — the terminal paints the real thing; the code carries that as a comment.
+  cursorCell(b,x,y,ch,painted){ const P=this.pal; if(!painted) return;
+    if(ch===undefined||ch===null||ch==='') this.put(b,x,y,'█',{fg:P.amber,blink:true});
+    else this.put(b,x,y,ch,{fg:P.bg,bg:P.amber,bold:true,blink:true}); }
+
+  // Literal '\n' splits first, each resulting paragraph word-wrapped to `w` after.
+  // wrapLines('') already yields [''], so a blank paragraph survives as one empty row —
+  // wrap alone can never emit an empty row (every wrapped line holds at least one word),
+  // so a blank row always means a real newline. That is the entire, honest answer to
+  // "does a wrap read differently from an explicit newline": wrap is invisible; a
+  // newline is silence you can see.
+  explicitLines(text,w){ const paras=String(text).split('\n'); const out=[];
+    paras.forEach(p=>out.push(...this.wrapLines(p,w))); return out; }
+
+  editorCeiling(frameH){ return Math.max(1,Math.min(6,Math.floor(frameH/4))); }
+
+  // Paints `o.rows` (already the exact visible window — this never decides what's
+  // visible, only paints it) starting at (tx,y). ❯ marks row 0 only — repeating it on
+  // continuation rows would read as separate prompts, not one growing message, so rows
+  // 2..n start flush under the same text column with nothing in the marker column.
+  // `o.sel` {r0,c0,r1,c1} is in this same visible-row space; the cursor draws after the
+  // selection wash so it stays visible inside a selected range. `hiddenAbove`/
+  // `hiddenBelow` are exact counts (the whole buffer is in memory) drawn as a single
+  // corner glyph — ▴/▾, never a full row — on the first/last visible row only. That is
+  // deliberately not §28's `▲ N earlier messages`: that row names a destination you can
+  // page to; this glyph names a window that only ever follows the cursor, and a grown
+  // composer's row budget is exactly the thing this feature is stingy with (see the
+  // 80×24 floor frame below), so it costs zero dedicated rows.
+  editorBlock(b,tx,y,maxX,o){ const P=this.pal; const rows=(o.rows&&o.rows.length)?o.rows:['']; const focused=!!o.focused;
+    const isPh = rows.length===1 && rows[0]==='' && o.placeholder;
+    rows.forEach((line,i)=>{ const ry=y+i;
+      if(i===0) this.text(b,tx-2,ry,'❯ ',{fg:focused?P.amber:P.faint,bold:focused});
+      const dispLine = isPh? o.placeholder : line;
+      this.ctext(b,tx,ry,dispLine,{fg:isPh?P.faint:P.fg},maxX);
+      if(o.sel && !isPh && i>=o.sel.r0 && i<=o.sel.r1){
+        const c0=i===o.sel.r0?o.sel.c0:0, c1=i===o.sel.r1?o.sel.c1:line.length;
+        for(let k=c0;k<c1;k++){ const cx=tx+k; if(cx<=maxX) this.put(b,cx,ry,line[k]||' ',{fg:P.selFg,bg:P.sel,bold:true}); } }
+      if(o.cursor && o.cursor.row===i) this.cursorCell(b,tx+o.cursor.col,ry,line[o.cursor.col],focused && o.cursorPainted!==false);
+    });
+    if(o.hiddenAbove){ const t='▴'+o.hiddenAbove; this.text(b,maxX-t.length+1,y,t,{fg:P.amberDim,bold:true}); }
+    if(o.hiddenBelow){ const t='▾'+o.hiddenBelow; this.text(b,maxX-t.length+1,y+rows.length-1,t,{fg:P.amberDim,bold:true}); } }
+
+  // Seam rule + model/ctx chips, factored out of chatSeq so a grown composer can move it
+  // up without touching chatSeq itself.
+  composerSeam(b,chatX,chatW,composerTop,meta){ const P=this.pal;
+    this.put(b,chatX,composerTop,'├',{fg:P.border}); this.hline(b,chatX+1,composerTop,chatW-2,{fg:P.border}); this.put(b,chatX+chatW-1,composerTop,'┤',{fg:P.border});
+    if(meta){ this.text(b,chatX+2,composerTop,' '+meta.model+' ',{fg:P.amberHi,bold:true});
+      const tag=' ctx '+meta.ctx+'% ', rx=chatX+chatW-3-tag.length;
+      this.text(b,rx,composerTop,' ctx ',{fg:P.faint,bg:P.bg}); this.text(b,rx+5,composerTop,meta.ctx+'% ',{fg:meta.caution?P.amberHi:P.fg,bold:true,bg:P.bg}); } }
+
+  // The read-only history above a grown composer — the same row vocabulary as chatSeq,
+  // stopped at an externally supplied composerTop instead of computing one internally,
+  // so the composer below can be any height. A new function, not a chatSeq edit.
+  chatHistory(b,chatX,chatW,composerTop,o){ o=o||{}; const P=this.pal; const tx=chatX+1, maxX=chatX+chatW-2, iw=chatW-3; let y=1;
+    if(o.header!==false){ this.text(b,tx,y,'● codex',{fg:o.offline?P.faint:P.green,bold:true});
+      const meta=o.headerMeta||'ratatui · connected'; if((9+meta.length)<=chatW-2) this.ctext(b,chatX+9,y,meta,{fg:P.faint},maxX); y+=2; }
+    if(o.scrollback){ this.ctext(b,tx,y,o.scrollback,{fg:P.amberDim,bold:true},maxX); this.put(b,maxX,y,'▲',{fg:P.amberDim}); y+=2; }
+    (o.seq||[]).forEach(e=>{ if(y>=composerTop-1) return;
+      if(e.gap){ y+=e.gap; return; }
+      if(e.think!==undefined){ y+=this.thinkRow(b,tx,y,e,maxX,iw,composerTop-1-y); return; }
+      if(e.fold!==undefined){ this.foldRow(b,tx,y,e,maxX); y++; return; }
+      if(e.role!==undefined){ this.ctext(b,tx,y,e.role,{fg:e.role[0]==='❯'?P.amber:P.green,bold:true},maxX); y++; return; }
+      const txt=e.body!==undefined?e.body:(e.status!==undefined?e.status:e.system);
+      const col=e.c||(e.system!==undefined?P.faint:P.fg); const lines=this.wrapLines(txt,iw);
+      for(let li=0;li<lines.length&&y<composerTop-1;li++){ this.ctext(b,tx,y,lines[li],{fg:col,bold:!!e.bold},maxX); y++; } });
+    return {tx,maxX,iw}; }
+
+  // The pin field: the one input that never wraps or grows, so it is the only one text
+  // scrolls out of sideways. Window follows the cursor; a single ‹/› glyph on the inner
+  // edge marks whichever side is clipped — never both unless both actually are.
+  pinFieldEditor(b,x,y,w,text,cursorCol,focused){ const P=this.pal; const inner=w-4;
+    let start=0; if(text.length>inner){ start=Math.max(0,Math.min(text.length-inner,cursorCol-inner+1)); }
+    const visible=text.slice(start,start+inner);
+    this.ctext(b,x+2,y,visible,{fg:P.fg},x+2+inner-1);
+    if(start>0) this.put(b,x+1,y,'‹',{fg:P.amberDim});
+    if(start+inner<text.length) this.put(b,x+w-2,y,'›',{fg:P.amberDim});
+    const vc=cursorCol-start; if(vc>=0 && vc<=inner) this.cursorCell(b,x+2+vc,y,text[cursorCol],focused); }
+
+  // ---- §29 demonstration frames ----
+
+  // 1 · wrap alone grows the composer to 3 rows — no explicit newline anywhere here.
+  wsEditorWrap(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'}); this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2, iw=chatW-3;
+    this.chatHistory(b,0,chatW,frameH-6,{seq:this.baseSeq()});
+    const rows=this.explicitLines('add a disk io panel that tracks read and write throughput per mounted volume, reported in megabytes per second',iw-2);
+    const editorRows=rows.length, composerTop=frameH-(editorRows+3);
+    this.composerSeam(b,0,chatW,composerTop,{model:'codex · gpt5.5 · high',ctx:46});
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows,cursor:{row:rows.length-1,col:rows[rows.length-1].length},focused:true,cursorPainted:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['F2','fullscreen'],['F3','tweaks'],['F4','interact']]});
+    return this.render(b); }
+
+  // 2 · single row — the frozen geometry — with the cursor parked mid-word for the
+  // first time: the character under it (the 'g' of "throughput") draws in reverse video.
+  wsEditorMidword(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'}); this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2;
+    this.chatHistory(b,0,chatW,frameH-4,{seq:this.baseSeq()});
+    const composerTop=frameH-4;
+    this.composerSeam(b,0,chatW,composerTop,{model:'codex · gpt5.5 · high',ctx:44});
+    const draft='network throughput panel'; const col=draft.indexOf('throughput')+5;
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows:[draft],cursor:{row:0,col},focused:true,cursorPainted:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['←/→','move'],['^←/→','word'],['F3','tweaks']]});
+    return this.render(b); }
+
+  // 3 · the F6 repair fill: draft, a genuinely blank line, then the pasted error. The
+  // blank row between them is the newline made visible — nothing here is a wrap artifact.
+  wsEditorNewline(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main · Current design · uncommitted',rightFg:P.amberHi,rightBold:true}); this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2, iw=chatW-3;
+    this.chatHistory(b,0,chatW,frameH-10,{seq:[
+      {role:'❯ you'},{body:'add a spy hook to the process table'},{gap:1},
+      {role:'● codex'},{status:'✓ wrote main/page.tsx',c:P.dim},{status:'✓ Gate accepted',c:P.dim},{gap:1},
+      {system:'✗ preview crashed while rendering — halted after 3 restarts',c:P.red} ]});
+    const text='and label the peaks\n\nPAGE_RENDER_FAILED: TypeError: ctx.spy is not a function while mounting <ProcessTable>';
+    const rows=this.explicitLines(text,iw-2); const editorRows=rows.length, composerTop=frameH-(editorRows+3);
+    this.composerSeam(b,0,chatW,composerTop,{model:'codex · gpt5.5 · high',ctx:49});
+    this.ctext(b,tx,composerTop+1,'F6 filled this draft — nothing sent until ⏎',{fg:P.amberHi,bold:true},maxX);
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows,cursor:{row:rows.length-1,col:rows[rows.length-1].length},focused:true,cursorPainted:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,ver:'main · Current design · uncommitted',verFg:P.amberHi,verBold:true,keys:[['F5','retry'],['F2','full'],['F3','tweaks']]});
+    return this.render(b); }
+
+  // 4 · at the 6-row ceiling (120×36) with more text than fits both above and below the
+  // window — exact counts at both edges, because unlike §28's message stream the whole
+  // buffer is already in memory here.
+  wsEditorCeiling(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'}); this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2, iw=chatW-3;
+    this.chatHistory(b,0,chatW,frameH-9,{seq:this.baseSeq()});
+    const text='a system monitor with cpu, memory, network and disk gauges, a sortable process table with a kill action behind a confirm, a log tail panel with level filters, a settings page for refresh interval and theme, a status line summarizing alerts, and a footer showing the current agent, model and effort so nothing about the session state is ever ambiguous at a glance';
+    const editorRows=this.editorCeiling(frameH); const all=this.explicitLines(text,iw-3);
+    const hiddenAbove=2, visStart=hiddenAbove, visEnd=Math.min(all.length,visStart+editorRows);
+    const rows=all.slice(visStart,visEnd); const hiddenBelow=Math.max(0,all.length-visEnd);
+    const composerTop=frameH-(editorRows+3);
+    this.composerSeam(b,0,chatW,composerTop,{model:'codex · gpt5.5 · high',ctx:52});
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows,cursor:{row:2,col:Math.min(6,rows[2].length)},focused:true,cursorPainted:true,hiddenAbove,hiddenBelow});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['↑↓','move · scroll'],['F3','tweaks'],['F4','interact']]});
+    return this.render(b); }
+
+  // 5 · select-all across a multi-row draft. The wash covers every row in range up to
+  // each row's real text end (never the empty tail past it), and the cursor still draws
+  // on top so it stays visible inside the selection. ^A is a base Ctrl+letter chord like
+  // ^W/^Y/^J already in this system — safe to name; it is not on the enhanced-protocol list.
+  wsEditorSelectAll(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'}); this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2, iw=chatW-3;
+    this.chatHistory(b,0,chatW,frameH-7,{seq:this.baseSeq()});
+    const rows=this.explicitLines('rename every gauge label to match the process table columns exactly',iw-2);
+    const editorRows=rows.length, composerTop=frameH-(editorRows+3);
+    this.composerSeam(b,0,chatW,composerTop,{model:'codex · gpt5.5 · high',ctx:45});
+    this.ctext(b,tx,composerTop+1,rows.length+' rows selected · type to replace',{fg:P.amberHi,bold:true},maxX);
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows,sel:{r0:0,c0:0,r1:rows.length-1,c1:rows[rows.length-1].length},cursor:{row:rows.length-1,col:rows[rows.length-1].length},focused:true,cursorPainted:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['^A','select all',true],['F3','tweaks'],['F4','interact']]});
+    return this.render(b); }
+
+  // 6 · a turn running while the draft holds two rows — wsGenTyping's exact focus rule
+  // (running + non-empty draft ⇒ focused, cursor painted) extended past one row.
+  wsEditorTurnRunning(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{chatTitle:'❯ chat · working',chatBorderFg:P.amberDim,right:'⠹ generating',rightFg:P.amber,rightBold:true});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:true});
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2, iw=chatW-3;
+    const rows=this.explicitLines('and once the sparkline is in, label the peaks and troughs',iw-2);
+    const editorRows=rows.length, composerTop=frameH-(editorRows+3);
+    this.chatHistory(b,0,chatW,composerTop,{seq:[
+      {role:'❯ you'},{body:'add a network throughput sparkline'},{gap:1},
+      {role:'● codex'},...this.genTurn('full') ]});
+    this.composerSeam(b,0,chatW,composerTop,{model:'codex · gpt5.5 · high',ctx:58});
+    this.ctext(b,tx,composerTop+1,'⏎ send disabled — draft kept',{fg:P.amberHi,bold:true},maxX);
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows,cursor:{row:rows.length-1,col:rows[rows.length-1].length},focused:true,cursorPainted:true});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,hint:'⚠ turn running — send disabled',mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['⏎','send','dis'],['esc','cancel']]});
+    return this.render(b); }
+
+  // 7 · the slash filter is the composer's own buffer, now editable in the middle: the
+  // menu opens above a composer that has already grown to 2 rows, cursor mid-word inside
+  // the typed command.
+  wsSlashEditor(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{right:'main'}); this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh);
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2, iw=chatW-3;
+    const buf='/model gpt-5.5-high-reasoning-effort-mode';
+    const rows=this.explicitLines(buf,iw-2); const editorRows=rows.length, composerTop=frameH-(editorRows+3);
+    this.chatHistory(b,0,chatW,composerTop,{seq:[{role:'❯ you'},{body:'build a system monitor with cpu / mem gauges'},{gap:1},{role:'● codex'},{status:'✓ updated network sparkline',c:P.dim}]});
+    this.composerSeam(b,0,chatW,composerTop,{model:'codex · gpt5.5 · high',ctx:46});
+    const cursor={row:1,col:6}; // inside "reasoning" on the wrapped continuation row
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows,cursor,focused:true,cursorPainted:true});
+    this.slashMenu(b,0,chatW,composerTop,'/model',{});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,keys:[['←/→','move'],['^←/→','word'],['⏎','run']]});
+    return this.render(b); }
+
+  // 7b · deleting the leading / — compact, standalone. The menu is gone and the
+  // remaining characters stay as ordinary literal text; nothing was ever "cancelled".
+  wsSlashClosed(w,h){ const P=this.pal; const b=this.mk(w,h);
+    this.box(b,1,1,w-2,3,{title:'chat · composer',fg:P.border,titleFg:P.dim,titleBold:false});
+    this.text(b,3,2,'❯ ',{fg:P.amber,bold:true});
+    const draft='model'; this.text(b,5,2,draft,{fg:P.fg}); this.cursorCell(b,5+2,2,draft[2],true);
+    this.text(b,3,4,'/ deleted — menu closed, text stays literal',{fg:P.faint});
+    return this.render(b); }
+
+  // 8 · Home's describe box grows downward from a fixed top (the logo/tagline never
+  // move); ⏎ create, the selectors and the slash menu all shift down with it — the menu
+  // anchor (iy+boxH) was already dynamic, so it simply follows.
+  wsHomeGrown(w,h){ const iw=Math.min(w-16,84);
+    const rows=this.explicitLines('/model gpt-5.5-high for a system monitor with cpu, memory, network and a live process table',iw-5);
+    return this.home(w,h,null,{rows,cursor:{row:rows.length-1,col:rows[rows.length-1].length},slashFilter:'/model'}); }
+
+  // 9 · the pin field overflowing — the one input that scrolls sideways instead of
+  // wrapping or growing. Typing at the end keeps the tail visible; ‹ marks hidden head.
+  wsPinOverflow(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const pw=Math.min(50,w-6), px=Math.floor((w-pw)/2), py=1;
+    this.box(b,px,py,pw,3,{title:'edit pin',fg:P.amber,titleFg:P.amberHi});
+    const text='why does this stay pinned after the panel moved during a resize';
+    this.pinFieldEditor(b,px,py+1,pw,text,text.length,true);
+    this.text(b,px+1,py+3,'⏎ save · esc cancel',{fg:P.faint});
+    return this.render(b); }
+
+  // 10 · the 80×24 floor: a maxed 5-row composer takes 7 of 22 content rows, the live
+  // agent block sits on its 3-row minimum, and scrollback has zero rows left — nothing
+  // above the block is loaded or shown. What tells the reader the conversation is still
+  // there is the same thing that always did: the header line never disappears, and the
+  // proportional scrollbar (§28's track, which costs a column, never a row) still marks
+  // that more sits above, at zero row cost — the one existing mechanism already built
+  // for exactly this shortage.
+  wsFloor80(w,h){ const P=this.pal; const b=this.mk(w,h);
+    const s=this.paneShell(b,w,h,{chatTitle:'❯ chat · working',chatBorderFg:P.amberDim,right:'⠹ gen',rightFg:P.amber,rightBold:true});
+    this.drawMonitor(b,s.dx,s.dy,s.dw,s.dh,{dim:true});
+    const chatW=s.chatW, frameH=s.frameH, tx=1, maxX=chatW-2, sbX=chatW-2, iw=sbX-tx-1;
+    this.text(b,tx,1,'● codex',{fg:P.green,bold:true});
+    const editorRows=this.editorCeiling(frameH), composerTop=frameH-(editorRows+3);
+    let y=3; const steps=[{status:'⠹ generating design… · 41s',c:P.amber,bold:true},{status:'▸ writing widgets',c:P.fg},{think:'putting the gauge under the same tee-boxed frame as resources keeps the borders aligned column-for-column.',live:true,cap:1}];
+    steps.forEach(e=>{ if(y<composerTop-1){ if(e.think!==undefined) y+=this.thinkRow(b,tx,y,e,maxX,iw,composerTop-1-y); else { this.ctext(b,tx,y,e.status,{fg:e.c,bold:!!e.bold},maxX); y++; } } });
+    this.scrollbar(b,sbX,3,Math.max(0,composerTop-1-3),0.82,0.97);
+    this.composerSeam(b,0,chatW,composerTop,{model:'cdx·5.5·hi',ctx:61});
+    const draftRows=this.explicitLines('adding a temperature gauge beside memory',iw-3);
+    const hiddenAbove=Math.max(0,draftRows.length-editorRows); const rows=draftRows.slice(hiddenAbove);
+    this.editorBlock(b,tx+2,composerTop+2,maxX,{rows,cursor:{row:rows.length-1,col:rows[rows.length-1].length},focused:true,cursorPainted:true,hiddenAbove});
+    this.wsStatus(b,w,h,{combo:false,ctx:false,mode:{t:' GENERATING ',fg:P.bg,bg:P.amber,bold:true},keys:[['esc','cancel']]});
     return this.render(b); }
 
   legendEl(){ const P=this.pal; const React = window.React;

@@ -27,6 +27,7 @@ const COMMAND_KINDS_PER_SPEC: string[] = [
   "turn.cancel",
   "chat.create",
   "chat.switch",
+  "chat.load-older",
   "model.select",
   "page.renameTitle",
   "page.removePlan",
@@ -104,6 +105,7 @@ const EVENT_KINDS_PER_SPEC: string[] = [
   "preview.circuitOpened",
   "chat.changed",
   "chat.records",
+  "chat.records.older",
   "selection.changed",
   "pins.changed",
   "git.statusChanged",
@@ -117,8 +119,8 @@ describe("CommandKindV1 closure", () => {
   });
 
   test("has exactly the count the spec fixes, and the constant agrees with the array", () => {
-    expect(COMMAND_KINDS_PER_SPEC.length).toBe(43);
-    expect(COMMAND_KIND_COUNT).toBe(43);
+    expect(COMMAND_KINDS_PER_SPEC.length).toBe(44);
+    expect(COMMAND_KIND_COUNT).toBe(44);
     expect(COMMAND_KINDS_V1.length).toBe(COMMAND_KIND_COUNT);
   });
 
@@ -142,8 +144,8 @@ describe("EventKindV1 closure", () => {
   });
 
   test("has exactly the count the spec fixes, and the constant agrees with the array", () => {
-    expect(EVENT_KINDS_PER_SPEC.length).toBe(44);
-    expect(EVENT_KIND_COUNT).toBe(44);
+    expect(EVENT_KINDS_PER_SPEC.length).toBe(45);
+    expect(EVENT_KIND_COUNT).toBe(45);
     expect(EVENT_KINDS_V1.length).toBe(EVENT_KIND_COUNT);
   });
 

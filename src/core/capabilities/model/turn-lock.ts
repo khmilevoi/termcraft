@@ -24,6 +24,10 @@ import type { KernelStateSnapshot } from "../types";
  *   reason `turn.cancel` and the commit family stay unlocked.
  * - Read-only page-tab preview switching and local slash-command mode — §10.4: available
  *   when the preview/page guard permits it, or no Kernel command at all.
+ * - `chat.load-older` — reading further back in the active chat's own history changes no
+ *   Kernel or durable state and competes with nothing a turn is doing. Locking it would
+ *   freeze the scrollback for the whole duration of a generation, which is exactly when a
+ *   user is most likely to scroll back and re-read what they asked for.
  */
 export const TURN_LOCKED_KINDS: readonly CommandKindV1[] = [
   "chat.create",

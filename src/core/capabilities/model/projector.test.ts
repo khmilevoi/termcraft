@@ -43,6 +43,8 @@ function representativeTarget(kind: CommandKindV1): unknown {
       return { turnId: uuidv7() };
     case "chat.switch":
       return { chatId: uuidv7() };
+    case "chat.load-older":
+      return { chatId: uuidv7() };
     case "model.select":
       return { backend: "anthropic", model: "claude", effort: "medium" };
     case "page.renameTitle":
@@ -213,7 +215,7 @@ describe("projectCapability — parity with evaluateCapabilityGuard (§10.2, §1
     expect(entry.state).toEqual(evaluateCapabilityGuard("selection.set", entry.target, state));
   });
 
-  test("property: for every legal state combination and every one of the 43 kinds, the projected capability's availability and primary code match calling the guard directly", () => {
+  test("property: for every legal state combination and every one of the 44 kinds, the projected capability's availability and primary code match calling the guard directly", () => {
     let comparisons = 0;
     for (const state of legalStateCombinations()) {
       for (const kind of COMMAND_KINDS_V1) {

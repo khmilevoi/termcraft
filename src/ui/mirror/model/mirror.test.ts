@@ -5,6 +5,7 @@ import { uuidv7 } from "infrastructure/uuid";
 import { TEST_NONCE, TEST_SHA, TEST_TS, event, resetEventSeq, snapshot } from "ui/testing";
 
 import type { TurnProgressContent } from "../types";
+import type { Mirror } from "./mirror";
 import { createMirror } from "./mirror";
 import { deriveScreen } from "./screen";
 
@@ -13,6 +14,20 @@ const failure = (code: FailureDtoV1["code"] = "HOST_START_FAILED"): FailureDtoV1
   retryable: true,
   safeMessage: "boom",
   details: {},
+});
+
+// A DTO-shaped `chat.records` user record fixture; `chatId` is not part of the record itself
+// (it lives on the envelope's `chatId` field) — this helper only builds the record body.
+// `recordId` defaults to a random one but accepts a deterministic id, which the history-paging
+// merge tests need to assert ordering by id.
+const userRecord = (recordId: string = uuidv7()) => ({
+  kind: "user" as const,
+  recordId,
+  turnId: uuidv7(),
+  text: "build a system monitor",
+  selection: null,
+  pins: [],
+  ts: TEST_TS,
 });
 
 beforeEach(() => resetEventSeq());
@@ -94,6 +109,9 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
     ).toBe("home");
 
@@ -110,16 +128,21 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
 
     expect(m.project().projectId).toBe(projectId);
     expect(m.project().trust).toBe("untrusted-read-only");
-    // The transition genuinely left "home" (to "read-only", since trust is not yet granted)
-    // — the exact condition the bug report named as "can never become true for a live
-    // subscriber".
+    // The transition genuinely left "home" (to "trust-prompt", not silently "read-only" —
+    // spec 2026-08-03's trust-prompt-on-open fix: a never-before-trusted project must show
+    // the trust popup before landing read-only, and `trustPromptDismissed` starts `false`
+    // every session) — the exact condition the bug report named as "can never become true
+    // for a live subscriber".
     expect(
       deriveScreen({
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
-    ).toBe("read-only");
+    ).toBe("trust-prompt");
   });
 
   test("kernel.project.setTrust moves the screen the rest of the way to workspace", () => {
@@ -157,6 +180,9 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
     ).toBe("workspace");
   });
@@ -198,6 +224,9 @@ describe("mirror.apply — kernel.stateChanged (project identity, §10 smoke clo
         projectId: m.project().projectId,
         trust: m.project().trust,
         terminal: TERMINAL,
+        startupOpenPending: false,
+        openFailed: false,
+        trustPromptDismissed: false,
       }),
     ).toBe("home");
   });
@@ -1422,25 +1451,15 @@ describe("mirror.apply — chats / selection / pins / diagnostics / export", () 
 });
 
 describe("mirror.apply — records (persisted chat tail, WP-10 Task 7)", () => {
-  // A DTO-shaped `chat.records` user record fixture; `chatId` is not part of the record itself
-  // (it lives on the envelope's `chatId` field) — this helper only builds the record body.
-  const userRecord = () => ({
-    kind: "user" as const,
-    recordId: uuidv7(),
-    turnId: uuidv7(),
-    text: "build a system monitor",
-    selection: null,
-    pins: [],
-    ts: TEST_TS,
-  });
-
   test("chat.records for the active chat sets records", () => {
     const m = createMirror();
     const chatId = uuidv7();
     m.apply(snapshot({ activeChatId: chatId }));
     const record = userRecord();
-    m.apply(event("chat.records", { chatId, records: [record], prevCursor: null }));
-    expect(m.records()).toEqual([record]);
+    m.apply(
+      event("chat.records", { chatId, records: [record], prevCursor: null, totalRecordCount: 1 }),
+    );
+    expect(m.history().records).toEqual([record]);
   });
 
   test("chat.records for a non-active chat is ignored", () => {
@@ -1449,19 +1468,31 @@ describe("mirror.apply — records (persisted chat tail, WP-10 Task 7)", () => {
     const otherChatId = uuidv7();
     m.apply(snapshot({ activeChatId }));
     m.apply(
-      event("chat.records", { chatId: otherChatId, records: [userRecord()], prevCursor: null }),
+      event("chat.records", {
+        chatId: otherChatId,
+        records: [userRecord()],
+        prevCursor: null,
+        totalRecordCount: 1,
+      }),
     );
-    expect(m.records()).toEqual([]);
+    expect(m.history().records).toEqual([]);
   });
 
   test("a fresh kernel.snapshot clears records", () => {
     const m = createMirror();
     const chatId = uuidv7();
     m.apply(snapshot({ activeChatId: chatId }));
-    m.apply(event("chat.records", { chatId, records: [userRecord()], prevCursor: null }));
-    expect(m.records()).toHaveLength(1);
+    m.apply(
+      event("chat.records", {
+        chatId,
+        records: [userRecord()],
+        prevCursor: null,
+        totalRecordCount: 1,
+      }),
+    );
+    expect(m.history().records).toHaveLength(1);
     m.apply(snapshot());
-    expect(m.records()).toEqual([]);
+    expect(m.history().records).toEqual([]);
   });
 
   test("switching the active chat (chat.changed) clears the stale tail", () => {
@@ -1469,8 +1500,15 @@ describe("mirror.apply — records (persisted chat tail, WP-10 Task 7)", () => {
     const chatA = uuidv7();
     const chatB = uuidv7();
     m.apply(snapshot({ activeChatId: chatA }));
-    m.apply(event("chat.records", { chatId: chatA, records: [userRecord()], prevCursor: null }));
-    expect(m.records()).toHaveLength(1);
+    m.apply(
+      event("chat.records", {
+        chatId: chatA,
+        records: [userRecord()],
+        prevCursor: null,
+        totalRecordCount: 1,
+      }),
+    );
+    expect(m.history().records).toHaveLength(1);
     m.apply(
       event("chat.changed", {
         activeChatId: chatB,
@@ -1479,15 +1517,22 @@ describe("mirror.apply — records (persisted chat tail, WP-10 Task 7)", () => {
         removedChatIds: [],
       }),
     );
-    expect(m.records()).toEqual([]);
+    expect(m.history().records).toEqual([]);
   });
 
   test("chat.changed that keeps the SAME active chat does not clear an already-loaded tail", () => {
     const m = createMirror();
     const chatId = uuidv7();
     m.apply(snapshot({ activeChatId: chatId }));
-    m.apply(event("chat.records", { chatId, records: [userRecord()], prevCursor: null }));
-    expect(m.records()).toHaveLength(1);
+    m.apply(
+      event("chat.records", {
+        chatId,
+        records: [userRecord()],
+        prevCursor: null,
+        totalRecordCount: 1,
+      }),
+    );
+    expect(m.history().records).toHaveLength(1);
     m.apply(
       event("chat.changed", {
         activeChatId: chatId,
@@ -1496,7 +1541,7 @@ describe("mirror.apply — records (persisted chat tail, WP-10 Task 7)", () => {
         removedChatIds: [],
       }),
     );
-    expect(m.records()).toHaveLength(1);
+    expect(m.history().records).toHaveLength(1);
   });
 });
 
@@ -1643,5 +1688,243 @@ describe("mirror.previewNotice — every exit from circuit-open clears it", () =
       }),
     );
     expect(m.previewNotice()).toBeNull();
+  });
+});
+
+describe("chat history paging (chat-scroll spec §6.5)", () => {
+  const CHAT = uuidv7();
+  const cursor = (beforeOffset: number) => ({ generation: 1, beforeOffset });
+
+  function ready(mirror: Mirror): void {
+    mirror.apply(
+      event("chat.changed", { activeChatId: CHAT, added: [], updated: [], removedChatIds: [] }),
+    );
+  }
+
+  test("a tail page seeds records, cursor and total", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3"), userRecord("r4")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    const history = mirror.history();
+    expect(history.records.map((r) => r.recordId)).toEqual(["r3", "r4"]);
+    expect(history.prevCursor).toEqual(cursor(120));
+    expect(history.totalRecordCount).toBe(40);
+  });
+
+  test("an older page prepends and moves the cursor further back", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [userRecord("r1"), userRecord("r2")],
+        prevCursor: cursor(40),
+        totalRecordCount: 40,
+        failure: null,
+      }),
+    );
+    const history = mirror.history();
+    expect(history.records.map((r) => r.recordId)).toEqual(["r1", "r2", "r3"]);
+    expect(history.prevCursor).toEqual(cursor(40));
+  });
+
+  test("a fresh tail reload does not erase the pages loaded above it", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [userRecord("r1"), userRecord("r2")],
+        prevCursor: cursor(40),
+        totalRecordCount: 40,
+        failure: null,
+      }),
+    );
+    // The turn-completion reload: the same tail, now one record longer.
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3"), userRecord("r4")],
+        prevCursor: cursor(120),
+        totalRecordCount: 41,
+      }),
+    );
+    const history = mirror.history();
+    expect(history.records.map((r) => r.recordId)).toEqual(["r1", "r2", "r3", "r4"]);
+    expect(history.prevCursor).toEqual(cursor(40));
+    expect(history.totalRecordCount).toBe(41);
+  });
+
+  // Review finding I4: `mergeTail` used to keep the held cursor whenever the client held more
+  // records than the fresh tail brought, with no check on WHICH generation it belonged to. A
+  // rebuild-from-byte-zero (§7.4 — a truncated trailing record, a same-length branch switch)
+  // bumps the chat index's generation, and `loadChatIndexBefore` hard-refuses any cursor from an
+  // earlier one (`ChatIndexCursorStaleError`). Re-serving the held cursor past that point meant
+  // every retry failed forever, discarding the valid cursor the fresh tail actually carried.
+  test("a rebuild's generation bump replaces the held cursor rather than re-serving a stale one", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [userRecord("r1"), userRecord("r2")],
+        prevCursor: cursor(40),
+        totalRecordCount: 40,
+        failure: null,
+      }),
+    );
+    // A rebuild bumped the index generation to 2 — every generation-1 cursor, including the one
+    // just held above, is now stale.
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3"), userRecord("r4")],
+        prevCursor: { generation: 2, beforeOffset: 120 },
+        totalRecordCount: 41,
+      }),
+    );
+    const history = mirror.history();
+    expect(history.records.map((r) => r.recordId)).toEqual(["r1", "r2", "r3", "r4"]);
+    expect(history.prevCursor).toEqual({ generation: 2, beforeOffset: 120 });
+  });
+
+  test("a failed older page keeps the window and the cursor untouched", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [],
+        prevCursor: null,
+        totalRecordCount: 0,
+        failure: {
+          code: "PERSISTENCE_FAILED",
+          retryable: true,
+          safeMessage: "page unreadable",
+          details: {},
+        },
+      }),
+    );
+    const history = mirror.history();
+    expect(history.records.map((r) => r.recordId)).toEqual(["r3"]);
+    expect(history.prevCursor).toEqual(cursor(120));
+    expect(history.totalRecordCount).toBe(40);
+    expect(mirror.lastOlderPageFailure()?.safeMessage).toBe("page unreadable");
+  });
+
+  test("a successful older page clears the last failure", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [],
+        prevCursor: null,
+        totalRecordCount: 0,
+        failure: {
+          code: "PERSISTENCE_FAILED",
+          retryable: true,
+          safeMessage: "page unreadable",
+          details: {},
+        },
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: CHAT,
+        records: [userRecord("r2")],
+        prevCursor: cursor(40),
+        totalRecordCount: 40,
+        failure: null,
+      }),
+    );
+    expect(mirror.lastOlderPageFailure()).toBeNull();
+  });
+
+  test("an older page for a chat the user left is dropped", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.records.older", {
+        chatId: uuidv7(),
+        records: [userRecord("x1")],
+        prevCursor: cursor(40),
+        totalRecordCount: 40,
+        failure: null,
+      }),
+    );
+    expect(mirror.history().records.map((r) => r.recordId)).toEqual(["r3"]);
+  });
+
+  test("switching chats clears the whole window", () => {
+    const mirror = createMirror();
+    ready(mirror);
+    mirror.apply(
+      event("chat.records", {
+        chatId: CHAT,
+        records: [userRecord("r3")],
+        prevCursor: cursor(120),
+        totalRecordCount: 40,
+      }),
+    );
+    mirror.apply(
+      event("chat.changed", { activeChatId: uuidv7(), added: [], updated: [], removedChatIds: [] }),
+    );
+    expect(mirror.history()).toEqual({ records: [], prevCursor: null, totalRecordCount: 0 });
   });
 });

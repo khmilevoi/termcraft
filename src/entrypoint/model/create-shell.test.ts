@@ -7,16 +7,14 @@ import type { Kernel } from "core/kernel";
 import type { PreviewFrameV1, PreviewIdentityV1, RunTreeResultV1 } from "core/ports";
 import { createFakePreviewSession } from "core/ports/fakes";
 import { FrameAckError, PreviewNoLiveSessionError, createFrameTokenLedger } from "core/preview";
-import { PagesManifestInvalidError, encodePagesManifest } from "entities/design-tree";
+import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import { resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { uuidv7 } from "infrastructure/uuid";
-import { JsonlOpenError, createStore, nodeStoreDeps } from "store";
-import type { ChatListEntry, ChatStore, DesignTreeStore, OpenProject } from "store";
-import { FsAccessError } from "store/safe-fs";
-import { WORKSPACE_STATE_FILENAME } from "store/toml";
+import { createStore, nodeStoreDeps } from "store";
+import { PROJECT_MANIFEST_FILENAME, WORKSPACE_STATE_FILENAME } from "store/toml";
 import type { EventEnvelopeV1, UiEnv } from "ui";
 
 import type { MigrationRequiredV1, ShellWithAgentRegistry } from "../types";
@@ -25,8 +23,6 @@ import {
   buildGateRunner,
   closeShellResources,
   createShell,
-  probeProjectContent,
-  resolveShellLaunch,
   toPreviewSessionHandle,
 } from "./create-shell";
 import type { ShellDeps, ShellTeardownStep } from "./create-shell";
@@ -82,18 +78,18 @@ function testDeps(): ShellDeps {
 
 /**
  * A real on-disk project whose `design/pages.json` lists one page and whose `chats/`
- * directory does not exist — the CLONE case `ShellLaunchV1.hasContent`'s own doc comment
- * names as its real purpose (fix-bundle spec §2.4/§2.5): `chats/` is git-ignored, so a
- * project checked out from Git carries the authored design tree but zero chats. Built by
+ * directory does not exist — the CLONE case (fix-bundle spec §2.4/§2.5): `chats/` is
+ * git-ignored, so a project checked out from Git carries the authored design tree but zero
+ * chats. Spec 2026-08-02 routes this same case on `ShellLaunchV1.existing` alone, not on its
+ * own content, so this fixture now only proves `existing` still reports `true` for it. Built by
  * creating a real project through the Store (so `.termcraft/`'s manifest/lease/durability
- * plumbing is genuine, not hand-rolled), then writing `design/pages.json` and its one
- * entry file directly (Task 5 removed `pages` from `ProjectManifest`; `design/pages.json`,
- * inside the authored tree, is the sole page-order authority now) and removing the two
- * paths a clone never carries: `chats/` and `workspace.local.toml` (both hard-local/
- * git-ignored, `store/toml/model/gitignore.ts`) — this is what `git clone` would actually
- * leave behind, not what `createProject` happens to leave behind. The entry's path is
- * deliberately unrelated to its slug (design §3, §7's central rule: nothing computes a
- * page's file from its slug).
+ * plumbing is genuine, not hand-rolled), then writing `design/pages.json` and its one entry file
+ * directly (Task 5 removed `pages` from `ProjectManifest`; `design/pages.json`, inside the
+ * authored tree, is the sole page-order authority now) and removing the two paths a clone never
+ * carries: `chats/` and `workspace.local.toml` (both hard-local/git-ignored,
+ * `store/toml/model/gitignore.ts`) — this is what `git clone` would actually leave behind, not
+ * what `createProject` happens to leave behind. The entry's path is deliberately unrelated to
+ * its slug (design §3, §7's central rule: nothing computes a page's file from its slug).
  */
 async function projectWithPagesAndNoChats(): Promise<string> {
   const scratch = makeScratchDir("termcraft-shell-gap-d-clone-");
@@ -147,86 +143,28 @@ async function createAndCloseRealProject(prefix: string): Promise<string> {
 }
 
 /**
- * A real on-disk project with zero pages and its auto-minted FIRST CHAT still present (fix round
- * 1: `probeProjectContent`'s chats-list branch, `create-shell.ts:376-382`, had no test at all) —
+ * A real on-disk project with zero pages and its auto-minted FIRST CHAT still present —
  * "typed a message, nothing has generated yet" on a relaunch. `createProject` always mints a
  * first chat header, so this is the ordinary state of a project between its first Enter and its
  * first landed page — reachable on real disk with no cleanup beyond closing the first session.
- * `design/` is left genuinely ABSENT (review round 2): `createProject` never creates one, and
- * `probeProjectContent` now reads `listSlugs()`, which treats that absence as an honest empty
- * list rather than a read failure — hand-seeding an empty `design/pages.json` here would no
- * longer test anything real, since no project this product creates ever looks like that.
+ * Spec 2026-08-02 routes this case on `ShellLaunchV1.existing` alone, so this fixture now only
+ * proves `existing` still reports `true` for it, same as any other reopened project.
  */
 async function existingProjectWithChatOnly(): Promise<string> {
   return createAndCloseRealProject("termcraft-shell-gap-d-chat-only-");
 }
 
 /**
- * A real on-disk EXISTING project with zero pages AND zero chats (fix round 1) — "created
- * yesterday, nothing generated yet", the reviewer's own words for the common relaunch this
- * predicate's chats branch had no coverage for. Distinct from a genuinely fresh directory
- * (`existing: false`): this project already has a `.termcraft/`, `store.openProject` succeeds on
- * it, and the ONLY reason `hasContent` comes back `false` is that both real reads confirm there
- * is nothing yet — `chats/` is removed after creation to delete the one thing `createProject`
- * always seeds; `design/` is never created by `createProject` in the first place, so it is
- * already absent with no cleanup needed (review round 2 — this is also the reachable "clone
- * with no pages authored yet" case: `chats/` is git-ignored and a fresh checkout with no
- * generated page has no `design/` tree either).
+ * A real on-disk EXISTING project with zero pages AND zero chats — "created yesterday, nothing
+ * generated yet". Distinct from a genuinely fresh directory (`existing: false`): this project
+ * already has a `.termcraft/`, and `store.openProject` succeeds on it — `chats/` is removed after
+ * creation to delete the one thing `createProject` always seeds; `design/` is never created by
+ * `createProject` in the first place, so it is already absent with no cleanup needed.
  */
 async function existingProjectWithNothing(): Promise<string> {
   const root = await createAndCloseRealProject("termcraft-shell-gap-d-empty-existing-");
   fs.rmSync(path.join(root, ".termcraft", "chats"), { recursive: true, force: true });
   return root;
-}
-
-function fakeChatListEntry(chatId: string): ChatListEntry {
-  return { chatId, createdAt: "2024-01-01T00:00:00.000Z", firstUserText: null };
-}
-
-/** A stand-in failure for a `DesignTreeStore` method this fixture never actually exercises — `probeProjectContent` only ever calls `pages.listSlugs()` (review round 2: re-pointed off `readManifest()`), but the type still requires a body for every member. */
-function unusedDesignTreeFailure(method: string): PagesManifestInvalidError {
-  return new PagesManifestInvalidError({
-    code: "UNUSED",
-    reason: `${method} not used by this fake`,
-  });
-}
-
-/**
- * A minimal `Pick<OpenProject, "chats" | "pages">` double for `probeProjectContent` (fix
- * round 1, Finding 1) — the two failure branches it introduces need a TRANSIENT read failure
- * occurring AFTER a successful `store.openProject`, which the real `Store` has no seam to inject
- * honestly (see `probeProjectContent`'s own doc comment in `create-shell.ts`): a corrupt
- * `design/pages.json` would already have failed `store.openProject` itself... except it would
- * NOT — `openProject` never reads the design tree at all — but this fixture still drives the
- * failure branch directly rather than relying on real disk corruption, matching this file's own
- * established pattern for the chats-list failure branch below. `.chats.open`/`pages.readSource`/
- * `.readManifest`/`.readTreeFile`/`.listTree` are never called by `probeProjectContent` but still
- * need type-correct bodies — `ChatStore`/`DesignTreeStore` require them — so each returns a real,
- * if unused, error rather than a cast. `slugs` (not `manifest` — review round 2) is exactly
- * `listSlugs()`'s own return shape, the method this probe actually calls.
- */
-function fakeContentSource(options: {
-  readonly slugs: Awaited<ReturnType<DesignTreeStore["listSlugs"]>>;
-  readonly chats?: Awaited<ReturnType<ChatStore["list"]>>;
-}): Pick<OpenProject, "chats" | "pages"> {
-  return {
-    pages: {
-      readSource: () => Promise.resolve(unusedDesignTreeFailure("readSource")),
-      listSlugs: () => Promise.resolve(options.slugs),
-      readTreeFile: () =>
-        Promise.resolve(new FsAccessError({ op: "readTreeFile", path: "unused", code: "UNUSED" })),
-      listTree: () =>
-        Promise.resolve(new FsAccessError({ op: "listTree", path: "unused", code: "UNUSED" })),
-      readManifest: () => Promise.resolve(unusedDesignTreeFailure("readManifest")),
-    },
-    chats: {
-      open: () =>
-        Promise.resolve(
-          new JsonlOpenError({ kind: "chat", id: "unused", reason: "not used by this fake" }),
-        ),
-      list: () => Promise.resolve(options.chats ?? []),
-    },
-  };
 }
 
 async function firstSnapshot(port: {
@@ -446,14 +384,14 @@ describe("createShell", () => {
     const shell = expectFullShell(
       await createShell("interactive", envFor(await emptyDir()), testDeps()),
     );
-    expect(shell.launch).toEqual({ existing: false, hasContent: false });
+    expect(shell.launch).toEqual({ existing: false });
     await shell.close();
   });
 
-  test("reports a clone — pages present, zero chats — as existing content", async () => {
+  test("reports a clone — pages present, zero chats — as an existing project", async () => {
     const root = await projectWithPagesAndNoChats();
     const shell = expectFullShell(await createShell("interactive", envFor(root), testDeps()));
-    expect(shell.launch).toEqual({ existing: true, hasContent: true });
+    expect(shell.launch).toEqual({ existing: true });
     // The SAME fact lands on `UiEnv.projectExists` (`resolveEnvWithProjectIdentity`) — `ui`'s
     // `home-submit` reads it, never `ShellLaunchV1` directly, to pick `project.open` over
     // `project.create`.
@@ -461,104 +399,99 @@ describe("createShell", () => {
     await shell.close();
   });
 
-  // --- fix round 1: the predicate's chats-list branch, on real disk (previously untested) -----
+  // --- content no longer distinguishes the launch (spec 2026-08-02 — one predicate) ----------
 
-  test("an existing project with no pages but its first chat still present reaches the Workspace", async () => {
+  test("an existing project with no pages but its first chat still present also reports existing", async () => {
     const root = await existingProjectWithChatOnly();
     const shell = expectFullShell(await createShell("interactive", envFor(root), testDeps()));
-    expect(shell.launch).toEqual({ existing: true, hasContent: true });
+    expect(shell.launch).toEqual({ existing: true });
     await shell.close();
   });
 
-  test("an existing project with no pages and no chats — created yesterday, nothing generated yet — stays on Home", async () => {
+  test("an existing project with no pages and no chats — created yesterday, nothing generated yet — still reports existing", async () => {
     const root = await existingProjectWithNothing();
     const shell = expectFullShell(await createShell("interactive", envFor(root), testDeps()));
-    expect(shell.launch).toEqual({ existing: true, hasContent: false });
+    expect(shell.launch).toEqual({ existing: true });
     await shell.close();
   });
-});
 
-/**
- * Fix round 1, Finding 1 — `projectHasContent` used to fold a failed read into a definite
- * `false` ("no content"), which the Global Constraints forbid ("Never fabricate a fact ... a
- * port that cannot answer honestly refuses (logged) rather than substituting a placeholder").
- * `probeProjectContent` now returns a third outcome, `"unknown"`, and `resolveShellLaunch` folds
- * it into `hasContent: true` — the Kernel's own open sequence gets the chance to report the real
- * failure through the event stream instead of a silent Home. Both failure branches need a
- * TRANSIENT read failure after a successful `store.openProject`, which the real `Store` has no
- * seam to inject (see `probeProjectContent`'s own doc comment) — driven here directly against
- * `fakeContentSource` instead.
- */
-describe("probeProjectContent / resolveShellLaunch (fix round 1, Finding 1)", () => {
-  const HOME = (() => {
-    const parsed = parsePageSlug("home");
-    if (parsed instanceof Error) throw parsed;
-    return parsed;
-  })();
+  // --- Task 6 (spec 2026-08-02): the retired content probe made no disk calls of its own -------
 
-  test("has-content when listSlugs() lists at least one page", async () => {
-    const open = fakeContentSource({ slugs: [HOME] });
-    expect(await probeProjectContent(open)).toBe("has-content");
-  });
+  /**
+   * Proves the startup path no longer probes the project's own content before the Kernel exists.
+   * Were the retired `probeProjectContent` still here, it would make a FOURTH read of
+   * `project.toml` — the other three stay legitimate and are NOT what this test asserts against:
+   * `store.openProject`'s own internal open sequence reads it twice before `create-shell.ts` ever
+   * runs (`store/model/factory.ts`'s `migrationsGate`, then its own step 6), and
+   * `resolveEnvWithProjectIdentity` reads it again for `workspaceIdentity` (`create-shell.ts`'s
+   * own doc comment on that function explains why that read is real and stays) — plus its own
+   * chats-listing branch's one real disk round trip on top of the orphan-turn scan's own
+   * legitimate one (see the fixture note below for exactly which fixture actually lets that
+   * extra call be observed, and which one does not).
+   *
+   * Neither `Store` nor `ShellDeps` exposes a seam narrow enough to intercept
+   * `OpenProject.manifest`/`.chats` directly — the composition root builds its own `Store`
+   * internally (`interactiveShell`'s own `createStore(nodeStoreDeps(...))` call) with no
+   * injection point for it. Counted per-caller instead, at the one boundary that IS common to
+   * every caller regardless: `fs.readFileSync`/`fs.readdirSync` themselves, filtered to this
+   * project's own manifest file and `chats/` directory so unrelated reads (the lease, page
+   * sources, …) never contaminate the count.
+   *
+   * `existingProjectWithChatOnly()`, not `...WithNothing()` (branch review finding 2, 2026-08-02
+   * fix wave): the retired probe's own chats-listing branch was reachable only when `chats/`
+   * exists on disk — `...WithNothing()` deletes that directory outright, so `chatsListCalls`
+   * would read 0 whether the probe was removed or merely skipped by its own
+   * directory-exists guard, and the assertion could never fail under any behaviour.
+   * `...WithChatOnly()` leaves `chats/` and its auto-minted first chat in place, so a
+   * reintroduced probe would actually drive the count up — this fixture is what lets a
+   * regression here be caught at all.
+   *
+   * The expected count is 1, not 0 — running against the real fixture (rather than reasoning
+   * about it in the abstract) surfaces a call this test's own OLD title got wrong: `chats/` is
+   * NOT "never listed". `store/model/factory.ts`'s `scanOrphanTurns` (step 7 of every
+   * `openProject`, unconditional, unrelated to the retired probe) calls `safeFs.list("chats")`
+   * on every real open — that is this test's one legitimate call. What Task 6 actually removed
+   * was a SECOND listing the old content probe made on top of it; a reintroduced probe would
+   * drive this count to 2, which is what the fixed assertion below now can catch.
+   */
+  test("an interactive open makes no content probe — the manifest is read only by the open sequence and workspaceIdentity resolution, and chats/ is listed exactly once by the orphan-turn scan", async () => {
+    const root = await existingProjectWithChatOnly();
+    const manifestSuffix = path.join(".termcraft", PROJECT_MANIFEST_FILENAME);
+    const chatsSuffix = path.join(".termcraft", "chats");
 
-  test("has-content when pages are empty but at least one chat exists", async () => {
-    const open = fakeContentSource({
-      slugs: [],
-      chats: [fakeChatListEntry(uuidv7())],
-    });
-    expect(await probeProjectContent(open)).toBe("has-content");
-  });
+    // Both mock implementations are cast at this one boundary — `Mock<T>.mockImplementation`
+    // requires an exact match against `fs.readFileSync`/`readdirSync`'s own overloaded call
+    // signatures, which a single pass-through implementation cannot satisfy structurally without
+    // widening its own parameter/return types first.
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    let manifestReadCalls = 0;
+    const readFileSpy = spyOn(fs, "readFileSync").mockImplementation(((
+      ...args: unknown[]
+    ): unknown => {
+      const [target] = args;
+      if (typeof target === "string" && target.endsWith(manifestSuffix)) manifestReadCalls += 1;
+      return (originalReadFileSync as (...callArgs: unknown[]) => unknown)(...args);
+    }) as unknown as typeof fs.readFileSync);
 
-  // The real, common case (review round 2): every project `createProject` mints has no
-  // `design/` at all, so `slugs: []` here stands in for BOTH "an authored, empty manifest"
-  // and "no manifest file yet" — `listSlugs()` (`store/model/design-tree-store.ts`) already collapses
-  // that ENOENT case to `[]` for exactly this reason, so this fixture-level test cannot (and
-  // need not) distinguish them; `existingProjectWithNothing()` below exercises the real,
-  // on-disk absent-file path end to end.
-  test("no-content only when BOTH reads succeed and both come back empty", async () => {
-    const open = fakeContentSource({ slugs: [], chats: [] });
-    expect(await probeProjectContent(open)).toBe("no-content");
-  });
+    const originalReaddirSync = fs.readdirSync.bind(fs);
+    let chatsListCalls = 0;
+    const readdirSpy = spyOn(fs, "readdirSync").mockImplementation(((
+      ...args: unknown[]
+    ): unknown => {
+      const [target] = args;
+      if (typeof target === "string" && target.endsWith(chatsSuffix)) chatsListCalls += 1;
+      return (originalReaddirSync as (...callArgs: unknown[]) => unknown)(...args);
+    }) as unknown as typeof fs.readdirSync);
 
-  test("unknown, logged, when listSlugs() fails on a genuinely CORRUPT design tree — never folded into no-content", async () => {
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    const open = fakeContentSource({
-      slugs: new PagesManifestInvalidError({
-        code: "PARSE_FAILED",
-        reason: "simulated transient read failure",
-      }),
-    });
-    expect(await probeProjectContent(open)).toBe("unknown");
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    warnSpy.mockRestore();
-  });
+    const shellResult = await createShell("interactive", envFor(root), testDeps());
+    readFileSpy.mockRestore();
+    readdirSpy.mockRestore();
+    const shell = expectFullShell(shellResult);
 
-  test("unknown, logged, when the chat listing fails — never folded into no-content", async () => {
-    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    const open = fakeContentSource({
-      slugs: [],
-      chats: new FsAccessError({ op: "list", path: "chats", code: "EBUSY" }),
-    });
-    expect(await probeProjectContent(open)).toBe("unknown");
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    warnSpy.mockRestore();
-  });
+    expect(manifestReadCalls).toBe(3);
+    expect(chatsListCalls).toBe(1);
 
-  test("resolveShellLaunch dispatches anyway (hasContent: true) when existing and the probe could not tell", () => {
-    expect(resolveShellLaunch(true, "unknown")).toEqual({ existing: true, hasContent: true });
-  });
-
-  test("resolveShellLaunch still reports has-content and no-content faithfully when existing", () => {
-    expect(resolveShellLaunch(true, "has-content")).toEqual({ existing: true, hasContent: true });
-    expect(resolveShellLaunch(true, "no-content")).toEqual({ existing: true, hasContent: false });
-  });
-
-  test("resolveShellLaunch never routes a fresh directory to the Workspace, whatever the probe says", () => {
-    expect(resolveShellLaunch(false, "has-content")).toEqual({
-      existing: false,
-      hasContent: false,
-    });
-    expect(resolveShellLaunch(false, "unknown")).toEqual({ existing: false, hasContent: false });
+    await shell.close();
   });
 });
 

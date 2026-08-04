@@ -31,6 +31,9 @@ import { deriveChatDisplayName } from "./display-name";
 /** `EventPayloadByKindV1["chat.records"]` by another name — the module's own single import path for it, matching `core/chats/types.ts`'s identical `ChatSummaryV1` precedent. */
 type ChatRecordsPayloadV1 = EventPayloadByKindV1["chat.records"];
 
+/** `EventPayloadByKindV1["chat.records.older"]` by another name — same precedent as {@link ChatRecordsPayloadV1}. */
+type ChatRecordsOlderPayloadV1 = EventPayloadByKindV1["chat.records.older"];
+
 export function chatRecordToDtoV1(record: ChatRecord): ChatRecordDtoV1 {
   if (record.kind === "user") {
     return {
@@ -105,7 +108,34 @@ export function buildChatRecordsPayload(
     chatId,
     records: loadResult.records.map(chatRecordToDtoV1),
     prevCursor: loadResult.prevCursor,
+    totalRecordCount: loadResult.totalRecordCount,
   };
+}
+
+/** `chat.records.older`'s successful payload — the same mapping, plus the null failure slot. */
+export function buildChatRecordsOlderPayload(
+  chatId: UUIDv7,
+  loadResult: ChatLoadResultV1,
+): ChatRecordsOlderPayloadV1 {
+  return {
+    chatId,
+    records: loadResult.records.map(chatRecordToDtoV1),
+    prevCursor: loadResult.prevCursor,
+    totalRecordCount: loadResult.totalRecordCount,
+    failure: null,
+  };
+}
+
+/**
+ * `chat.records.older`'s failure payload. Every non-`failure` field is deliberately empty:
+ * a failed read learned nothing, and the mirror leaves its own cursor and window alone
+ * (spec §7) rather than adopting placeholder values from an event that knows nothing.
+ */
+export function chatRecordsOlderFailurePayload(
+  chatId: UUIDv7,
+  failure: FailureDtoV1,
+): ChatRecordsOlderPayloadV1 {
+  return { chatId, records: [], prevCursor: null, totalRecordCount: 0, failure };
 }
 
 /**

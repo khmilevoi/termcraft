@@ -145,7 +145,9 @@ export function createFakeChatStore(options?: { readonly clock?: Clock }): FakeC
     const slice = records.slice(start, endExclusive);
     const prevCursor: ChatPageCursorV1 | null =
       start > 0 ? { generation: 0, beforeOffset: start } : null;
-    return { records: slice, prevCursor };
+    // The fake holds the WHOLE chat in memory, so the array's own length is the honest total
+    // — the same fact `store/jsonl` sums out of its page directory.
+    return { records: slice, prevCursor, totalRecordCount: records.length };
   }
 
   function makeHandle(chatId: string, header: ChatHeaderV1): ChatHandleV1 {

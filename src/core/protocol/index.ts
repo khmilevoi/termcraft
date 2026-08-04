@@ -42,6 +42,7 @@ export { chatRecordDtoV1Schema } from "./model/chat-record";
 
 // --- Shared DTOs ----------------------------------------------------------------
 export type {
+  ChatPageCursorDtoV1,
   DiagnosticDtoV1,
   FrameIdentityV1,
   FrameTokenV1,
@@ -52,6 +53,7 @@ export type {
   PinDtoV1,
 } from "./model/shared-dto";
 export {
+  chatPageCursorDtoV1Schema,
   diagnosticDtoV1Schema,
   frameIdentityV1Schema,
   frameTokenV1Schema,

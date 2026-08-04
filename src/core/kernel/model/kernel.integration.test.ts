@@ -203,10 +203,10 @@ function createChatMutationsStub(): ChatReader & ChatMutations & ChatAppendLedge
       return {
         header: { chatId, createdAt: "2024-01-01T00:00:00.000Z" },
         async loadTail(): Promise<ChatLoadResultV1> {
-          return { records: [], prevCursor: null };
+          return { records: [], prevCursor: null, totalRecordCount: 0 };
         },
         async loadBefore(): Promise<ChatLoadResultV1> {
-          return { records: [], prevCursor: null };
+          return { records: [], prevCursor: null, totalRecordCount: 0 };
         },
       };
     },

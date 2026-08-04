@@ -19,10 +19,12 @@ import {
 import { EnlargePlaceholder } from "ui/preview";
 import { SHELL_PALETTE } from "ui/theme";
 import { Workspace } from "ui/workspace";
+import type { OverlayKind } from "ui/workspace";
 
 import type { UiDeps } from "../model/deps";
 import { applyIntent } from "../model/intent";
-import { resolveActiveOverlay, resolveKey } from "../model/keymap";
+import { isClaimedKey, resolveActiveOverlay, resolveKey } from "../model/keymap";
+import { flushEditors } from "../model/primary-input";
 
 /**
  * Home's `agent ‹…› model ‹…› effort ‹…›` combo (design `home()`,
@@ -69,9 +71,12 @@ function exportPopupShowing(deps: UiDeps): boolean {
  * `nowMs` is the App's injected clock reading (see {@link App}'s own `clock` prop) — threaded in
  * rather than read via `Date.now()` here so the WHEN column ({@link formatChatWhen}) stays
  * deterministic under test.
+ *
+ * `overlay` is the ALREADY precedence-resolved value — the App's own `resolveActiveOverlay` call,
+ * hoisted so this and the `<Workspace>` mount below (and the `onKey` context builder) all read
+ * the SAME resolution rather than three independently-computed ones that could drift apart.
  */
-function renderOverlay(deps: UiDeps, nowMs: number) {
-  const overlay = resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps));
+function renderOverlay(deps: UiDeps, nowMs: number, overlay: OverlayKind | null) {
   if (overlay === "chat-list") {
     const chats = deps.mirror.chats();
     // Design 24-chats.dc.html (wsChats): rows list newest-first. `chat-move`/`chat-switch`
@@ -98,7 +103,14 @@ function renderOverlay(deps: UiDeps, nowMs: number) {
     );
   }
   if (overlay === "pin-input") {
-    return <PinInputPopup id="overlay-pin" value={deps.local.pinDraft()} />;
+    return (
+      <PinInputPopup
+        id="overlay-pin"
+        // §7.5: the field is live except on a read-only screen, where pins are refused outright.
+        focused={deps.screen() !== "read-only"}
+        bridge={deps.editors.pin}
+      />
+    );
   }
   if (overlay !== "export") return null;
   const exportState = deps.mirror.export();
@@ -130,8 +142,8 @@ function renderOverlay(deps: UiDeps, nowMs: number) {
       />
     );
   }
-  // Unreachable: exportPopupShowing (via resolveActiveOverlay) above narrowed the phase to
-  // "done" | "failed".
+  // Unreachable: exportPopupShowing (via resolveActiveOverlay, in the caller) narrowed the phase
+  // to "done" | "failed".
   return null;
 }
 
@@ -181,6 +193,12 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
   }
 
   const onKey = useWrap((key: KeyEvent) => {
+    // FIRST, before anything reads a mirror atom. Every key in one stdin chunk is drained
+    // synchronously, while the editors' own `onContentChange` projections are delivered on a
+    // microtask — so without this the context below (and every `applyIntent` guard it leads to)
+    // would be built from the PREVIOUS key's pre-edit value. See `flushEditors` itself for the
+    // measured mechanism and the two failures it produced.
+    flushEditors(deps);
     const context = {
       screen: deps.screen(),
       focus: deps.local.focus(),
@@ -188,10 +206,11 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
       // surface owns the keys, not a second independently derived export-popup check (M14 fix).
       overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),
       composerValue: deps.local.composer(),
-      homeHealth: deps.local.homeHealth(),
+      agentHealth: deps.local.agentHealth(),
       homePrompt: deps.local.prompt(),
       turnRunning: deps.mirror.turn().phase === "running",
       projectOpening: deps.mirror.project().opening,
+      projectOpen: deps.mirror.project().projectId !== null,
     };
     const intent = resolveKey(key, context);
     // DIAGNOSTIC (infrastructure/debug-log): the single choke point where a keystroke becomes an
@@ -212,6 +231,13 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         meta: key.meta,
         option: key.option,
         eventType: key.eventType,
+        // Which parser produced this key: "kitty" only when the terminal actually answered the
+        // extended-protocol request `createCliRenderer` makes by default (§4.3). This is the ONLY
+        // honest signal — `renderer.useKittyKeyboard` reports what we REQUESTED, not what the
+        // terminal implements — and it is deliberately after-the-fact: adequate for diagnosis,
+        // inadequate for driving UI, which is why the fallback chords (§4.4) are always bound
+        // rather than gated on detection.
+        source: key.source,
       },
       context,
       intent,
@@ -223,6 +249,12 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         trust: deps.mirror.project().trust,
       },
     });
+    // THE CLAIM (§4.6, §6.4). Global listeners run before renderable handlers, and
+    // `Renderable.focus()`'s own keypress handler skips `handleKeyPress` when
+    // `key.defaultPrevented` — so this is a COMPLETE gate, and the single point where the App and
+    // the focused editor divide the keyboard. Derived from the resolved intent rather than a
+    // second key list, which would drift.
+    if (isClaimedKey(intent)) key.preventDefault();
     applyIntent(intent, deps);
   }, "ui.App.onKey");
   useKeyboard(onKey);
@@ -254,13 +286,23 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
         id="app-home"
         width={size.w}
         height={size.h}
-        health={deps.local.homeHealth()}
+        health={deps.local.agentHealth()}
         prompt={deps.local.prompt()}
         combo={homeCombo(deps.local.agentSelection())}
         rows={homeSlashOpen ? filterSlashRows(deps.local.prompt(), deps.actionContext()) : []}
         selectedIndex={deps.local.slashSelection()}
-        openFailure={deps.mirror.project().openFailure}
+        // THE TWO WAYS AN OPEN CAN FAIL, composed into the one prop `HomeOpenFailurePanel` is
+        // gated on (branch review finding 2, 2026-08-03). `ProjectMirror.openFailure` is Kernel
+        // truth — folded only from a real `kernel.project.blockOpen`; `local.startupOpenFailure`
+        // is the UI's own reading of a startup dispatch that was never admitted at all
+        // (`run-app.ts`'s two branches, through `abandonStartupOpen`). `??` loses nothing because
+        // the two are mutually exclusive BY CONSTRUCTION: one open attempt either reached the
+        // Kernel and was later blocked (the mirror's field) or never reached it (this atom), and
+        // the second case is precisely the one where no `blockOpen` can exist. Kernel truth is
+        // read first regardless, so a genuine block always wins the slot.
+        openFailure={deps.mirror.project().openFailure ?? deps.local.startupOpenFailure()}
         opening={deps.mirror.project().opening}
+        promptBridge={deps.editors.prompt}
       />
     );
   }
@@ -284,7 +326,12 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
   }
 
   // Workspace owns the non-modal slash anchor; App owns only modal centered overlays.
-  const overlay = renderOverlay(deps, clock());
+  //
+  // Hoisted so `<Workspace>`'s `activeOverlay` prop, `renderOverlay`'s own render, and `onKey`'s
+  // context builder above all read the SAME resolved value — `resolveActiveOverlay` is still the
+  // ONE precedence function, just called once per render instead of once per consumer.
+  const activeOverlay = resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps));
+  const overlay = renderOverlay(deps, clock(), activeOverlay);
   return (
     <box
       id="app-root"
@@ -293,7 +340,7 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
       backgroundColor={SHELL_PALETTE.bg}
       position="relative"
     >
-      <Workspace deps={deps} readOnly={screen === "read-only"} />
+      <Workspace deps={deps} readOnly={screen === "read-only"} activeOverlay={activeOverlay} />
       {overlay !== null && (
         <box
           id="app-modal-layer"

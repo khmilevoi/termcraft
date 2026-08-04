@@ -1,12 +1,14 @@
+import { buildAgentHealthBadge } from "ui/agent-health";
+import type { AgentHealth, AgentHealthBadgeWording } from "ui/agent-health";
 import { SlashMenu } from "ui/slash-menu";
 import { Spinner } from "ui/spinner";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintBadge, StatusBarHintKey } from "ui/status-bar";
-import { TextInput } from "ui/text-input";
+import { TextEditor, editorRowCount } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { homeSubmitAllowed } from "../types";
-import type { HomeAgentHealth, HomeCombo, HomeProps } from "../types";
+import type { HomeCombo, HomeProps } from "../types";
 import { HomeHealthPanel } from "./HomeHealthPanel";
 import { HomeOpenFailurePanel } from "./HomeOpenFailurePanel";
 
@@ -21,6 +23,9 @@ const PLACEHOLDER = "Describe the TUI you want to design…";
 // centered-prompt sizing.
 const promptBoxWidth = (width: number) => Math.min(width - 16, 84);
 const PROMPT_BOX_HEIGHT = 6;
+
+/** The `❯ ` caret run drawn before the editor — two cells, matching design `home()` `:145`. */
+const PROMPT_CARET_COLUMNS = 2;
 
 const BOLD = shellAttrs({ bold: true });
 
@@ -44,39 +49,53 @@ function fitsModelHint(iw: number, combo: HomeCombo): boolean {
 }
 
 /**
+ * `homeStatusBadge`'s wording for `ui/agent-health`'s {@link buildAgentHealthBadge} — the two
+ * points where this screen's own badge text deliberately differs from `agentHealthBadge`'s (the
+ * Workspace status bar / `agentBlockedNote`). See that builder's doc comment for why both exist;
+ * the historical detail behind EACH one lives on its field below, same as before this function's
+ * branches were consolidated into the shared builder.
+ */
+const HOME_BADGE_WORDING: AgentHealthBadgeWording = {
+  // Design draws this glyph as a static `⠹` too (`:148`,`:158` — a static mockup cannot animate)
+  // — DIVERGENCE (fix round 1, Minor finding): this component's OWN `⠹` here is static (a plain
+  // string, unlike `StatusBarHintBadge` which cannot host a live component), while the inline
+  // note beside the prompt (`HomeIdle`'s own JSX below) drives its `⠹` through a live `Spinner` —
+  // so after the first tick the two glyphs on screen fall out of phase with each other. Both are
+  // this component's own animation choice, not design's; design draws neither moving. The tail
+  // itself, `" — ⏎ disabled"`, is the OTHER divergence from `agentHealthBadge`: only Home's Enter
+  // is gated on health (`ui/home/types.ts`'s own `homeSubmitAllowed` doc comment; the Workspace
+  // composer is explicitly not).
+  checkingSuffix: " — ⏎ disabled",
+  // DIVERGENCE (fix round 1, Finding 3/5; corrected fix round 2): design's `homeHealth()` never
+  // treats an unconfirmed exit as blocking at all (`:165-166`'s own comment classifies it
+  // advisory — see `entrypoint/model/agent-health.ts`'s switch for the full argument for why this
+  // port departs from that), so it has no RED/blocking badge for this cause — closest faithful
+  // mapping of design's own `✗ codex not signed in` badge shape (`:191`), honest wording for this
+  // cause instead of `login`'s (wrong, for this cause) text. Design 30 later named the WORKSPACE
+  // shape for this same cause, `{agent} unavailable` — that is `agentHealthBadge`'s own wording
+  // now, not a reason to change this one; see `buildAgentHealthBadge`'s doc comment.
+  latchedText: (name) => `✗ ${name}locked out`,
+};
+
+/**
  * The status-bar hint badge for outcomes that need one — `checking` (design `home('checking')`
  * `:158`) and `homeHealth(kind)`'s three panels plus `blocked/latched` (`:191-192`, extended
  * fix round 1 Finding 5). `ready` gets none — its `page` text below is the entire status-bar
  * footprint.
+ *
+ * `missing` gets none either, but for a different reason than `ready`: `HomeAgentMissing` takes
+ * over the whole screen for that outcome (see {@link Home} below) before `HomeIdle` — and this
+ * function — ever mount, so `missing` never actually reaches here. The guard below documents that
+ * instead of relying on it silently, since `buildAgentHealthBadge` itself WOULD produce a badge
+ * for `missing` (the Workspace status bar asks it for exactly that).
+ *
+ * Branch structure is shared with `agentHealthBadge` (`ui/agent-health`'s own badge for the
+ * Workspace status bar / `agentBlockedNote`) via {@link buildAgentHealthBadge}; only the wording
+ * for two of the five outcomes differs, supplied by {@link HOME_BADGE_WORDING} above.
  */
-function homeStatusBadge(health: HomeAgentHealth): StatusBarHintBadge | null {
-  if (health.kind === "checking") {
-    // Design draws this glyph as a static `⠹` too (`:148`,`:158` — a static mockup cannot
-    // animate) — DIVERGENCE (fix round 1, Minor finding): this component's OWN `⠹` here is
-    // static (a plain string, unlike `StatusBarHintBadge` which cannot host a live component),
-    // while the inline note beside the prompt (below) drives its `⠹` through a live `Spinner` —
-    // so after the first tick the two glyphs on screen fall out of phase with each other. Both
-    // are this component's own animation choice, not design's; design draws neither moving.
-    return { text: `⠹ checking ${health.agent} — ⏎ disabled`, fg: "amberHi", bg: "line" };
-  }
-  if (health.kind === "blocked") {
-    if (health.panel === "login") {
-      return { text: `✗ ${health.agent} not signed in`, fg: "bg", bg: "red" };
-    }
-    // DIVERGENCE (fix round 1, Finding 3/5; corrected fix round 2): design's `homeHealth()` never
-    // treats an unconfirmed exit as blocking at all (`:165-166`'s own comment classifies it
-    // advisory — see `entrypoint/model/agent-health.ts`'s switch for the full argument for why
-    // this port departs from that), so it has no RED/blocking badge for this cause — closest
-    // faithful mapping of design's own `✗ codex not signed in` badge shape (`:191`), honest
-    // wording for this cause instead of `login`'s (wrong, for this cause) text.
-    return { text: `✗ ${health.agent} locked out`, fg: "bg", bg: "red" };
-  }
-  if (health.kind === "advisory") {
-    // Design `:192` — `' ⚠ '+(kind==='sandbox'?'sandbox degraded':'health unconfirmed')+' '`.
-    const label = health.panel === "sandbox" ? "sandbox degraded" : "health unconfirmed";
-    return { text: `⚠ ${label}`, fg: "amberHi", bg: "line" };
-  }
-  return null;
+function homeStatusBadge(health: AgentHealth): StatusBarHintBadge | null {
+  if (health.kind === "missing") return null; // see doc comment above — never actually reached
+  return buildAgentHealthBadge(health, { short: false }, HOME_BADGE_WORDING);
 }
 
 /**
@@ -103,7 +122,7 @@ function homeStatusBadge(health: HomeAgentHealth): StatusBarHintBadge | null {
  * own `q`→`/exit` precedent above exists specifically to avoid that class of bug. A shown-but-
  * unwired hint would mislead, so none is shown; `keymap.ts` wires no `r` handler for `advisory`.
  */
-function homeIdleHintKeys(health: HomeAgentHealth, opening: boolean): readonly StatusBarHintKey[] {
+function homeIdleHintKeys(health: AgentHealth, opening: boolean): readonly StatusBarHintKey[] {
   // `opening` refuses submit for the same reason `checking` does — the command would be rejected
   // — so it wears the same `dis` treatment rather than advertising a key that does nothing.
   const submitKey: StatusBarHintKey =
@@ -116,6 +135,15 @@ function homeIdleHintKeys(health: HomeAgentHealth, opening: boolean): readonly S
 function HomeIdle(props: HomeProps) {
   const { health } = props;
   const iw = promptBoxWidth(props.width);
+  // The editor wraps inside the bordered box: its width less the border and the caret run. The
+  // box grows with it, keeping design's own `boxH=6` (`design/termcraft-engine.js:139`) as the
+  // one-row case exactly — the same approved divergence the composer takes (spec §3).
+  const promptEditorWidth = Math.max(1, iw - 2 - PROMPT_CARET_COLUMNS);
+  const promptEditorRows = editorRowCount({
+    text: props.prompt,
+    width: promptEditorWidth,
+    frameH: props.height - 1,
+  });
   const checking = health.kind === "checking";
   // Design `homeHealth('login')` dims the shared "describe" prompt box itself (frame color,
   // caret, cursor) for the blocking outcome only — `checking`'s own box in `home()` stays
@@ -161,7 +189,7 @@ function HomeIdle(props: HomeProps) {
           <box
             id={`${props.id}-prompt-box`}
             width={iw}
-            height={PROMPT_BOX_HEIGHT}
+            height={PROMPT_BOX_HEIGHT + promptEditorRows - 1}
             border
             borderStyle="rounded"
             borderColor={blocked ? SHELL_PALETTE.border : SHELL_PALETTE.amber}
@@ -173,22 +201,31 @@ function HomeIdle(props: HomeProps) {
             {
               // Design overlaps the blinking cursor onto the placeholder's first cell
               // (design/termcraft-engine.js:145-146, `put` at the SAME column as the preceding
-              // `text`) — `TextInput` (finding §2.6, phase-8 Task 18) reproduces that exactly,
-              // no absolute positioning needed. Cursor omitted entirely while `blocked`,
-              // matching design `homeHealth('login')`'s own `if(!blocking) this.put(...)`
-              // (`:173`), which never draws a cursor over a refused prompt. `blocked`'s own
-              // prompt is also genuinely non-interactive now (`keymap.ts`'s own comment, fix
-              // round 1 Finding 6) — appearance matches behaviour on both counts.
+              // `text`) — `TextEditor` reproduces that by construction — the cursor is the
+              // terminal's own, and it physically occupies the placeholder's first cell. Cursor
+              // omitted entirely while `blocked`, matching design `homeHealth('login')`'s own
+              // `if(!blocking) this.put(...)` (`:173`), which never draws a cursor over a refused
+              // prompt. `blocked`'s own prompt is also genuinely non-interactive now (`keymap.ts`'s
+              // own comment, fix round 1 Finding 6) — appearance matches behaviour on both counts.
             }
-            <TextInput
+            <TextEditor
               id={`${props.id}-prompt-row`}
-              value={props.prompt}
               placeholder={PLACEHOLDER}
               caret={"❯ "}
               caretFg={blocked ? SHELL_PALETTE.faint : SHELL_PALETTE.amber}
               valueFg={SHELL_PALETTE.fg}
               placeholderFg={SHELL_PALETTE.faint}
+              cursorFg={SHELL_PALETTE.amber}
+              multiline
+              rows={promptEditorRows}
+              width={promptEditorWidth}
+              // `blocked` is the one outcome with a genuinely non-interactive prompt (keymap.ts's
+              // own fix-round-1 Finding 6): design `homeHealth('login')` `:173` draws no cursor
+              // over a refused prompt, and blurring it is what makes the `r`/`q` keys safe to bind
+              // literally there. `missing` never reaches this component at all.
+              focused={!blocked}
               showCursor={!blocked}
+              bridge={props.promptBridge}
             />
             <box id={`${props.id}-prompt-hint`} flexDirection="row">
               <text
@@ -361,7 +398,7 @@ interface HomeAgentMissingProps {
   readonly id: string;
   readonly width: number;
   readonly height: number;
-  readonly health: Extract<HomeAgentHealth, { kind: "missing" }>;
+  readonly health: Extract<AgentHealth, { kind: "missing" }>;
 }
 
 /** The agent-missing error variant (design `homeErr()`), replacing the whole screen. */

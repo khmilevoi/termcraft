@@ -53,6 +53,7 @@ import { type PageSlug, parsePageSlug } from "entities/page";
 import { trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
+import { mintActiveChat } from "./chat";
 import { designTreeFilePath, publishPageDescriptorsChanged } from "./page-descriptors";
 import type {
   CommandOutcomeV1,
@@ -105,9 +106,15 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *
  *   `AdmissionInputV1.targetChatId` and the agent's `backend`/`model`/`effort` triple: ALL
  *   FOUR are read asynchronously via `context.deps.projectStore.readWorkspaceState()`
- *   (`WorkspaceStateV1.activeChatId`/`backend`/`model`/`effort`). A `null` `activeChatId` is
- *   still an IDEMPOTENT REFUSAL (logged, resolved with zero events) — there is no honest
- *   default for "which chat," so this is unchanged from before WP-4.
+ *   (`WorkspaceStateV1.activeChatId`/`backend`/`model`/`effort`). A `null` `activeChatId` used
+ *   to be an unconditional refusal (logged, resolved with zero events) — CORRECTED (Gap D
+ *   follow-up, `flows/launch.md`): a cloned project reaches `ready` with legitimately zero
+ *   chats (`chats/` is git-ignored), and nothing else ever mints the first one for it, so the
+ *   ordinary composer's first Send used to refuse permanently with no way to recover short of
+ *   `/new`. `activeChatId === null` now mints one via `mintActiveChat` (`./chat.ts`, the SAME
+ *   sequence `chat.create` itself uses) and continues admission against the freshly minted
+ *   chat — there IS an honest default for "which chat" now: the one this Send is about to
+ *   create.
  *
  *   WP-4 (default agent selection): MVP ships no `/model` picker (roadmap "Out of scope for
  *   MVP"), so a stored `backend`/`model`/`effort` triple that is entirely absent no longer
@@ -1092,7 +1099,8 @@ async function runTurnStart(
     console.warn(`core/kernel/handlers/turn: ${reason}`);
     return abortEarlyAdmission(context, turnId, { ...workspaceState, safeMessage: reason });
   }
-  const { activeChatId, backend, model, effort, activePageSlug } = workspaceState.state;
+  const { backend, model, effort, activePageSlug } = workspaceState.state;
+  let activeChatId = workspaceState.state.activeChatId;
 
   // DIAGNOSTIC: a live run stopped between the marker above and the one below `resolveAgentSelection`,
   // with NO console line — even though every refusal in that span is supposed to log. Record the raw
@@ -1107,18 +1115,32 @@ async function runTurnStart(
   });
 
   if (activeChatId === null) {
-    const reason = "turn.start refused — no active chat yet";
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
-    return abortEarlyAdmission(context, turnId, {
-      code: "PERSISTENCE_FAILED",
-      retryable: false,
-      safeMessage: reason,
-      details: {},
-    });
+    // Gap D (`flows/launch.md`): an existing project can legitimately reach `ready` with zero
+    // chats — `chats/` is git-ignored (fix-bundle §2.5), so a clone carries pages but no chat
+    // history. `project.open` deliberately does not mint one for that case (`project.test.ts`'s
+    // own "Gap D" describe block), and nothing routes such a project back through Home — its
+    // own Enter is the ordinary composer, which dispatches straight to `turn.start`. So this
+    // admission is the one place left to make the FIRST Send actually work: mint a chat the
+    // SAME way `chat.create` does (`mintActiveChat`, `./chat.ts`) rather than refusing outright.
+    const minted = await wrap(mintActiveChat(context));
+    if ("code" in minted) {
+      const reason = `turn.start refused — no active chat yet and minting one failed: ${minted.safeMessage}`;
+      console.warn(`core/kernel/handlers/turn: ${reason}`);
+      return abortEarlyAdmission(context, turnId, { ...minted, safeMessage: reason });
+    }
+    // Published NOW, live (`context.publishOperationEvent`, the same primitive `publish`
+    // below uses for `turn.started`/chat-naming) rather than folded into this function's own
+    // terminal array — the chat genuinely exists on disk by this point, so there is no reason
+    // to hold `chat.changed`/`chat.records` back until whatever this turn itself resolves to.
+    for (const event of minted.events) context.publishOperationEvent(event);
+    activeChatId = minted.chatId;
   }
   // A fresh, explicitly-typed `const`: `publish` below is a nested closure, and TypeScript
   // does not carry the null-check narrowing above into nested function bodies — re-binding
-  // the already-narrowed value here (never reassigned) sidesteps that cleanly, no cast needed.
+  // the already-narrowed value here (never reassigned again) sidesteps that cleanly, no cast
+  // needed. Also now the one binding both the original read AND the freshly minted case
+  // collapse into, so every later reference (`sessionScopeId`, `admission.targetChatId`,
+  // `evaluateSessionPlan`, `resolvePendingChatNaming`) sees the SAME chat either way.
   const admittedChatId: string = activeChatId;
 
   const agentTriple = resolveStoredOrDefaultAgentTriple(context, { backend, model, effort });

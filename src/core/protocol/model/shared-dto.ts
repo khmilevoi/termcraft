@@ -24,6 +24,29 @@ import { type UInt64String, uint64StringSchema } from "./uint64";
 /** A fraction in the closed unit interval [0,1] — a pin's normalized anchor coordinate. */
 const fractionSchema = z.number().min(0).max(1);
 
+const nonNegativeIntSchema = z.number().int().nonnegative();
+
+/**
+ * A chat's backward-pagination cursor, mirroring `ChatReader`'s own `ChatPageCursorV1`
+ * (`core/ports/chat-store.ts`: a generation plus a byte offset) — redrawn here per
+ * code-structure Decision C1.
+ *
+ * It lives in `shared-dto.ts` rather than beside `chat.records` because BOTH directions of
+ * the wire now use it: `chat.records`/`chat.records.older` hand one out, and
+ * `chat.load-older` hands the same value straight back (chat-scroll spec §6.1 — "the client
+ * returns the cursor it was given; it never constructs one"). A command payload importing
+ * the event registry to reach it would invert this module's own layering.
+ */
+export interface ChatPageCursorDtoV1 {
+  readonly generation: number;
+  readonly beforeOffset: number;
+}
+
+export const chatPageCursorDtoV1Schema = z.strictObject({
+  generation: nonNegativeIntSchema,
+  beforeOffset: nonNegativeIntSchema,
+});
+
 /**
  * The complete incarnation-local frame identity (§4, §12.5). No frame, query, or token
  * comparison is valid without all four parts: `frameSeq` resets when the host `nonce`

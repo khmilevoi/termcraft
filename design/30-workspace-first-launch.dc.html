@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;background:#0a0908;}
+  *{box-sizing:border-box;}
+  @keyframes tcblink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+  a{color:#e6a23c;text-decoration:none;}
+  a:hover{color:#f6c163;text-decoration:underline;}
+  ::selection{background:#392c11;color:#f6c163;}
+</style>
+</helmet>
+<div style="min-height:100vh;background:#0a0908;background-image:radial-gradient(circle at 1px 1px,#17140f 1px,transparent 0);background-size:26px 26px;color:#d7d0c2;font-family:'JetBrains Mono',ui-monospace,monospace;padding:56px 60px 100px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;border-bottom:1px solid #211d16;padding-bottom:18px;margin-bottom:40px;">
+    <a href="./Termcraft%20UI.dc.html" style="display:flex;align-items:baseline;gap:14px;">
+      <span style="color:#e6a23c;font-weight:700;font-size:18px;letter-spacing:.02em;">❯ termcraft</span>
+      <span style="color:#5b544a;font-size:12px;">design system · terminal UI</span>
+    </a>
+    <div style="display:flex;align-items:center;gap:18px;font-size:12px;">
+      <a href="./29-input-editing.dc.html" style="color:#8f877a;">‹ Input editing</a>
+      <a href="./Termcraft%20UI.dc.html" style="color:#e6a23c;">index</a>
+    </div>
+  </div>
+
+  <div style="margin:0 0 22px;">
+    <div style="display:flex;align-items:baseline;gap:14px;">
+      <span style="color:#e6a23c;font-weight:700;font-size:13px;letter-spacing:.2em;text-transform:uppercase;">30 · Workspace-first launch</span>
+      <span style="color:#5b544a;font-size:12px;">ws-open-checking-120 · ws-open-blocked-120 · ws-idle-badge-120 · ws-crash-dead-120 · ws-open-80 · badge strips</span>
+    </div>
+    <p style="color:#8f877a;font-size:12.5px;margin:8px 0 0;max-width:80ch;line-height:1.5;">Reopening an existing project used to hold the user on Home — the <span style="color:#e6a23c;">describe the TUI…</span> screen — for the whole ~30s the project takes to open. That screen was never true for this wait: nothing here is a fresh design. The Workspace now mounts immediately, with <span style="color:#e6a23c;">projectId</span> still null, and fills in one jump when the open finishes. This section is new rather than folded into <a href="./02-workspace-idle.dc.html">§02</a> or <a href="./12-errors-edge-states.dc.html">§12</a> because it is a full sequence — a start state, an outcome, and a long-lived side effect on the bar — and collecting it in one place keeps that sequence legible; §02's idle shell and §12's error frames are otherwise untouched.</p>
+  </div>
+
+  <div style="margin:0 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Mid-open</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">no page, no chat, no cancel, nothing measurable</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;">Distinct from two frames that assert different facts: <a href="./20-empty-state.dc.html">§20</a>'s <span style="color:#8f877a;">No pages yet</span> is a finished project that genuinely has none, and <a href="./14-first-generation.dc.html">§14</a>'s <span style="color:#e6a23c;">⠹ generating first page…</span> is a running, cancellable turn. Here neither is true, so the preview centres a plain amber line with no glyph in front of it — <strong style="color:#d7d0c2;font-weight:500;">nothing spins</strong>. A spinner is turn vocabulary; drawing one over a state with no cancel and nothing measurable would borrow a promise this state can't keep. The tab strip is empty (no ghost — that exists only mid-turn) and the chat panel has no header line: agent identity is unknown until the open finishes, exactly as it is everywhere else per the spec.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;">The status bar's <strong style="color:#d7d0c2;font-weight:500;">page slot is filled</strong>, not dropped — <span style="color:#e6a23c;">opening project…</span>, Home's own phrase, reused verbatim in the slot that's free because there's no page slug yet. The mode chip reads <strong style="color:#d7d0c2;font-weight:500;">OPENING</strong>, not STATIC: STATIC asserts a finished, unchanging design, which is exactly the claim this state can't make. The composer stays live — placeholder <span style="color:#e6a23c;">project opening…</span> — but <span style="color:#e6a23c;">⏎</span> is refused, and the key row is where that shows: a faint, disabled <span style="color:#e6a23c;">⏎ send</span>. F2/F3/F4 are dropped rather than drawn inert — none of the three have anything to act on yet (no preview, no page to tweak or interact with), and Home's own checking state shows the same restraint, offering only its one live key plus quit.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start;">
+    <div id="ws-open-checking-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · opening · checking · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-open-checking-120</span>
+      </div>
+      {{ wsOpenChecking120 }}
+    </div>
+    <div id="ws-open-blocked-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+      <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+        <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+        <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · opening · resolved blocked · 120×36</span>
+        <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-open-blocked-120</span>
+      </div>
+      {{ wsOpenBlocked120 }}
+    </div>
+  </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The long-lived badge</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">a fully open, working project — the probe never re-runs</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;">The probe runs once at startup and is never refreshed, so a bad reading rides in the hint slot <strong style="color:#d7d0c2;font-weight:500;">for the life of the process</strong> — over a project that is otherwise working normally. Below, a <span style="color:#e6a23c;">main</span> page, a finished design, ordinary STATIC chrome — and a permanent <span style="color:#dd7b60;">✗ codex not signed in</span> badge sitting where a turn's own hint would go if one were running. Composer, preview, history, export and tweaks all still work; only sending a turn does not, and the badge is the only thing that says so.</p>
+  </div>
+  <div id="ws-idle-badge-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+      <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+      <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · workspace · persistent badge · 120×36</span>
+      <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-idle-badge-120</span>
+    </div>
+    {{ wsIdleBadge120 }}
+  </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The collision — halted preview, dead agent</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">preview halt outranks health in the hint slot</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;">Both can be true at once: the preview host has crashed and latched (<a href="./12-errors-edge-states.dc.html">§12</a>'s <span style="color:#dd7b60;">HALTED</span>), and the agent probe separately reads blocked. The hint slot holds one badge, and the halt's own <span style="color:#dd7b60;">render crashed</span> keeps it — it is the more urgent, more specific fact, and it's already the reason this frame exists. What changes is a real problem the halt block would otherwise paper over: its F6 route reads <span style="color:#e6a23c;">repair…</span> and promises a turn, but with the agent dead that turn cannot run. The block's F6 line is rewritten to say so, and a line is added under the tee rule making the same point plainly, rather than the composer quietly swallowing an ⏎ that goes nowhere.</p>
+  </div>
+  <div id="ws-crash-dead-120" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+      <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+      <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · halted preview + dead agent · 120×36</span>
+      <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-crash-dead-120</span>
+    </div>
+    {{ wsCrashDead120 }}
+  </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">80×24 — the floor</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">tightest bar, mid-open</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;">At the floor the agent/model chip and the size segment are dropped first — the same restraint the idle shell already applies below 100 columns — leaving <span style="color:#e6a23c;">opening…</span>, the badge (agent name dropped: <span style="color:#e6a23c;">⠹ checking</span> not <span style="color:#5b544a;">⠹ checking codex</span>), the OPENING chip, and the one disabled <span style="color:#e6a23c;">⏎ send</span> key. Nothing is cut that isn't already cut elsewhere at this width.</p>
+  </div>
+  <div id="ws-open-80" style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 22px 60px rgba(0,0,0,.55);">
+    <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+      <span style="display:flex;gap:6px;"><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i><i style="width:9px;height:9px;border-radius:50%;background:#3a352c;display:block;"></i></span>
+      <span style="flex:1;text-align:center;color:#8f877a;font-size:11px;letter-spacing:.09em;">termcraft · opening · 80×24</span>
+      <span style="color:#e6a23c;font-size:10px;border:1px solid #4a3c1f;border-radius:4px;padding:2px 6px;">ws-open-80</span>
+    </div>
+    {{ wsOpen80 }}
+  </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">The badge vocabulary</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">as read in a workspace bar, not Home's</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;"><strong style="color:#d7d0c2;font-weight:500;">Precedence, highest first: read-only → turn running → preview halt → agent health → none.</strong> Turn running must outrank health by rule — a live turn demonstrates the agent is alive, so a stale bad reading under it would contradict what's on screen. The rest of the order is this section's own call: health sits last among the real tiers, ahead only of showing nothing. It is a permanent, ambient fact, not an urgent one — it competes for the slot only when nothing more immediate already needs it, which is exactly when a quiet, always-on signal is most legible and least in the way.</p>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;">Five outcomes, four shapes — <span style="color:#8fb96b;">ready</span> draws nothing, matching Home. <span style="color:#dd7b60;">missing</span> has no badge on Home at all (it takes over the whole screen there); this is its first, invented from the takeover's own words.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;">
+    <sc-for list="{{ badges }}" as="it" hint-placeholder-count="6">
+      <div style="flex:none;display:inline-block;border:1px solid #2a251d;border-radius:8px;overflow:hidden;background:#14110d;box-shadow:0 14px 40px rgba(0,0,0,.5);">
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 12px;background:#1d1913;border-bottom:1px solid #2a251d;">
+          <span style="flex:1;color:#8f877a;font-size:10.5px;letter-spacing:.06em;">{{ it.label }}</span>
+        </div>
+        {{ it.el }}
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="margin:38px 0 16px;">
+    <span style="color:#e6a23c;font-weight:700;font-size:11px;letter-spacing:.2em;text-transform:uppercase;">Chat panel, question 3</span>
+    <span style="color:#5b544a;font-size:11px;margin-left:12px;">unchanged — the honest answer is silence</span>
+    <p style="color:#8f877a;font-size:12.5px;margin:10px 0 0;max-width:80ch;line-height:1.5;">No line is added to the empty panel above. <a href="./28-chat-scroll.dc.html">§28</a>'s <span style="color:#5b544a;">╌╌╌ start of chat ╌╌╌</span> marker means "you scrolled up and there's nothing more to load" for a project with real history — a claim about paging that doesn't apply to a project with no chat loaded yet at all. Reusing it here would borrow a meaning it doesn't have. The panel simply has nothing in it, which is the truth: no records exist to show, and the composer above stays focused and live, exactly as default focus already dictates.</p>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { ready: false };
+  async componentDidMount(){
+    const mod = await import('./termcraft-engine.js');
+    this.engine = new mod.Engine();
+    this.engine.measure(() => this.forceUpdate());
+    this.setState({ ready: true });
+  }
+  renderVals(){
+    if (!this.state.ready) return {};
+    const e = this.engine;
+    const badges = [
+      {label:'checking', el:e.badgeStrip('checking')},
+      {label:'advisory · sandbox degraded', el:e.badgeStrip('advisory','sandbox')},
+      {label:'advisory · health unconfirmed', el:e.badgeStrip('advisory','shutdown')},
+      {label:'blocked · not signed in', el:e.badgeStrip('blocked','login')},
+      {label:'blocked · latched', el:e.badgeStrip('blocked','latched')},
+      {label:'missing · invented shape', el:e.badgeStrip('missing')}
+    ];
+    return {
+      wsOpenChecking120: e.wsOpening(120,36,{health:{kind:'checking'}}),
+      wsOpenBlocked120: e.wsOpening(120,36,{health:{kind:'blocked',detail:'login'}}),
+      wsIdleBadge120: e.workspace(120,36,'idle',{health:{kind:'blocked',detail:'login'}}),
+      wsCrashDead120: e.wsHostCrash(120,36,{agentDead:true}),
+      wsOpen80: e.wsOpening(80,24,{health:{kind:'checking'}}),
+      badges
+    };
+  }
+}
+
+</script>
+</body>
+</html>

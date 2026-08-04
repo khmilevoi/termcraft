@@ -1,5 +1,7 @@
 import type { ScoredSlashRow } from "ui/actions";
+import type { AgentHealth } from "ui/agent-health";
 import type { ProjectOpenFailure } from "ui/mirror";
+import type { EditorBridge } from "ui/text-input";
 
 /**
  * `ui/home` — the Home screen (design `home()`/`homeErr()`, `design/01-home.dc.html`,
@@ -11,56 +13,10 @@ import type { ProjectOpenFailure } from "ui/mirror";
  * chat/preview split, no tab strip.
  */
 
-/**
- * The five Home health outcomes (finding §2.7). They divide by WHETHER SUBMIT IS REFUSED, not by
- * presence — which is why the old `present: boolean` could not express them: `checking` and
- * `blocked` both refuse while being nothing alike on screen, and `advisory` allows while being
- * visually closer to `blocked` than to `ready`.
- *
- * - `checking` — the probe is in flight. Submit refused. Design `home('checking')`
- *   (`termcraft-engine.js:139-161`): the `⏎ create` hint drops to faint, a `· ⠹ checking {agent} —
- *   up to 20s` note sits beside it, and the status bar carries `⠹ checking {agent} — ⏎ disabled`
- *   with the `⏎` hint key in the `dis` state.
- * - `ready` — a real, passing probe. Submit allowed. NOTE: there is no `● {agent} … · agent ready`
- *   line any more — the design's own `home()` no longer draws one, and it was the single assertion
- *   that was FALSE for the whole time the probe ran.
- * - `advisory` — the probe finished without proving the agent healthy (an unconfirmed exit, a
- *   degraded sandbox, or a TIMEOUT). Submit ALLOWED: a timeout proves nothing — it does not prove
- *   the user is signed out — and the design's own `⏎ works — the first turn may still fail` panel
- *   is the honest bucket for "unproven". Design `homeHealth('shutdown'|'sandbox')`.
- * - `blocked` — the CLI is there and something positively established it cannot run right now.
- *   Submit refused, but the screen is NOT seized: a panel below a still-rendered (but disabled —
- *   fix round 1, Finding 6) prompt. TWO distinct reasons share this kind, told apart by `panel`
- *   (fix round 1, Finding 3 — added beyond the brief's own sketch, which had `blocked` carry no
- *   `panel` at all and so could not distinguish them): `"login"` is design's own `homeHealth
- *   ('login')` (not signed in — probing again might change the answer); `"latched"` is the
- *   backend's own confirmed unconfirmed-exit lockout (`agent/claude/backend/model/backend.ts`).
- *   Design DOES mock this exact wording — `homeHealth('shutdown')` — but classifies it advisory
- *   (`design/termcraft-engine.js:165-166`'s own comment, predating the backend's latch); this
- *   union departs from that classification on purpose (`entrypoint/model/agent-health.ts`'s
- *   switch has the full argument), so `latched`'s PANEL CONTENT is still a documented divergence
- *   (`HomeHealthPanel.tsx`'s own `panelSpec`) even though its wording is design-adjacent.
- *   Collapsing `"latched"` into `advisory` (as this union briefly did) would tell the user Enter
- *   works when a real turn would be rejected.
- * - `missing` — no CLI at all. The one case that keeps the full-screen takeover (`homeErr()`).
- */
-export type HomeAgentHealth =
-  | Readonly<{ kind: "checking"; agent: string }>
-  | Readonly<{ kind: "ready"; agent: string }>
-  | Readonly<{ kind: "advisory"; agent: string; panel: "shutdown" | "sandbox"; detail: string }>
-  | Readonly<{ kind: "blocked"; agent: string; panel: "login" | "latched"; detail: string }>
-  | Readonly<{ kind: "missing"; agent: string; detail: string }>;
-
-/** Submit is refused exactly while the agent is unproven-and-unusable — see {@link HomeAgentHealth}. */
-export function homeSubmitAllowed(health: HomeAgentHealth): boolean {
+/** Submit is refused exactly while the agent is unproven-and-unusable — see {@link AgentHealth}. */
+export function homeSubmitAllowed(health: AgentHealth): boolean {
   return health.kind === "ready" || health.kind === "advisory";
 }
-
-/**
- * Alias matching this task's own interface contract (Task 15's "Produces" section) — the exact
- * same union as {@link HomeAgentHealth}, named for downstream tasks that dispatch against it.
- */
-export type HomeHealthOutcome = HomeAgentHealth;
 
 /**
  * The agent/model/effort triple Home's combo selectors read (finding §2.7, phase-8 Task 13). A
@@ -92,7 +48,7 @@ export interface HomeProps {
   readonly id: string;
   readonly width: number;
   readonly height: number;
-  readonly health: HomeAgentHealth;
+  readonly health: AgentHealth;
   /** Current prompt text (empty string shows the placeholder). */
   readonly prompt: string;
   readonly combo: HomeCombo;
@@ -107,10 +63,16 @@ export interface HomeProps {
   /** Index of the highlighted row within {@link rows} (caller lands it on the first enabled row). */
   readonly selectedIndex: number;
   /**
-   * Why the project on disk failed to open, when one did — `ProjectMirror.openFailure`, straight
-   * through. `null` is the ordinary case (nothing has failed to open). Independent of
-   * {@link HomeProps.health}: the agent can be perfectly healthy and the project still unopenable,
-   * and both panels render together when both apply.
+   * Why the project on disk failed to open, when one did. `null` is the ordinary case (nothing
+   * has failed to open). Independent of {@link HomeProps.health}: the agent can be perfectly
+   * healthy and the project still unopenable, and both panels render together when both apply.
+   *
+   * TWO SOURCES reach this one prop, composed by `App.tsx` (branch review finding 2, 2026-08-03):
+   * `ProjectMirror.openFailure` — Kernel truth, folded only from a real `kernel.project.blockOpen`
+   * — and `UiLocalState.startupOpenFailure`, the UI's own reading of a startup `project.open` that
+   * was never admitted at all, so no `blockOpen` could ever exist for it. Home neither knows nor
+   * needs to know which one it got: both are a `ProjectOpenFailure` describing the same user-facing
+   * event, and they are mutually exclusive per open attempt.
    */
   readonly openFailure: ProjectOpenFailure | null;
   /**
@@ -120,4 +82,10 @@ export interface HomeProps {
    * loading, and what makes the refused Enter visible before it is pressed.
    */
   readonly opening: boolean;
+  /**
+   * The Home prompt editor's wiring — `deps.editors.prompt`. The prompt TEXT is not a prop of the
+   * editor (see `ui/text-input`'s `TextEditorProps`); {@link HomeProps.prompt} above stays because
+   * the slash menu still renders the typed prefix and the `/`-open gate still reads its length.
+   */
+  readonly promptBridge: EditorBridge;
 }

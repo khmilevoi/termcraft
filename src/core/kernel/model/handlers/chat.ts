@@ -1,9 +1,14 @@
 import { wrap } from "@reatom/core";
 
-import { buildChatRecordsPayload, resolveChatDisplayName } from "core/chats";
+import {
+  buildChatRecordsOlderPayload,
+  buildChatRecordsPayload,
+  chatRecordsOlderFailurePayload,
+  resolveChatDisplayName,
+} from "core/chats";
 import type { ChatSummaryV1 } from "core/chats";
 import type { PublishableEventV1 } from "core/mailbox";
-import type { EventPayloadByKindV1 } from "core/protocol";
+import type { EventPayloadByKindV1, FailureDtoV1 } from "core/protocol";
 
 import type { CommandHandler, FamilyHandlerMap, HandlerContext } from "./types";
 import { startedOutcome } from "./types";
@@ -94,6 +99,14 @@ import { startedOutcome } from "./types";
  * silently dropped, but does not roll back or suppress the event a successful,
  * already-completed create/switch earned.
  *
+ * THE MINT ITSELF IS SHARED, NOW WITH A THIRD CALLER: {@link mintActiveChat} below is the
+ * `ChatMutations.create()` + `writeWorkspaceState` pair this comment describes, factored out
+ * so `turn.start`'s own admission (`./turn.ts`) can reuse it verbatim for its "no active chat
+ * yet" repair (Gap D, `flows/launch.md` — a cloned project can legitimately reach `ready` with
+ * zero chats, since `chats/` is git-ignored, and nothing else mints the first one before the
+ * ordinary composer's Enter tries to send into it) rather than re-deriving the same two calls a
+ * third time — exactly the divergence risk this paragraph already flags for the first two.
+ *
  * `kernel.snapshot`'s OWN `activeChatId` field (`KernelSnapshotPayloadV1`,
  * distinct from this file's `chat.changed.activeChatId`) is deliberately NOT updated
  * by either handler here: `HandlerContext` (`./types.ts`) exposes exactly five
@@ -111,6 +124,7 @@ import { startedOutcome } from "./types";
 
 type ChatChangedPayloadV1 = EventPayloadByKindV1["chat.changed"];
 type ChatRecordsPayloadV1 = EventPayloadByKindV1["chat.records"];
+type ChatRecordsOlderPayloadV1 = EventPayloadByKindV1["chat.records.older"];
 
 function chatChangedEvent(payload: ChatChangedPayloadV1): PublishableEventV1<"chat.changed"> {
   return { kind: "chat.changed", payload };
@@ -118,6 +132,12 @@ function chatChangedEvent(payload: ChatChangedPayloadV1): PublishableEventV1<"ch
 
 function chatRecordsEvent(payload: ChatRecordsPayloadV1): PublishableEventV1<"chat.records"> {
   return { kind: "chat.records", payload };
+}
+
+function chatRecordsOlderEvent(
+  payload: ChatRecordsOlderPayloadV1,
+): PublishableEventV1<"chat.records.older"> {
+  return { kind: "chat.records.older", payload };
 }
 
 /** {@link loadActiveChatTail}'s successful result — the switched-to chat's refreshed summary plus its `chat.records` event, built together since both are derived from the SAME loaded tail. */
@@ -185,36 +205,41 @@ async function loadActiveChatTail(
   };
 }
 
-const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
-  context.launchOperation("kernel.chat.create", async () => {
-    const header = await wrap(context.deps.chatMutations.create());
-    if ("code" in header) {
-      console.warn(`core/kernel: chat.create failed: ${header.safeMessage}`);
-      return [];
-    }
+/**
+ * Mints a fresh chat and marks it active: `ChatMutations.create()` then
+ * `writeWorkspaceState({activeChatId})`, in that order, so a failed selection never leaves a
+ * HALF-created, unselectable chat dangling (this file's header, "Two port calls make up that
+ * one transaction"). Shared by {@link handleChatCreate} and `turn.start`'s admission
+ * (`./turn.ts`) — see this file's header, "THE MINT ITSELF IS SHARED" — so the mint sequence
+ * exists in exactly one place rather than as many divergent copies as callers.
+ *
+ * The `ChatMutations.create()` failure is RETURNED, not logged here: each caller already knows
+ * its own reason for minting (`/new` vs. a send with no active chat yet) and logs with that
+ * context. The `writeWorkspaceState` failure is different — by that point the chat genuinely
+ * exists, so it is NOT propagated, only best-effort durability failed — and IS logged here,
+ * once, so neither caller has to repeat the same reasoning (errore rule 21; this file's header,
+ * "IF THAT WRITE ITSELF FAILS").
+ */
+export async function mintActiveChat(
+  context: HandlerContext,
+): Promise<
+  FailureDtoV1 | { readonly chatId: string; readonly events: readonly PublishableEventV1[] }
+> {
+  const header = await wrap(context.deps.chatMutations.create());
+  if ("code" in header) return header;
 
-    // Persist the freshly minted chat as active the SAME way `chat.switch` does (this
-    // file's header, "BOTH HANDLERS PERSIST THE ACTIVE CHAT" paragraph) — `turn.start`
-    // resolves its active chat from `ProjectStore.readWorkspaceState()` (`turn.ts`'s own
-    // admission read), never from the `ui/mirror` slice `chat.changed` below updates, so
-    // without this write a turn dispatched right after `/new` would find durable
-    // `activeChatId` still `null` and refuse admission (seam finding, fix wave). A write
-    // failure here is best-effort and logged (errore rule 21), never blocking: exactly
-    // like `chat.switch`, `ChatMutations.create` already succeeded by this point — the
-    // fact `chat.changed.activeChatId` below reports — and `writeWorkspaceState` only
-    // affects whether that choice survives a restart, not whether creation happened.
-    const persistFailure = await wrap(
-      context.deps.projectStore.writeWorkspaceState({
-        activeChatId: header.chatId,
-      }),
+  const persistFailure = await wrap(
+    context.deps.projectStore.writeWorkspaceState({ activeChatId: header.chatId }),
+  );
+  if (persistFailure !== undefined) {
+    console.warn(
+      `core/kernel: mintActiveChat succeeded but persisting the active chat failed: ${persistFailure.safeMessage}`,
     );
-    if (persistFailure !== undefined) {
-      console.warn(
-        `core/kernel: chat.create succeeded but persisting the active chat failed: ${persistFailure.safeMessage}`,
-      );
-    }
+  }
 
-    return [
+  return {
+    chatId: header.chatId,
+    events: [
       chatChangedEvent({
         activeChatId: header.chatId,
         // A freshly created chat has no records yet, so its derived display name
@@ -229,8 +254,26 @@ const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
       // — no `ChatReader` round trip: a chat this fresh has nothing on disk to load, and
       // publishing the empty page still clears any stale `ui/mirror` records slice left
       // over from a previously active chat (see the WP-10 plan's own mirror-fence note).
-      chatRecordsEvent({ chatId: header.chatId, records: [], prevCursor: null }),
-    ];
+      // A chat this fresh has nothing on disk, so its total is 0 — the honest count, not a
+      // placeholder (chat-scroll spec §6.3).
+      chatRecordsEvent({
+        chatId: header.chatId,
+        records: [],
+        prevCursor: null,
+        totalRecordCount: 0,
+      }),
+    ],
+  };
+}
+
+const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
+  context.launchOperation("kernel.chat.create", async () => {
+    const minted = await wrap(mintActiveChat(context));
+    if ("code" in minted) {
+      console.warn(`core/kernel: chat.create failed: ${minted.safeMessage}`);
+      return [];
+    }
+    return minted.events;
   });
 
   return startedOutcome([]);
@@ -281,8 +324,48 @@ const handleChatSwitch: CommandHandler<"chat.switch"> = (payload, context) => {
   return startedOutcome([]);
 };
 
-/** The `chat` family's `FamilyHandlerMap` — `chat.create` and `chat.switch`, the only two `chat.*` `CommandKindV1` members (neither is Tier-C deferred). */
+/**
+ * `chat.load-older` (chat-scroll spec §6.4): open the chat, `loadBefore(cursor)`, publish the
+ * page. Sits beside `loadActiveChatTail` because it is the same two port calls with the other
+ * loader.
+ *
+ * UNLIKE `chat.switch`'s tail load, a failure here is NOT silent. That one is a best-effort
+ * side read of an operation that already succeeded; this one IS the operation, and the UI is
+ * sitting on a loading latch waiting for it. So both failure paths publish
+ * `chat.records.older` with a non-null `failure` — which retires that latch by the same path
+ * a success does — and log it as well (errore rule 21).
+ *
+ * The Kernel holds no paging state (spec §6.4): the accumulated window lives in the mirror,
+ * and this handler is stateless between calls. Every port call is `await wrap(...)`
+ * (RTM-A04), matching the rest of this file.
+ */
+const handleChatLoadOlder: CommandHandler<"chat.load-older"> = (payload, context) => {
+  context.launchOperation("kernel.chat.loadOlder", async () => {
+    const handle = await wrap(context.deps.chatReader.open(payload.chatId));
+    if ("code" in handle) {
+      console.warn(
+        `core/kernel: chat.load-older could not open chatId ${payload.chatId}: ${handle.safeMessage}`,
+      );
+      return [chatRecordsOlderEvent(chatRecordsOlderFailurePayload(payload.chatId, handle))];
+    }
+
+    const loadResult = await wrap(handle.loadBefore(payload.cursor));
+    if ("code" in loadResult) {
+      console.warn(
+        `core/kernel: chat.load-older could not load the page before ${payload.cursor.beforeOffset} for chatId ${payload.chatId}: ${loadResult.safeMessage}`,
+      );
+      return [chatRecordsOlderEvent(chatRecordsOlderFailurePayload(payload.chatId, loadResult))];
+    }
+
+    return [chatRecordsOlderEvent(buildChatRecordsOlderPayload(payload.chatId, loadResult))];
+  });
+
+  return startedOutcome([]);
+};
+
+/** The `chat` family's `FamilyHandlerMap` — `chat.create`, `chat.switch`, and `chat.load-older`, the only three `chat.*` `CommandKindV1` members (none is Tier-C deferred). */
 export const chatHandlers: FamilyHandlerMap<"chat"> = {
   "chat.create": handleChatCreate,
   "chat.switch": handleChatSwitch,
+  "chat.load-older": handleChatLoadOlder,
 };

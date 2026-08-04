@@ -14,7 +14,7 @@ import {
 
 export const meta = definePage({
   kitApiVersion: 1,
-  title: "Дашборд · Время",
+  title: "Аналоговые часы",
   minSize: { w: 60, h: 26 },
   theme: "dark-default",
 })

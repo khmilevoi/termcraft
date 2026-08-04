@@ -6,6 +6,7 @@ import { EVENT_KINDS_V1, EVENT_KIND_COUNT } from "./event-kind";
 import {
   agentIdentityV1Schema,
   chatChangedPayloadV1Schema,
+  chatRecordsOlderPayloadV1Schema,
   chatRecordsPayloadV1Schema,
   commitPlanReadyPayloadV1Schema,
   commitStartedPayloadV1Schema,
@@ -1450,10 +1451,16 @@ describe("chatRecordsPayloadV1Schema (chat.records, WP-10 Task 3)", () => {
     chatId: uid(),
     records: [userRecord, agentRecord],
     prevCursor: null,
+    totalRecordCount: 2,
   };
 
   test("accepts a tail with mixed record kinds and rejects an unknown key", () => {
     expectStrict(chatRecordsPayloadV1Schema, valid);
+  });
+
+  test("rejects a payload missing totalRecordCount (chat-scroll spec §6.3)", () => {
+    const { totalRecordCount: _dropped, ...withoutTotal } = valid;
+    expect(chatRecordsPayloadV1Schema.safeParse(withoutTotal).success).toBe(false);
   });
 
   test("accepts an empty tail", () => {
@@ -1481,6 +1488,71 @@ describe("chatRecordsPayloadV1Schema (chat.records, WP-10 Task 3)", () => {
     expect(chatRecordsPayloadV1Schema.safeParse({ ...valid, records: [badRecord] }).success).toBe(
       false,
     );
+  });
+});
+
+describe("chat paging payloads (chat-scroll spec §6.2/§6.3)", () => {
+  const CHAT_ID = uid();
+  const CURSOR = { generation: 3, beforeOffset: 4096 };
+
+  test("chat.records carries the chat's total record count", () => {
+    const parsed = eventPayloadV1SchemaByKind["chat.records"].safeParse({
+      chatId: CHAT_ID,
+      records: [],
+      prevCursor: CURSOR,
+      totalRecordCount: 250,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  test("chat.records rejects a payload without the total", () => {
+    const parsed = eventPayloadV1SchemaByKind["chat.records"].safeParse({
+      chatId: CHAT_ID,
+      records: [],
+      prevCursor: null,
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  test("chat.records.older round-trips a successful page", () => {
+    const payload = {
+      chatId: CHAT_ID,
+      records: [],
+      prevCursor: CURSOR,
+      totalRecordCount: 250,
+      failure: null,
+    };
+    const parsed = eventPayloadV1SchemaByKind["chat.records.older"].safeParse(payload);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data).toEqual(payload);
+  });
+
+  test("chat.records.older round-trips a failed page, leaving the other fields empty (spec §7)", () => {
+    const payload = {
+      chatId: CHAT_ID,
+      records: [],
+      prevCursor: null,
+      totalRecordCount: 0,
+      failure: {
+        code: "PERSISTENCE_FAILED" as const,
+        retryable: false,
+        safeMessage: "chat page could not be read",
+        details: {},
+      },
+    };
+    const parsed = eventPayloadV1SchemaByKind["chat.records.older"].safeParse(payload);
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data).toEqual(payload);
+  });
+
+  test("chat.records.older rejects an unexpected key", () => {
+    expectStrict(chatRecordsOlderPayloadV1Schema, {
+      chatId: CHAT_ID,
+      records: [],
+      prevCursor: null,
+      totalRecordCount: 0,
+      failure: null,
+    });
   });
 });
 

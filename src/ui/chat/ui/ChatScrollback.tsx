@@ -1,8 +1,9 @@
+import type { MouseEvent } from "@opentui/core";
+
 import type { ChatRecord as ChatRecordDto } from "ui/mirror";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { flattenMarkdownLite } from "../model/markdown-lite";
-import { markdownLineRows } from "../model/text-rows";
 import { ChatRecord, type ChatRecordProps } from "./ChatRecord";
 
 /** The design engine's own restore-record sample data (`design/termcraft-engine.js:995`, `wsRestoreApplied`: `"⟲ restored main from a1b2c3d"`) uses a 7-char short hash, not the full commit id — the one display convention the engine actually defines for this field. */
@@ -69,6 +70,19 @@ export function recordToChatRecordProps(
   };
 }
 
+/**
+ * Whether an older page of this chat's history is being loaded right now, and whether the last
+ * attempt failed (chat-scroll spec §6.6). UI-local: the operation does not complete when the
+ * dispatch promise resolves — it completes when `chat.records.older` arrives — so this is a
+ * plain latch, not a `withAsync` state (spec §6.6 states the reason at length).
+ *
+ * `safeMessage` is the failure's own bounded message, never a path or an environment value.
+ */
+export type ChatOlderPageState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "loading" }
+  | { readonly kind: "failed"; readonly safeMessage: string };
+
 /** Props for {@link ChatScrollback}. `id` is the mandatory stable id (§3.2). */
 export interface ChatScrollbackProps {
   readonly id: string;
@@ -79,108 +93,170 @@ export interface ChatScrollbackProps {
   /** The inner text width records wrap against — the panel's own content width. */
   readonly width: number;
   /**
-   * How many terminal rows this scrollback may occupy. Required, not optional: an unbounded
-   * scrollback is precisely the defect this prop exists to prevent (see the component's doc).
+   * Records the client has NOT loaded: total minus loaded, never negative (chat-scroll spec
+   * §5.4). This is the number the `▲ N earlier messages` row names — a page-load count, not a
+   * scroll-position estimate. The `<scrollbox>` the caller mounts this component inside now
+   * owns clipping, so this component never derives a count from how much of `records` is
+   * actually on screen.
    */
-  readonly maxRows: number;
+  readonly unloadedCount: number;
+  /**
+   * True once the chat's first record is in the loaded window (`prevCursor === null`,
+   * chat-scroll spec §5.4). Drives the `╌╌╌ start of chat ╌╌╌` marker below the indicator row
+   * and — combined with `olderPage` — whether the indicator row renders at all.
+   */
+  readonly atStart: boolean;
+  /** The older-page load latch (spec §6.6) — see {@link ChatOlderPageState} above. */
+  readonly olderPage: ChatOlderPageState;
+  /**
+   * Fired when the user clicks the indicator row to request the next older page. Optional:
+   * wiring the actual paging trigger is Task 12's job, not this component's.
+   */
+  readonly onLoadOlder?: (event: MouseEvent) => void;
 }
 
 /**
- * The design's own scrollback-indicator block: the `▲ N earlier messages` line plus the blank
- * row after it (`design/termcraft-engine.js:569`'s `y += 2`).
+ * Design iteration 10, answer 1 (`design/termcraft-engine.js:1502`): the "more" state's own
+ * label. The design's literal is `'▲ '+top.n+' earlier messages'` with no singular branch —
+ * unlike the row-budget indicator this component used to render (which pluralized locally),
+ * the design never does, so this doesn't either.
  */
-const INDICATOR_ROWS = 2;
-
-/** One record's true row cost: its role header plus the rows its lines wrap to at `width`. */
-function recordRowCost(record: ChatRecordDto, agentLabel: string, width: number): number {
-  return 1 + markdownLineRows(recordToChatRecordProps(record, agentLabel).lines, width);
+function earlierMessagesText(count: number): string {
+  return `▲ ${count} earlier messages`;
 }
 
 /**
- * The newest run of records that fits in `maxRows`, plus how many older ones that left behind.
- *
- * Tail-anchored, matching the design: `chatSeq` draws the sequence downward and simply stops at
- * `composerTop - 1`, and the frames that overflow carry `o.scrollback: '▲ N earlier messages'` at
- * the top (`design/termcraft-engine.js:569`, `:658`, `:737`). So the NEWEST records are the ones
- * that survive and the older ones are summarised — never the reverse.
- *
- * The two-pass shape matters: the indicator only costs rows when something is actually dropped,
- * and dropping is what the first pass discovers. Reserving its rows up front would truncate a
- * tail that would otherwise have fit exactly.
+ * Design iteration 10, answer 1 (`design/termcraft-engine.js:1502-1503`): the indicator row's
+ * foreground, both the label and the right-edge `▲` mark (`this.put(b,maxX,y,'▲',{fg:P.amberDim})`).
  */
-function selectVisibleTail(
-  records: readonly ChatRecordDto[],
-  agentLabel: string,
-  width: number,
-  maxRows: number,
-): { readonly visible: readonly ChatRecordDto[]; readonly dropped: number } {
-  const costs = records.map((record) => recordRowCost(record, agentLabel, width));
-  const total = costs.reduce((sum, cost) => sum + cost, 0);
-  if (total <= maxRows) return { visible: records, dropped: 0 };
+const INDICATOR_FG = SHELL_PALETTE.amberDim;
 
-  const budget = maxRows - INDICATOR_ROWS;
-  let used = 0;
-  let firstVisible = records.length;
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const cost = costs[index] ?? 0;
-    if (used + cost > budget) break;
-    used += cost;
-    firstVisible = index;
+/**
+ * Design iteration 10, answer 4 (`design/termcraft-engine.js:1504`): the "loading" state's own
+ * label, exported so the test asserts the design's own literal rather than restating it.
+ */
+export const OLDER_LOADING_TEXT = "⠹ loading earlier messages…";
+
+/** Design iteration 10, answer 4 (`design/termcraft-engine.js:1505`): the failed state's message-row foreground. */
+const OLDER_FAILED_FG = SHELL_PALETTE.red;
+
+/**
+ * Design iteration 10, answer 4 (`design/termcraft-engine.js:1506`): the failed state's fixed
+ * second line — always this exact text, regardless of the failure's own message above it.
+ */
+const OLDER_RETRY_TEXT = "PgUp retries";
+
+/**
+ * Design iteration 10, answer 4 (`design/termcraft-engine.js:1506`): the failed state's
+ * second-line foreground — faint, and (unlike the message row above it) NOT bold.
+ */
+const OLDER_RETRY_FG = SHELL_PALETTE.faint;
+
+/** Design iteration 10, answer 5 (`design/termcraft-engine.js:1507`): the chat-start marker's own literal, centered. */
+export const CHAT_START_TEXT = "╌╌╌ start of chat ╌╌╌";
+
+/** Design iteration 10, answer 5 (`design/termcraft-engine.js:1507`): the chat-start marker's foreground — faint, NOT bold. */
+const CHAT_START_FG = SHELL_PALETTE.faint;
+
+/**
+ * The indicator row's content, one of three states latched by `olderPage` (spec §6.6):
+ *
+ * - "more" (idle, not at start): the reachable page-load target — the label plus a second,
+ *   right-edge `▲` mark (design/termcraft-engine.js:1502-1503's `ctext` + `put` pair).
+ * - "loading": the label alone, no right-edge mark — the design draws no `put` for this mode
+ *   (`:1504`).
+ * - "failed": TWO separate rows, not one string — the bounded message (red, bold) then the
+ *   fixed `PgUp retries` hint (faint, not bold) beneath it, matching the design's own two
+ *   `ctext` calls (`:1505-1506`) rather than folding both into a single line.
+ *
+ * The whole row is the click target for `onLoadOlder` in every state — Task 12 decides which
+ * states actually wire a handler; this component only exposes the surface.
+ */
+function renderIndicator(props: ChatScrollbackProps) {
+  const id = props.id;
+  if (props.olderPage.kind === "loading") {
+    return (
+      <box id={`${id}-earlier`} width={props.width} onMouseDown={props.onLoadOlder}>
+        <text id={`${id}-earlier-label`} fg={INDICATOR_FG} attributes={shellAttrs({ bold: true })}>
+          {OLDER_LOADING_TEXT}
+        </text>
+      </box>
+    );
   }
-  return { visible: records.slice(firstVisible), dropped: firstVisible };
+  if (props.olderPage.kind === "failed") {
+    return (
+      <box
+        id={`${id}-earlier`}
+        flexDirection="column"
+        width={props.width}
+        onMouseDown={props.onLoadOlder}
+      >
+        <text
+          id={`${id}-earlier-label`}
+          fg={OLDER_FAILED_FG}
+          attributes={shellAttrs({ bold: true })}
+        >
+          {`✗ ${props.olderPage.safeMessage}`}
+        </text>
+        <text id={`${id}-earlier-retry`} fg={OLDER_RETRY_FG}>
+          {OLDER_RETRY_TEXT}
+        </text>
+      </box>
+    );
+  }
+  // Neither "loading" nor "failed" and `showIndicator` is true (below), so `olderPage.kind` is
+  // "idle" and `atStart` is false — the design's "more" mode.
+  return (
+    <box
+      id={`${id}-earlier`}
+      flexDirection="row"
+      justifyContent="space-between"
+      width={props.width}
+      onMouseDown={props.onLoadOlder}
+    >
+      <text id={`${id}-earlier-label`} fg={INDICATOR_FG} attributes={shellAttrs({ bold: true })}>
+        {earlierMessagesText(props.unloadedCount)}
+      </text>
+      <text id={`${id}-earlier-mark`} fg={INDICATOR_FG}>
+        {"▲"}
+      </text>
+    </box>
+  );
 }
 
 /**
- * The persisted chat scrollback (design §3.2, `spec:149-160`: "the block collapses into the
- * persisted agent record… above"; `design/03-workspace-generating.dc.html`,
- * `design/14-first-generation.dc.html`). Renders the active chat's tail as a column of
- * {@link ChatRecord}s in arrival order — the caller (`Workspace.tsx`) places this ABOVE the
- * ephemeral `AgentStatusBlock`/collapsed-turn `ChatRecord`. Adds no new visual vocabulary of
- * its own; every glyph/color comes from `ChatRecord`.
+ * The persisted chat scrollback (design §3.2). A plain column of {@link ChatRecord}s over
+ * EVERY loaded record, in arrival order — the row budget this component used to enforce is
+ * gone, because the `<scrollbox>` the caller mounts it inside now clips (chat-scroll spec
+ * §5.2). `Workspace.tsx` places this above the ephemeral `AgentStatusBlock`/collapsed record.
+ *
+ * The `▲ N earlier` row is CONTENT, not an overlay, and `N` counts records the client has not
+ * loaded (§5.4) — never records scrolled above the viewport edge. That number is derivable
+ * but is deliberately never computed: keeping it out means this component never reads a
+ * scroll metric, and the row is simply what the user scrolls to and what triggers the next
+ * page load. Adds no visual vocabulary of its own beyond the literals design iteration 10
+ * defines above.
  */
 export function ChatScrollback(props: ChatScrollbackProps) {
-  if (props.records.length === 0) return null;
-  if (props.maxRows < 1) return null;
-
-  const { visible, dropped } = selectVisibleTail(
-    props.records,
-    props.agentLabel,
-    props.width,
-    props.maxRows,
-  );
-  // Nothing to say and no room to say it in — better blank than an indicator that would itself
-  // overflow the budget it exists to enforce.
-  if (visible.length === 0 && props.maxRows < INDICATOR_ROWS) return null;
+  const showIndicator = !props.atStart || props.olderPage.kind !== "idle";
+  if (props.records.length === 0 && !showIndicator) return null;
 
   return (
     <box id={props.id} flexDirection="column">
-      {dropped > 0 && (
+      {showIndicator && renderIndicator(props)}
+      {props.atStart && (
         <box
-          id={`${props.id}-earlier`}
-          position="relative"
+          id={`${props.id}-start`}
           width={props.width}
-          height={INDICATOR_ROWS}
+          flexDirection="row"
+          justifyContent="center"
         >
-          <text
-            id={`${props.id}-earlier-label`}
-            fg={SHELL_PALETTE.amberDim}
-            attributes={shellAttrs({ bold: true })}
-          >
-            {`▲ ${dropped} earlier ${dropped === 1 ? "message" : "messages"}`}
-          </text>
-          {/* The design pins a second `▲` at the strip's right edge (`this.put(b,maxX,y,'▲')`). */}
-          <text
-            id={`${props.id}-earlier-mark`}
-            position="absolute"
-            right={0}
-            top={0}
-            fg={SHELL_PALETTE.amberDim}
-          >
-            {"▲"}
+          <text id={`${props.id}-start-label`} fg={CHAT_START_FG}>
+            {CHAT_START_TEXT}
           </text>
         </box>
       )}
-      {visible.map((record) => {
+      {props.records.map((record) => {
         const recordProps = recordToChatRecordProps(record, props.agentLabel);
         return (
           // keyed intrinsic wrapper — function components carry no `key` in this repo's

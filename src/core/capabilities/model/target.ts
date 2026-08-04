@@ -114,6 +114,9 @@ export const capabilityTargetExtractors = {
   })),
   "turn.cancel": extractor("turn.cancel", (p) => ({ turnId: p.turnId })),
   "chat.switch": extractor("chat.switch", (p) => ({ chatId: p.chatId })),
+  // §10.1: chat-scroll spec §6.1's pagination cursor stays payload-only — the target
+  // keys capability publication on WHICH chat is being paged, not on the page requested.
+  "chat.load-older": extractor("chat.load-older", (p) => ({ chatId: p.chatId })),
   "model.select": extractor("model.select", (p) => ({
     backend: p.backend,
     model: p.model,

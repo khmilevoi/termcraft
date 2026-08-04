@@ -195,6 +195,7 @@ function samplePayloads(): { readonly [K in CommandKindV1]: CommandPayloadByKind
     "turn.cancel": { turnId: uuidv7() },
     "chat.create": {},
     "chat.switch": { chatId: uuidv7() },
+    "chat.load-older": { chatId: uuidv7(), cursor: { generation: 0, beforeOffset: 0 } },
     "model.select": { backend: "backend-1", model: "model-1", effort: "default" },
     "page.renameTitle": { pageSlug: home, title: "Home" },
     "page.removePlan": { pageSlug: home },
@@ -248,11 +249,11 @@ function envelopeFor<K extends CommandKindV1>(
 }
 
 describe("createHandlerRegistry", () => {
-  test("assembles every one of the 43 CommandKindV1 members without throwing", () => {
+  test("assembles every one of the 44 CommandKindV1 members without throwing", () => {
     const registry = createHandlerRegistry(buildTestContext(), totalHandlers);
     const payloads = samplePayloads();
 
-    expect(COMMAND_KINDS_V1.length).toBe(43);
+    expect(COMMAND_KINDS_V1.length).toBe(44);
 
     // Step C1 wired four real family maps (`chat`, `selection`+`model`, `project`,
     // `preview`+`export`) into `totalHandlers` — `project.create`/`project.open`, in
@@ -266,7 +267,7 @@ describe("createHandlerRegistry", () => {
     //
     // A real dispatch pipeline never calls two handlers whose own preconditions conflict
     // back to back (the capability guard already enforces phase legality before `handle` is
-    // ever reached) — but THIS test drives all 43 kinds in `COMMAND_KINDS_V1`'s own fixed
+    // ever reached) — but THIS test drives all 44 kinds in `COMMAND_KINDS_V1`'s own fixed
     // order against ONE shared, evolving `HandlerContext`, with no guard between them, purely
     // to prove every kind resolves. `project.create`'s own admission legitimately moves the
     // project machine out of the exact phase a LATER kind in this same fixed order expects

@@ -34,6 +34,7 @@ import {
   uuidv7Schema,
 } from "./ids";
 import {
+  type ChatPageCursorDtoV1,
   type DiagnosticDtoV1,
   type FrameIdentityV1,
   type FrameTokenV1,
@@ -42,6 +43,7 @@ import {
   type PageDescriptorV1,
   type PageRemovePlanV1,
   type PinDtoV1,
+  chatPageCursorDtoV1Schema,
   diagnosticDtoV1Schema,
   frameIdentityV1Schema,
   frameTokenV1Schema,
@@ -1749,23 +1751,6 @@ export const chatChangedPayloadV1Schema = z.strictObject({
 });
 
 /**
- * `chat.records`'s pagination cursor (WP-10 Task 3), mirroring `ChatReader`'s own
- * `ChatPageCursorV1` (`core/ports/chat-store.ts:40-43`: a generation plus a byte
- * offset) — redrawn here per code-structure Decision C1, the same "narrow,
- * core-owned redraw" precedent this file already follows throughout (e.g.
- * `GitStatusProjectionV1Placeholder`, `ChatRecordDtoV1`).
- */
-export interface ChatPageCursorDtoV1 {
-  readonly generation: number;
-  readonly beforeOffset: number;
-}
-
-export const chatPageCursorDtoV1Schema = z.strictObject({
-  generation: nonNegativeIntSchema,
-  beforeOffset: nonNegativeIntSchema,
-});
-
-/**
  * `chat.records`'s payload (WP-10 Task 3, new event kind 43 -> 44): the bounded page
  * of persisted records for ONE chat, delivered command-time by `chat.switch`,
  * `chat.create`, and `project.open` (see `docs/superpowers/plans/
@@ -1779,12 +1764,50 @@ export interface ChatRecordsPayloadV1 {
   readonly chatId: UUIDv7;
   readonly records: readonly ChatRecordDtoV1[];
   readonly prevCursor: ChatPageCursorDtoV1 | null;
+  /**
+   * The chat's TOTAL record count (chat-scroll spec §6.3), from `ChatLoadResultV1.
+   * totalRecordCount`. The UI's top-of-stream indicator counts records it has NOT loaded —
+   * this minus the number it holds — so the label never needs a scroll metric to stay true.
+   */
+  readonly totalRecordCount: number;
 }
 
 export const chatRecordsPayloadV1Schema = z.strictObject({
   chatId: uuidv7Schema,
   records: z.array(chatRecordDtoV1Schema).readonly(),
   prevCursor: chatPageCursorDtoV1Schema.nullable(),
+  totalRecordCount: nonNegativeIntSchema,
+});
+
+/**
+ * `chat.records.older`'s payload (chat-scroll spec §6.2): one page of records OLDER than the
+ * cursor the client sent, or the reason that page could not be read.
+ *
+ * The failure rides this event rather than a separate kind for two reasons the spec states:
+ * one nullable field is cheaper than another member of a closed registry, and it retires the
+ * UI's loading latch by the same path a success does. `diagnostics.changed` is deliberately
+ * not the channel — it carries page and Gate diagnostics, not the outcome of a UI-issued
+ * operation.
+ *
+ * WHEN `failure` IS NON-NULL the other three fields carry no information: `records` is empty,
+ * `prevCursor` is `null` and `totalRecordCount` is `0`. The mirror must branch on `failure`
+ * FIRST and leave its own cursor and window untouched — spec §7: "`prevCursor` is left as it
+ * was so the load can be retried. No records are lost."
+ */
+export interface ChatRecordsOlderPayloadV1 {
+  readonly chatId: UUIDv7;
+  readonly records: readonly ChatRecordDtoV1[];
+  readonly prevCursor: ChatPageCursorDtoV1 | null;
+  readonly totalRecordCount: number;
+  readonly failure: FailureDtoV1 | null;
+}
+
+export const chatRecordsOlderPayloadV1Schema = z.strictObject({
+  chatId: uuidv7Schema,
+  records: z.array(chatRecordDtoV1Schema).readonly(),
+  prevCursor: chatPageCursorDtoV1Schema.nullable(),
+  totalRecordCount: nonNegativeIntSchema,
+  failure: failureDtoV1Schema.nullable(),
 });
 
 /** The selection DTO `selection.changed` carries when a selection exists (§9 row, KCC:826). */
@@ -1888,6 +1911,7 @@ export type EventPayloadByKindV1 = Readonly<{
   "preview.circuitOpened": PreviewCircuitOpenedPayloadV1;
   "chat.changed": ChatChangedPayloadV1;
   "chat.records": ChatRecordsPayloadV1;
+  "chat.records.older": ChatRecordsOlderPayloadV1;
   "selection.changed": SelectionChangedPayloadV1;
   "pins.changed": PinsChangedPayloadV1;
   "git.statusChanged": GitStatusChangedPayloadV1;
@@ -1961,6 +1985,7 @@ export const eventPayloadV1SchemaByKind = {
   "preview.circuitOpened": previewCircuitOpenedPayloadV1Schema,
   "chat.changed": chatChangedPayloadV1Schema,
   "chat.records": chatRecordsPayloadV1Schema,
+  "chat.records.older": chatRecordsOlderPayloadV1Schema,
   "selection.changed": selectionChangedPayloadV1Schema,
   "pins.changed": pinsChangedPayloadV1Schema,
   "git.statusChanged": gitStatusChangedPayloadV1Schema,

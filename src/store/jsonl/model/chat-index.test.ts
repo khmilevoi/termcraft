@@ -485,3 +485,42 @@ describe("page store integrity", () => {
     expect(result).toBeInstanceOf(ChatIndexIoError);
   });
 });
+
+describe("total record count", () => {
+  test("loadTail reports the chat's whole record count, not the page's", async () => {
+    const { bytes } = chatOf(250);
+    const pages = makePageStore();
+    const state = unwrap(await buildFor(bytes, pages));
+
+    const tail = unwrap(
+      await loadChatIndexTail(state, { pages }, makeSource(bytes), { limit: 10 }),
+    );
+    expect(tail.records).toHaveLength(10);
+    expect(tail.totalRecordCount).toBe(250);
+  });
+
+  test("loadBefore reports the same total as loadTail", async () => {
+    const { bytes } = chatOf(250);
+    const pages = makePageStore();
+    const state = unwrap(await buildFor(bytes, pages));
+    const source = makeSource(bytes);
+
+    const tail = unwrap(await loadChatIndexTail(state, { pages }, source, { limit: 10 }));
+    const older = unwrap(
+      await loadChatIndexBefore(state, { pages }, source, requireCursor(tail.prevCursor), {
+        limit: 10,
+      }),
+    );
+    expect(older.records).toHaveLength(10);
+    expect(older.totalRecordCount).toBe(250);
+  });
+
+  test("a header-only chat reports zero", async () => {
+    const pages = makePageStore();
+    const state = unwrap(await buildFor(chatHeaderBytes(), pages));
+    const loaded = unwrap(
+      await loadChatIndexTail(state, { pages }, makeSource(chatHeaderBytes())),
+    );
+    expect(loaded.totalRecordCount).toBe(0);
+  });
+});

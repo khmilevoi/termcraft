@@ -14,6 +14,6 @@ export { createUiRoot, UiRootError } from "./model/root";
  */
 export { defaultAdapters, mountRenderRoot } from "./model/render-root";
 export type { KeyContext, KeyIntent, KeyLike } from "./model/keymap";
-export { resolveActiveOverlay, resolveKey } from "./model/keymap";
+export { isClaimedKey, resolveActiveOverlay, resolveKey } from "./model/keymap";
 export { applyIntent } from "./model/intent";
 export { App } from "./ui/App";
