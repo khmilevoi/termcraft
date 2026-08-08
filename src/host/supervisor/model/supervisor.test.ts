@@ -15,6 +15,8 @@ import type {
   HostSessionDeps,
   MountPageV1,
   ReadyOutcome,
+  SpawnCommand,
+  SpawnFn,
   StopOutcome,
   SupervisorEvent,
 } from "../types";
@@ -273,6 +275,11 @@ function makeSupervisor(
     mintSessionId: () => `sid-${(sidSeq += 1)}`,
     onEvent: (e) => events.push(e),
     createSession: factory.createSession,
+    // `deps.spawn` above always errors — fine for the fake incarnation factory, which never
+    // calls it, but the warm spare pool (design-tree phase 3 Task 6) DOES call it after every
+    // ready, and would otherwise log a "spawn failed" warning on every test in this file that
+    // reaches ready. Tests that actually exercise the spare pool override this explicitly.
+    spareCapacity: 0,
     ...overrides,
   });
   return { supervisor, clock, events, factory };
@@ -1139,6 +1146,10 @@ describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Ta
       spawnFor: () => ({ cmd: ["fake-host"] }),
       spawn: () => host.child,
       mintSessionId: () => "sid-1",
+      // This fixture's `spawn` always hands back the SAME scripted child (there is only one
+      // "process" in play), so a spare-pool replenish() after ready would adopt the live
+      // incarnation's own child as an "idle" spare — unrelated to what this test covers.
+      spareCapacity: 0,
     });
 
     const handle = supervisor.preview(spec);
@@ -1173,6 +1184,10 @@ describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Ta
       spawnFor: () => ({ cmd: ["fake-host"] }),
       spawn: () => host.child,
       mintSessionId: () => "sid-1",
+      // This fixture's `spawn` always hands back the SAME scripted child (there is only one
+      // "process" in play), so a spare-pool replenish() after ready would adopt the live
+      // incarnation's own child as an "idle" spare — unrelated to what this test covers.
+      spareCapacity: 0,
     });
 
     const handle = supervisor.preview(spec);
@@ -1218,6 +1233,10 @@ describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Ta
         return attempt === 1 ? first.child : second.child;
       },
       mintSessionId: () => "sid-1",
+      // Only two scripted children exist here; a spare-pool replenish() after ready would
+      // call `spawn` a third time and adopt the live incarnation's own `second.child` as an
+      // "idle" spare — unrelated to what this test covers.
+      spareCapacity: 0,
     });
 
     const handle = supervisor.preview(spec);
@@ -1262,6 +1281,10 @@ describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Ta
         return attempt === 1 ? first.child : second.child;
       },
       mintSessionId: () => "sid-1",
+      // Only two scripted children exist here; a spare-pool replenish() after ready would
+      // call `spawn` a third time and adopt the live incarnation's own `second.child` as an
+      // "idle" spare — unrelated to what this test covers.
+      spareCapacity: 0,
     });
 
     const handle = supervisor.preview(spec);
@@ -1293,5 +1316,213 @@ describe("createHostSupervisor — pre-ready resize is buffered, not dropped (Ta
     second.replyReady();
     await waitUntil(() => handle.state() === "ready", "2nd incarnation ready");
     await supervisor.stopAll();
+  });
+});
+
+// --- design-tree phase 3 Task 6: the warm spare pool ---
+//
+// `fakeFactory`'s `createSession` never touches `deps.spawn`/`deps.command` — the fake
+// `HostSession` it returns is built directly, so the spare pool's adoption path (which lives
+// entirely in `sessionDepsFor`'s `spawn` wrapper) is invisible to every test above. This
+// factory is the opposite: it calls `deps.spawn(deps.command)` at the top of `start()`, exactly
+// where the real `createHostSession` does, so a test here can prove whether that call actually
+// reached the spare pool or the underlying `spawn`.
+
+function spawnAwareFactory() {
+  const spawnedFor: unknown[] = [];
+  let nonceSeq = 0;
+
+  const createSession = (spec: HostSessionSpec, deps: HostSessionDeps): HostSession => {
+    const spawned = deps.spawn(deps.command);
+    spawnedFor.push(spawned);
+    nonceSeq += 1;
+    const sessionId = deps.sessionId ?? "no-session-id";
+    const nonce = String(nonceSeq).padStart(32, "0");
+    const identity = {
+      mode: spec.mode,
+      pageSlug: spec.pageSlug,
+      sourceHash: spec.sourceHash,
+      kitApiVersion: spec.kitApiVersion,
+      sessionId,
+      nonce,
+    };
+    let phase: HostSession["phase"] = "created";
+    const relay = createPreviewRelay();
+    const ready: ControlEnvelope = {
+      protocolVersion: 1,
+      kind: "ready",
+      sessionId,
+      nonce,
+      messageId: "1",
+      responseTo: "1",
+      body: { size: { w: spec.size.w, h: spec.size.h }, interactionMode: spec.interactionMode },
+    };
+    return {
+      identity,
+      get phase() {
+        return phase;
+      },
+      async start(): Promise<ProtocolError | SupervisorError | ReadyOutcome> {
+        if (spawned instanceof Error) {
+          phase = "failed";
+          relay.close();
+          return spawned;
+        }
+        phase = "ready";
+        return { identity, negotiatedLimits: PROTOCOL_HARD_LIMITS, ready, firstFrame: null };
+      },
+      async stop(): Promise<StopOutcome> {
+        phase = "stopped";
+        relay.close();
+        return {
+          phase: "stopped",
+          forced: false,
+          exitCode: 0,
+          signalCode: null,
+          reason: "test stop",
+        };
+      },
+      frames: relay.frames,
+      async resize() {
+        return ready;
+      },
+      async setMode(mode) {
+        return { ...ready, kind: "set-mode", body: { interactionMode: mode } };
+      },
+      async ping() {
+        return ready;
+      },
+      async query(frameIdentity) {
+        return { ok: true, frameIdentity, result: {} };
+      },
+      async mount() {
+        return ready;
+      },
+    };
+  };
+
+  return { createSession, spawnedFor };
+}
+
+/** A `SpawnFn` returning a fresh, never-exiting fake child every call — tracks every command. */
+function trackingSpawn(): { spawn: SpawnFn; calls: SpawnCommand[] } {
+  const calls: SpawnCommand[] = [];
+  const spawn: SpawnFn = (command) => {
+    calls.push(command);
+    return {
+      stdin: { write: () => {}, flush: () => {}, end: () => {} },
+      stdout: (async function* () {})(),
+      stderr: (async function* () {})(),
+      exited: new Promise<number>(() => {}), // an idle/live child never exits on its own here
+      exitCode: null,
+      signalCode: null,
+      kill() {},
+    };
+  };
+  return { spawn, calls };
+}
+
+describe("createHostSupervisor — warm spare pool (design §9.3, phase 3 Task 6)", () => {
+  test("the first incarnation spawns cold; the second adopts the spare", async () => {
+    const factory = spawnAwareFactory();
+    const tracker = trackingSpawn();
+    let sidSeq = 0;
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: tracker.spawn,
+      mintSessionId: () => `sid-${(sidSeq += 1)}`,
+      createSession: factory.createSession,
+      spareCapacity: 1,
+    });
+
+    const a = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    if (a instanceof Error) throw a;
+    await waitUntil(() => a.state() === "ready", "a ready");
+    // 1 cold spawn (a's own incarnation) + 1 spare replenished right after.
+    await waitUntil(() => tracker.calls.length === 2, "spare replenished after a's ready");
+
+    const b = supervisor.preview(specFor({ treeRevision: "2".repeat(64) }));
+    if (b instanceof Error) throw b;
+    await waitUntil(() => b.state() === "ready", "b ready — adopted the spare");
+    // The adoption itself spawned NOTHING: b's own incarnation took the already-spawned spare.
+    // Only the replenish AFTER b's ready adds a third call.
+    await waitUntil(() => tracker.calls.length === 3, "spare replenished again after b's ready");
+    await supervisor.stopAll();
+  });
+
+  test("liveCount counts the spare", async () => {
+    const factory = spawnAwareFactory();
+    const tracker = trackingSpawn();
+    let sidSeq = 0;
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: tracker.spawn,
+      mintSessionId: () => `sid-${(sidSeq += 1)}`,
+      createSession: factory.createSession,
+      spareCapacity: 1,
+    });
+
+    const a = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    if (a instanceof Error) throw a;
+    await waitUntil(() => a.state() === "ready", "a ready");
+    await waitUntil(() => supervisor.liveCount() === 2, "1 incarnation + 1 spare"); // §13's cap sees the spare too
+    await supervisor.stopAll();
+  });
+
+  test("no spare is held at the global cap", async () => {
+    const factory = spawnAwareFactory();
+    const tracker = trackingSpawn();
+    let sidSeq = 0;
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: tracker.spawn,
+      mintSessionId: () => `sid-${(sidSeq += 1)}`,
+      createSession: factory.createSession,
+      spareCapacity: 1,
+      maxGlobalHosts: 2,
+    });
+
+    const a = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    if (a instanceof Error) throw a;
+    await waitUntil(() => a.state() === "ready", "a ready");
+    const b = supervisor.preview(specFor({ treeRevision: "2".repeat(64) }));
+    if (b instanceof Error) throw b;
+    await waitUntil(() => b.state() === "ready", "b ready — adopted the spare, at the cap now");
+    // Two incarnations already saturate the cap of 2 — replenish must not grow a third process.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(supervisor.liveCount()).toBe(2);
+    await supervisor.stopAll();
+  });
+
+  test("stopAll drains the pool", async () => {
+    const factory = spawnAwareFactory();
+    const tracker = trackingSpawn();
+    let sidSeq = 0;
+    const clock = createManualClock();
+    const supervisor = createHostSupervisor({
+      clock,
+      runtimeDeclaration,
+      spawnFor: () => ({ cmd: ["fake-host"] }),
+      spawn: tracker.spawn,
+      mintSessionId: () => `sid-${(sidSeq += 1)}`,
+      createSession: factory.createSession,
+      spareCapacity: 1,
+    });
+
+    const a = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    if (a instanceof Error) throw a;
+    await waitUntil(() => a.state() === "ready", "a ready");
+    await waitUntil(() => tracker.calls.length === 2, "spare replenished");
+    await supervisor.stopAll();
+    expect(supervisor.liveCount()).toBe(0);
   });
 });

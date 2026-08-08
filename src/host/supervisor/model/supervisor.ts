@@ -18,8 +18,10 @@ import { SupervisorError } from "./errors";
 import { createPreviewRelay } from "./preview-relay";
 import { createRestartPolicy } from "./restart-policy";
 import { createHostSession } from "./session";
+import { createSparePool } from "./spare-pool";
 
 const DEFAULT_MAX_GLOBAL_HOSTS = 10;
+const DEFAULT_SPARE_CAPACITY = 1;
 const DEFAULT_START_QUEUE_CAPACITY = 64;
 
 /**
@@ -135,7 +137,11 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   // and respawns into it, so a crash-loop can never hand its slot to a queued
   // session and then reclaim it, briefly exceeding the §13 ≤10 hard limit. Only
   // `queued`, `circuit-open`, and `stopped` free the slot.
-  const liveCount = () => {
+  //
+  // KEYED, NOT PUBLIC (design-tree phase 3 Task 6). This is the ADMISSION number — every
+  // internal capacity check (`tryDrainQueue`, `retry`, `preview`) uses this, never the public
+  // `liveCount()` below, because a held spare must not refuse a session it is about to become.
+  const keyedLiveCount = () => {
     let live = 0;
     for (const ks of keys.values()) {
       if (ks.state === "starting" || ks.state === "ready" || ks.state === "backoff") live += 1;
@@ -143,9 +149,30 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     return live;
   };
 
+  const sparePool = createSparePool({
+    spawn: deps.spawn,
+    command: deps.spawnFor(null), // `null` = the spare's command, before any spec exists
+    capacity: deps.spareCapacity ?? DEFAULT_SPARE_CAPACITY,
+    canGrow: () => keyedLiveCount() + sparePool.size() < maxGlobalHosts,
+  });
+
+  // THE PUBLIC NUMBER IS PROCESSES, THE ADMISSION NUMBER IS KEYS, AND THEY MUST NOT BE THE SAME
+  // FUNCTION (design §9.3: "total live incarnations stay under the existing global cap of 10").
+  // A spare IS a live host process, so §13's cap has to see it. Admission may not, or a held
+  // spare would refuse a session it is about to become: a new key always takes the spare before
+  // spawning (`sessionDepsFor` below), so admitting at `keyed = 9, spares = 1` lands on
+  // `keyed = 10, spares = 0` — still ten processes. Replenishment is what keeps that invariant
+  // true, by only ever growing while `keyed + spares < maxGlobalHosts` (`sparePool`'s own
+  // `canGrow` above).
+  const liveCount = () => keyedLiveCount() + sparePool.size();
+
   function sessionDepsFor(ks: KeyState): HostSessionDeps {
     return {
-      spawn: deps.spawn,
+      // ADOPTION (design §9.1): the spare is a child that already paid its own boot. It is
+      // handed to the session in place of a fresh spawn; from `session.ts`'s point of view a
+      // `SpawnFn` returned a child and nothing else is different. `deps.spawn` is the cold path
+      // when the pool is empty.
+      spawn: (command) => sparePool.take() ?? deps.spawn(command),
       command: deps.spawnFor(ks.spec),
       clock,
       runtimeDeclaration: deps.runtimeDeclaration,
@@ -237,6 +264,10 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
       ks.mountedSlug = specAtSpawn.pageSlug;
       flushPendingResize(ks);
       reconcileMount(ks);
+      // Replenish the spare AFTER this incarnation is actually consuming its own slot (design
+      // §9.1's diagram: "frame → spare is replenished") — a spare exists only once something
+      // is actually being previewed, never at rest before the first ever `preview()` call.
+      sparePool.replenish();
     });
   }
 
@@ -346,10 +377,10 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     });
   }
 
-  // A freed live slot lets the oldest queued start proceed (§13). liveCount rises
+  // A freed live slot lets the oldest queued start proceed (§13). keyedLiveCount rises
   // as each queued key enters `starting`, so the loop self-limits.
   function tryDrainQueue(): void {
-    while (startQueue.length > 0 && liveCount() < maxGlobalHosts) {
+    while (startQueue.length > 0 && keyedLiveCount() < maxGlobalHosts) {
       const next = startQueue.shift();
       if (next === undefined) return;
       if (next.closed) continue;
@@ -463,7 +494,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     if (ks.closed) return;
     policy.retry(restartKeyOf(ks));
     if (ks.state !== "circuit-open" && ks.state !== "stopped") return;
-    if (liveCount() >= maxGlobalHosts) {
+    if (keyedLiveCount() >= maxGlobalHosts) {
       if (startQueue.length < startQueueCapacity && !startQueue.includes(ks)) {
         ks.state = "queued";
         startQueue.push(ks);
@@ -541,7 +572,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
       mounting: false,
     };
     keys.set(key, ks);
-    if (liveCount() >= maxGlobalHosts) {
+    if (keyedLiveCount() >= maxGlobalHosts) {
       if (startQueue.length >= startQueueCapacity) {
         keys.delete(key);
         return new SupervisorError({
@@ -557,6 +588,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   }
 
   async function stopAll(): Promise<void> {
+    sparePool.drain();
     await Promise.all([...keys.values()].map((ks) => close(ks)));
   }
 

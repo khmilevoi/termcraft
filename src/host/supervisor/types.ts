@@ -431,8 +431,16 @@ export interface SupervisedPreviewSession extends PreviewSession {
 export interface HostSupervisorDeps {
   readonly clock: Clock;
   readonly runtimeDeclaration: RuntimeDeclarationBundleV1;
-  /** The spawn command for a spec (the execPath-vs-dev branch is phase-8's job, Spike E). */
-  readonly spawnFor: (spec: HostSessionSpec) => SpawnCommand;
+  /**
+   * The spawn command for a spec (the execPath-vs-dev branch is phase-8's job, Spike E).
+   * `null` means "the warm spare's command, before any spec exists" (design-tree phase 3 Task
+   * 6): the production implementation ignores `spec` entirely — `createHostSpawnCommand` builds
+   * `[execPath, srcRoot, "_host", "--stdio"]` from the environment alone — so every incarnation
+   * and every spare share the identical argv. A caller whose command genuinely depends on the
+   * spec must decide what a spare's command is; there is no defensible default, which is why
+   * `null` is a real argument here and not silently coerced to a fabricated spec.
+   */
+  readonly spawnFor: (spec: HostSessionSpec | null) => SpawnCommand;
   readonly spawn: SpawnFn;
   /** Mint a stable per-key sessionId (UUIDv7); a fresh nonce is minted per incarnation. */
   readonly mintSessionId: () => string;
@@ -447,6 +455,12 @@ export interface HostSupervisorDeps {
   readonly maxGlobalHosts?: number;
   /** Kernel-owned bounded start queue depth past the global limit (§13). */
   readonly startQueueCapacity?: number;
+  /**
+   * How many booted-but-unhandshaked spares to keep warm (design §9.3: "one booted …
+   * spare"). Defaults to 1 — a tuning knob with a design-stated value, not an input a caller
+   * must decide, which is why this is the one optional field `spare-pool.ts` itself takes.
+   */
+  readonly spareCapacity?: number;
 }
 
 /** Injected dependencies for a one-shot `smoke`/`export` session (§4, §11.3, §11.4). */
@@ -515,7 +529,12 @@ export interface ExportPool {
  */
 export interface HostSupervisor {
   preview(spec: HostSessionSpec): SupervisedPreviewSession | SupervisorError;
-  /** Live (non-stopped, non-queued) incarnation count across all keys (§13 ≤10). */
+  /**
+   * Live (non-stopped, non-queued) incarnation count across all keys, PLUS the warm spare
+   * pool's size (design §9.3, §13 ≤10) — a spare is a real host process, so the ≤10 cap has to
+   * see it even though admission itself does not (a new key always takes the spare before
+   * spawning).
+   */
   liveCount(): number;
   stopAll(): Promise<void>;
 }

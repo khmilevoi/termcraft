@@ -107,6 +107,10 @@ function depsFor(overrides: Partial<HostSupervisorDeps> = {}): HostSupervisorDep
     },
     mintSessionId: () => "session-1",
     createSession: fakeFactory(),
+    // `deps.spawn` above deliberately throws — safe while ONLY the incarnation factory could
+    // ever call it. The warm spare pool (design-tree phase 3 Task 6) is a second, independent
+    // consumer of `deps.spawn` that this adapter-level suite does not exercise.
+    spareCapacity: 0,
     ...overrides,
   };
 }

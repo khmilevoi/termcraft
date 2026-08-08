@@ -32,6 +32,7 @@ export {
 } from "./model/flood-monitor";
 export { createControlMailbox, CONTROL_MAILBOX_CAPACITY } from "./model/control-mailbox";
 export { createPreviewRelay } from "./model/preview-relay";
+export { createSparePool } from "./model/spare-pool";
 export { createHostSupervisor } from "./model/supervisor";
 export { runOneShotSession } from "./model/one-shot";
 export { createExportPool, resolveExportWorkerCount } from "./model/export-pool";
@@ -72,4 +73,5 @@ export type {
   SpawnedChild,
   StopOutcome,
 } from "./types";
+export type { SparePool, SparePoolDeps } from "./model/spare-pool";
 export type { PreviewFrame, PreviewIdentity } from "../types";
