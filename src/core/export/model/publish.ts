@@ -124,6 +124,15 @@ function settingsStillMatch(
     if (captured.kitApiVersion !== current.kitApiVersion) return false;
     if (captured.minSize.w !== current.minSize.w || captured.minSize.h !== current.minSize.h)
       return false;
+    // A PAGE IS ITS CLOSURE, SO STALENESS IS A CLOSURE QUESTION (design-tree phase 3 Task 8).
+    // The five fields above describe the page's SETTINGS; none of them moves when a shared
+    // module is rewritten between capture and publish, so a drifted design used to publish
+    // without a word. `null` on EITHER side is STALE, never a match — an uncomputable closure
+    // hash means "cannot prove which bytes this page is made of", which is exactly the state a
+    // publish may not proceed from (design-tree phase 2 decision 3, `ExportPageInputV1
+    // .closureHash`'s own doc).
+    if (captured.closureHash === null || current.closureHash === null) return false;
+    if (captured.closureHash !== current.closureHash) return false;
   }
   return true;
 }

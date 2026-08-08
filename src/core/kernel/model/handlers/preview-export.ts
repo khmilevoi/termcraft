@@ -1495,6 +1495,15 @@ async function resolveExportPageInputs(
  * `runTree` reporting errors means some file could not be scanned, or the tree does not
  * type-check — a page whose closure could not be PROVED is simply absent from `closures`, never
  * given a truncated stand-in.
+ *
+ * THIS IS THE SECOND WHOLE-TREE PASS OF ONE EXPORT, AND THAT IS DELIBERATE (design-tree phase 3
+ * Task 8; `docs/superpowers/red-debt.md`). `resolveExportPageInputs` above already ran
+ * `GateRunner.runTree` over the LIVE tree, under the write permit, for page order, the
+ * inventory and each page's `closureHash`. This pass runs over the FROZEN SNAPSHOT's bytes,
+ * after the permit is released. Collapsing them would make the package's closure listings
+ * describe a tree the package does not contain — the two passes see different trees at
+ * different lock phases, which is the entire point of the second one. If the cost ever needs
+ * to come down, the answer is to make the FIRST pass cheaper, never to delete this one.
  */
 async function resolveExportClosures(
   context: HandlerContext,

@@ -874,6 +874,15 @@ Related, and named in the plan's own closing table: `core/export/model/snapshot.
 `readWholeTree` remains a THIRD whole-tree reader alongside the shared `readCanonicalTreeIndex` Task 5
 introduced. Folding it in is a clean follow-up, not a correctness fix.
 
+**CLOSED (design-tree phase 3 Task 8), the documentation half.** `resolveExportClosures`'s own doc
+block now states, at the site, that it is deliberately the SECOND whole-tree pass and names the first
+by function (`preview-export.ts`, its own header). The duplication itself is unchanged and still
+proportionate for the reason already given above — this closes only the "a future reader silently
+collapses them" risk, not the pass count. `core/export/model/snapshot.ts`'s private `readWholeTree`
+remains the THIRD reader, still open, still no owner: it is a clean follow-up, not a correctness fix,
+and Task 8's scope was the two passes named here plus the `settingsStillMatch` row below, not a third
+reader this row already flagged as out of scope.
+
 ### `publish.ts`'s `settingsStillMatch` never compares `expectedFiles`/`closureHash` — owner: plan 3 (§11)
 
 Pre-existing, confirmed by Task 8 as not worsened by the re-key. `core/export/model/publish.ts:112-129`
@@ -883,6 +892,14 @@ A SHARED-MODULE drift between snapshot capture and publish therefore does not su
 `:166`). Practical risk stays low — the host's mount verification fails on a drifted closure, so a
 SUCCESSFUL export always describes one revision — but it is a policy asymmetry now that a page is its
 whole closure rather than its entry file.
+
+**CLOSED (design-tree phase 3 Task 8).** `settingsStillMatch` now compares `closureHash` too, in
+addition to the five settings fields above: a captured/current mismatch is `EXPORT_SNAPSHOT_STALE`,
+and `null` on EITHER side is treated as a mismatch — never a match — inheriting phase 2 decision 3's
+own rule that an uncomputable closure hash means "cannot prove which bytes this page is made of."
+`expectedFiles` itself stays uncompared: the per-page `readPageEntrySource` re-read already catches an
+ENTRY drift, and the closure comparison above now catches every OTHER member, so comparing the raw
+inventory array too would be redundant with both.
 
 ### Bare `await`s on helpers that `wrap` internally — eight RTM-A04 sites, NEEDS AN OWNER
 

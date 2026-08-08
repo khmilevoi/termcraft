@@ -38,6 +38,7 @@ import {
   createFakeStagingService,
   createFakeTrustGate,
   createFakeTurnTransactionService,
+  defaultFakeEntry,
 } from "core/ports/fakes";
 import {
   type EventPayloadByKindV1,
@@ -539,6 +540,23 @@ describe("the WP-1 kernel integration gate (kernel-assembly Task 11, §11)", () 
     // `context.exportRunner.machine` — the SAME real export machine `readKernelState`
     // observes. `exportPublish` — the SAME instance this Kernel was built with above —
     // receives exactly one plan.
+    //
+    // Task 8 (design-tree phase 3): `publishExport`'s `settingsStillMatch` now compares
+    // `closureHash`, which stays `null` unless `runTree()` is scripted (`createFakeGateRunner`'s
+    // own "TRAP" comment — its default is `closures: []` unconditionally). This flow runs the
+    // whole-tree pass more than once (page-input resolution at capture, again at publish-time
+    // revalidation); queue the SAME self-contained closure for every call so
+    // `closureHashOf(HOME)` is non-null and IDENTICAL across all of them — a `null` or a
+    // mismatched hash on either side is staleness (Task 8), and this fixture is not exercising
+    // staleness. Queued here, not before `turn.start` above, so it cannot change that unrelated
+    // flow's own `runTree` behaviour (unscripted there, exactly as before this task).
+    for (let i = 0; i < 4; i += 1) {
+      gateRunner.queueRunTreeResult({
+        errors: [],
+        warnings: [],
+        closures: [{ slug: HOME, files: [defaultFakeEntry(HOME)] }],
+      });
+    }
     const exportCompleted = waitForEvent(
       kernel,
       (envelope) => envelope.kind === "export.completed",

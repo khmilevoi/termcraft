@@ -70,10 +70,9 @@ const HOME: ExportPageSnapshotV1 = {
   minSize: { w: 80, h: 24 },
   theme: "default",
   kitApiVersion: 1,
-  // Inert for this file's assertions on purpose: `settingsStillMatch` deliberately does NOT
-  // compare `closureHash` (design-tree phase 2 Task 8 changed only the RENDER KEY; §12.5's
-  // revalidation vocabulary is `sourceHash` + the identity/settings list, and widening it is a
-  // separate decision). A non-null placeholder, distinct from `sourceHash`.
+  // `settingsStillMatch` compares this too (design-tree phase 3 Task 8): a page is its whole
+  // closure now, so a shared-module drift between capture and publish is staleness exactly
+  // like a settings drift is. A non-null placeholder, distinct from `sourceHash`.
   closureHash: "c".repeat(64),
   sourceHash: computeSourceHash(HOME_BYTES),
   bytes: HOME_BYTES,
@@ -274,6 +273,72 @@ describe("publishExport", () => {
 
     expect(result.kind).toBe("stale");
   });
+
+  test("a shared-module drift between capture and publish is EXPORT_SNAPSHOT_STALE (design-tree phase 3 Task 8)", async () => {
+    const { call } = context.start(() => {
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
+      const call = publishExport(
+        { machine, projectWrite, designReader, clock, exportPublish },
+        // The entry's own bytes/hash and every settings field are untouched — only the
+        // closure moved, exactly the case §12.5's identity/settings comparison alone missed.
+        baseInput({ currentPages: [currentPageInput({ closureHash: "d".repeat(64) })] }),
+      );
+      return { call };
+    });
+
+    const result = await call;
+
+    expect(result.kind).toBe("stale");
+    if (result.kind !== "stale") return;
+    expect(result.failure.code).toBe("EXPORT_SNAPSHOT_STALE");
+  });
+
+  test("an unchanged closure still publishes (baseline for the drift test above)", async () => {
+    const { call } = context.start(() => {
+      const { machine, projectWrite, designReader, clock, exportPublish } = setup();
+      const call = publishExport(
+        { machine, projectWrite, designReader, clock, exportPublish },
+        baseInput({ currentPages: [currentPageInput({ closureHash: HOME.closureHash })] }),
+      );
+      return { call };
+    });
+
+    const result = await call;
+
+    expect(result.kind).not.toBe("stale");
+  });
+
+  // THE `null` RULE, inherited from design-tree phase 2 decision 3 and not re-decided here:
+  // a closure hash that could not be computed on EITHER side means "cannot prove which bytes
+  // this page is made of", so it is ALWAYS stale — `null === null` must never read as a match.
+  test.each([
+    ["captured side uncomputable", null, "e".repeat(64)],
+    ["current side uncomputable", "e".repeat(64), null],
+    ["both sides uncomputable", null, null],
+  ] as const)(
+    "a closure hash that cannot be computed is stale, never a match (%s)",
+    async (_label, captured, current) => {
+      const { call } = context.start(() => {
+        const { machine, projectWrite, designReader, clock, exportPublish } = setup();
+        const snapshotWithHash: ExportSnapshotV1 = {
+          ...SNAPSHOT,
+          pages: [{ ...HOME, closureHash: captured }],
+        };
+        const call = publishExport(
+          { machine, projectWrite, designReader, clock, exportPublish },
+          baseInput({
+            snapshot: snapshotWithHash,
+            currentPages: [currentPageInput({ closureHash: current })],
+          }),
+        );
+        return { call };
+      });
+
+      const result = await call;
+
+      expect(result.kind).toBe("stale");
+    },
+  );
 
   test("a revalidation read failure releases, fails before intent, and passes the failure through", async () => {
     const FAILURE: FailureDtoV1 = {
