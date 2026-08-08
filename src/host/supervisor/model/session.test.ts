@@ -8,7 +8,13 @@ import type {
   RuntimeDeclarationBundleV1,
 } from "../../protocol";
 import type { HostSessionSpec } from "../../types";
-import type { FloodMonitor, FrameBroker, HostSessionDeps, MountPageV1 } from "../types";
+import type {
+  FloodMonitor,
+  FrameBroker,
+  HeartbeatWatchdog,
+  HostSessionDeps,
+  MountPageV1,
+} from "../types";
 import { createManualClock } from "./clock";
 import { SupervisorError } from "./errors";
 import { createFrameBroker } from "./frame-broker";
@@ -17,7 +23,7 @@ import { REQUEST_TABLE_CAPACITY, createRequestTable } from "./request-table";
 import { createScriptedChild, frameControl, frameFrame, frameHostHello } from "./scripted-child";
 import type { ScriptedChild } from "./scripted-child";
 import { createHostSession } from "./session";
-import { HANDSHAKE_TIMEOUT_MS } from "./timeouts";
+import { FIRST_FRAME_TIMEOUT_MS, HANDSHAKE_TIMEOUT_MS, MOUNT_TIMEOUT_MS } from "./timeouts";
 import { readInbound } from "./transport";
 
 const runtimeDeclaration: RuntimeDeclarationBundleV1 = {
@@ -75,6 +81,8 @@ function respondingChild(options?: {
   skipReady?: boolean;
   skipHello?: boolean;
   badAckIdentity?: boolean;
+  /** Reply to the mount with a typed `error` envelope instead of ready+frame (design §12). */
+  mountErrorCode?: string;
 }): ScriptedChild {
   const child = createScriptedChild();
   let id: { sessionId: string; nonce: string } | null = null;
@@ -122,6 +130,20 @@ function respondingChild(options?: {
       }
       if (message.messageClass === "control" && id !== null) {
         const env = JSON.parse(new TextDecoder().decode(message.payload)) as ControlEnvelope;
+        if (env.kind === "mount" && options?.mountErrorCode !== undefined) {
+          const error: ControlEnvelope = {
+            protocolVersion: 1,
+            kind: "error",
+            sessionId: id.sessionId,
+            nonce: id.nonce,
+            messageId: nextId(),
+            responseTo: env.requestId,
+            body: { code: options.mountErrorCode, reason: "render threw" },
+          };
+          const errorFramed = frameControl(error);
+          if (!(errorFramed instanceof ProtocolError)) child.emit(errorFramed);
+          return;
+        }
         if (env.kind === "mount" && !options?.skipReady) {
           const ready: ControlEnvelope = {
             protocolVersion: 1,
@@ -1398,5 +1420,152 @@ describe("createHostSession.mount() — switch pages inside a live incarnation (
     expect(result).toBeInstanceOf(SupervisorError);
     if (result instanceof SupervisorError) expect(result.code).toBe("TRANSPORT_ERROR");
     expect(child.written.length).toBe(0); // the scripted child received no bytes at all
+  });
+});
+
+// --- Task 4: the mount and first-frame deadlines, and who gets blamed for a hang (design §9.4) ---
+
+/**
+ * A no-op `HeartbeatWatchdog` double, injected via `deps.createWatchdog` for every test below
+ * that deliberately advances the clock past `MOUNT_TIMEOUT_MS`/`FIRST_FRAME_TIMEOUT_MS`.
+ *
+ * The real watchdog's own `HEARTBEAT_TIMEOUT_MS` budget is ALSO 5 s, armed at `startPump()` —
+ * the same virtual instant these tests reach `ready`, since none of them advance the clock
+ * before mounting. Without a stub, advancing past either deadline below would ALSO cross the
+ * heartbeat's coincidentally-identical 5 s budget (armed earlier, so it would fire first and
+ * tear the incarnation down for an unrelated reason before the test's own timer ever gets a
+ * chance to prove anything). Stubbing the watchdog isolates the mount/first-frame machinery
+ * this task adds from that separate, pre-existing mechanism.
+ */
+function noWatchdog(): HeartbeatWatchdog {
+  return {
+    start() {},
+    feedHeartbeat() {},
+    noteRequestTimeout() {},
+    stop() {},
+  };
+}
+
+describe("createHostSession — mount and first-frame deadlines (design §9.4)", () => {
+  test("a mount that never produces ready fails the incarnation and names the page", async () => {
+    const fatals: (SupervisorError | ProtocolError)[] = [];
+    const child = switchableChild({ autoReplyMounts: false });
+    const clock = createManualClock();
+    const base = deps(child, clock).deps;
+    const session = createHostSession(specWithB, {
+      ...base,
+      onFatal: (e) => fatals.push(e),
+      createWatchdog: noWatchdog,
+    });
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+
+    const mountPromise = session.mount(pageB);
+    // The child received the mount and stays silent — never replies at all.
+    await waitUntil(() => child.mountRequestIds.length === 2, "second mount written");
+    clock.advance(MOUNT_TIMEOUT_MS + 1);
+
+    const mountResult = await mountPromise;
+    expect(mountResult).toBeInstanceOf(SupervisorError);
+    if (mountResult instanceof SupervisorError) expect(mountResult.code).toBe("MOUNT_TIMEOUT");
+
+    await waitUntil(() => fatals.length === 1, "onFatal fired on the no-ready mount deadline");
+    const fatal = fatals[0];
+    expect(fatal instanceof SupervisorError && fatal.code).toBe("MOUNT_TIMEOUT");
+    expect(fatal instanceof SupervisorError && fatal.message).toContain("b");
+    expect(session.phase).toBe("failed");
+    expect(child.signalCode).toBe("SIGTERM"); // killed + reaped, same as every other fatal path
+  });
+
+  test("a ready with no frame after it fails the incarnation under the first-frame deadline", async () => {
+    const fatals: (SupervisorError | ProtocolError)[] = [];
+    const child = switchableChild({ autoReplyMounts: false });
+    const clock = createManualClock();
+    const base = deps(child, clock).deps;
+    const session = createHostSession(specWithB, {
+      ...base,
+      onFatal: (e) => fatals.push(e),
+      createWatchdog: noWatchdog,
+    });
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+    const id = child.identity();
+    if (id === null) throw new Error("client.hello identity was never captured");
+
+    const mountPromise = session.mount(pageB);
+    await waitUntil(() => child.mountRequestIds.length === 2, "second mount written");
+    // The switch's `ready` arrives, but no frame ever follows it.
+    emitReadyFor(child, id, child.mountRequestIds[1] as string);
+
+    const mountResult = await mountPromise; // resolves once the correlated ready is routed
+    expect(mountResult).not.toBeInstanceOf(Error);
+
+    clock.advance(FIRST_FRAME_TIMEOUT_MS + 1);
+    await waitUntil(() => fatals.length === 1, "onFatal fired on the first-frame deadline");
+    const fatal = fatals[0];
+    expect(fatal instanceof SupervisorError && fatal.code).toBe("MOUNT_TIMEOUT");
+    expect(fatal instanceof SupervisorError && fatal.message).toContain("no first frame");
+    expect(fatal instanceof SupervisorError && fatal.message).toContain("b");
+    expect(session.phase).toBe("failed");
+    expect(child.signalCode).toBe("SIGTERM");
+  });
+
+  test("the first frame cancels the deadline; a later quiet period does not fail", async () => {
+    const fatals: (SupervisorError | ProtocolError)[] = [];
+    const child = switchableChild({ autoReplyMounts: false });
+    const clock = createManualClock();
+    const base = deps(child, clock).deps;
+    const session = createHostSession(specWithB, {
+      ...base,
+      onFatal: (e) => fatals.push(e),
+      createWatchdog: noWatchdog,
+    });
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+    const id = child.identity();
+    if (id === null) throw new Error("client.hello identity was never captured");
+
+    const iterator = session.frames[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    expect(first.value?.frameSeq).toBe("1");
+
+    const mountPromise = session.mount(pageB);
+    await waitUntil(() => child.mountRequestIds.length === 2, "second mount written");
+    const secondRequestId = child.mountRequestIds[1] as string;
+    emitReadyFor(child, id, secondRequestId);
+    expect(clock.pending()).toBe(1); // the first-frame deadline, armed the instant `ready` was seen
+
+    emitFrame(child, id, PAGE_B_SOURCE_HASH, "2");
+    const second = await iterator.next();
+    expect(second.value?.frameSeq).toBe("2");
+    expect(clock.pending()).toBe(0); // the accepted frame cancelled it — nothing left armed
+
+    const mountResult = await mountPromise;
+    expect(mountResult).not.toBeInstanceOf(Error);
+
+    // A later quiet period does not resurrect a deadline that was already cancelled.
+    clock.advance(FIRST_FRAME_TIMEOUT_MS + 1);
+    expect(fatals).toHaveLength(0);
+    expect(clock.pending()).toBe(0);
+  });
+
+  test("a render throw during the initial mount is unaffected: DESIGN_RENDER_FAILED, and start()'s own deadline is cancelled, not fired", async () => {
+    const child = respondingChild({ mountErrorCode: "PAGE_RENDER_FAILED" });
+    const clock = createManualClock();
+    const { deps: sessionDeps } = deps(child, clock);
+    const session = createHostSession(spec, sessionDeps);
+
+    const outcome = await session.start();
+    expect(outcome).toBeInstanceOf(SupervisorError);
+    if (outcome instanceof SupervisorError) {
+      expect(outcome.code).toBe("DESIGN_RENDER_FAILED");
+      expect(outcome.message).toContain("PAGE_RENDER_FAILED");
+    }
+    expect(session.phase).toBe("failed");
+    // `nextInbound`'s own per-call timer was cancelled the instant the error envelope arrived
+    // (Promise.race + timer.cancel()) — the 10 s mount deadline never got a chance to fire, and
+    // the first-frame timer never existed in the first place (the pump that owns it starts only
+    // after `start()` reaches "ready", which this render throw never does).
+    expect(clock.pending()).toBe(0);
   });
 });

@@ -1219,7 +1219,11 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
   });
 
   test("a host-unavailable state wears NO HOST, its own hint, and offers no repair anywhere", async () => {
-    const rows = await renderWith(circuitOpened({ hostFailureCode: "MOUNT_TIMEOUT" }));
+    // HANDSHAKE_TIMEOUT, not MOUNT_TIMEOUT: since design-tree §9.4 a mount/first-frame timeout
+    // means the handshake already succeeded, so it is design-at-fault (see the test below) and
+    // no longer exercises this wsHostUnavailable path. HANDSHAKE_TIMEOUT still means the host
+    // never got far enough to run the page, which is what this test is about.
+    const rows = await renderWith(circuitOpened({ hostFailureCode: "HANDSHAKE_TIMEOUT" }));
     const text = allText(rows);
     expect(text).toContain("NO HOST");
     expect(text).not.toContain("HALTED");
@@ -1228,6 +1232,17 @@ describe("Workspace halted preview (design wsHostCrash)", () => {
     expect(text).toContain("F5");
     expect(text).not.toContain("F6");
     expect(findRun(rows, "F5 retries the host · agent can't fix it")).toBeDefined();
+  });
+
+  test("a mount/first-frame timeout renders the host-crash panel too — the handshake already proved the child alive (design §9.4)", async () => {
+    const rows = await renderWith(circuitOpened({ hostFailureCode: "MOUNT_TIMEOUT" }));
+    expect(findRun(rows, "preview host · halted")).toBeDefined();
+    expect(findRun(rows, "preview host · unavailable")).toBeUndefined();
+    expect(findRun(rows, "✗ design threw while rendering")).toBeDefined();
+    const text = allText(rows);
+    expect(text).toContain("HALTED");
+    expect(text).not.toContain("NO HOST");
+    expect(text).toContain("F6"); // now offered — the child is proven alive, only the page hung
   });
 
   test("the composer offers the repair key, worded for whether retry survives", async () => {

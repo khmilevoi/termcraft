@@ -14,7 +14,7 @@ function circuitFailure(details: FailureDtoV1["details"]): FailureDtoV1 {
 }
 
 describe("isDesignRenderFailure", () => {
-  test("is true only for the code that means the page itself threw", () => {
+  test("is true for the codes that mean the page itself is what failed", () => {
     expect(
       isDesignRenderFailure(
         circuitFailure({
@@ -24,13 +24,19 @@ describe("isDesignRenderFailure", () => {
         }),
       ),
     ).toBe(true);
+    // A mount timeout means the handshake already succeeded — the child is proven alive — so
+    // a hang that follows is the page's own module-init/render loop, not the host's (design §9.4).
+    expect(
+      isDesignRenderFailure(
+        circuitFailure({ pageSlug: "dashboard", attempts: 4, hostFailureCode: "MOUNT_TIMEOUT" }),
+      ),
+    ).toBe(true);
   });
 
   test("is false for every failure the host hit before it ever ran the page", () => {
     for (const code of [
       "SPAWN_FAILED",
       "HANDSHAKE_TIMEOUT",
-      "MOUNT_TIMEOUT",
       "CHILD_EXITED",
       "TRANSPORT_ERROR",
       "HEARTBEAT_TIMEOUT",
@@ -38,6 +44,7 @@ describe("isDesignRenderFailure", () => {
       "KIT_API_MISMATCH",
       "SOURCE_HASH_MISMATCH",
       "PROTOCOL_NEGOTIATION_FAILED",
+      "HOST_CAPACITY",
     ]) {
       expect(
         isDesignRenderFailure(

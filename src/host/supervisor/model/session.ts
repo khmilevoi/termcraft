@@ -50,9 +50,13 @@ import { createFloodMonitor } from "./flood-monitor";
 import { createFrameBroker } from "./frame-broker";
 import { createHeartbeatWatchdog } from "./heartbeat-watchdog";
 import { REQUEST_TABLE_CAPACITY, createRequestTable } from "./request-table";
-import { HANDSHAKE_TIMEOUT_MS, HANDSHAKE_TIMEOUT_REASON } from "./timeouts";
+import {
+  FIRST_FRAME_TIMEOUT_MS,
+  HANDSHAKE_TIMEOUT_MS,
+  HANDSHAKE_TIMEOUT_REASON,
+  MOUNT_TIMEOUT_MS,
+} from "./timeouts";
 
-const MOUNT_TIMEOUT_MS = 10_000;
 const SHUTDOWN_ACK_TIMEOUT_MS = 1_000;
 const REAP_TIMEOUT_MS = 1_000;
 
@@ -92,6 +96,13 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     requestId: string;
     mounted: { pageSlug: string; sourceHash: string; kitApiVersion: number };
   } | null = null;
+  // design §9.4's SECOND deadline: the budget from an accepted `ready` (for a REPEATED mount —
+  // the very first mount is covered by `start()`'s own `awaitReady` deadline, before the pump or
+  // this timer even exist) to the frame that must follow it. Owned by the pending mount: armed
+  // in the pump hook the instant `broker.expect(...)` re-seeds the guard, cancelled the instant
+  // an accepted frame arrives or the session tears down — see `FIRST_FRAME_TIMEOUT_MS`'s own doc
+  // comment in `timeouts.ts` for why this is a conformance guard, not the primary deadline.
+  let firstFrameTimer: TimerHandle | null = null;
   let phase: SessionPhase = "created";
 
   // Post-ready components. The watchdog escalation and the request-table timeout
@@ -359,6 +370,13 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
           onPumpFatal(new ProtocolError({ code: "MALFORMED_PROTOCOL", reason }));
           return;
         }
+        // design §9.4's first-frame deadline is satisfied by ANY accepted publish: the broker
+        // only ever accepts a frame matching its CURRENTLY expected hash (§9.2), so "accepted"
+        // here already proves this is the just-mounted page's frame, not a trailing old-page one.
+        if (firstFrameTimer !== null) {
+          firstFrameTimer.cancel();
+          firstFrameTimer = null;
+        }
         continue;
       }
       const envelope = decodeControlEnvelope(message.payload);
@@ -383,6 +401,21 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
           mounted = pendingMount.mounted;
           mountedHashes.add(pendingMount.mounted.sourceHash);
           broker.expect(pendingMount.mounted.sourceHash);
+          // Arm design §9.4's first-frame deadline HERE — the same synchronous step that just
+          // re-seeded the broker's guard, so it can only ever be waiting on the page this
+          // `ready` committed to. `mounted.pageSlug` is read now (not off `pendingMount`, which
+          // is cleared below) so the closure captures THIS switch's page, not whatever mounts
+          // next.
+          const expectedSlug = mounted.pageSlug;
+          firstFrameTimer = deps.clock.setTimer(FIRST_FRAME_TIMEOUT_MS, () => {
+            firstFrameTimer = null;
+            onPumpFatal(
+              new SupervisorError({
+                code: "MOUNT_TIMEOUT",
+                reason: `no first frame for page "${expectedSlug}" within ${FIRST_FRAME_TIMEOUT_MS / 1_000}s`,
+              }),
+            );
+          });
         }
         // A non-`ready` reply is the child's typed refusal — clear WITHOUT re-seeding, so the
         // guard keeps naming the page that is actually on screen.
@@ -466,7 +499,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     let firstFrame: FrameEnvelope | null = null;
     const timeoutError = new SupervisorError({
       code: "MOUNT_TIMEOUT",
-      reason: "no ready + first frame within 10s",
+      reason: `no ready + first frame for page "${spec.pageSlug}" within ${MOUNT_TIMEOUT_MS / 1_000}s`,
     });
     while (true) {
       const message = await nextInbound(deadlineAt, timeoutError);
@@ -809,7 +842,22 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       pendingMount = null;
       return body;
     }
-    return sendRequestWithId(requestId, "mount", body, MOUNT_TIMEOUT_MS);
+    const result = await sendRequestWithId(requestId, "mount", body, MOUNT_TIMEOUT_MS);
+    // design §9.4's mount deadline: the request table's own timer above already bounds "no
+    // ready within budget", but its QUERY_TIMEOUT is the table's generic per-request diagnosis
+    // — it names neither the page nor treats the incarnation as dead. A mount the child accepted
+    // and then never answered is exactly the hang §9.4's watchdog exists for: name the page and
+    // kill the incarnation, the same as every other fatal outcome, instead of leaving a live
+    // `ready` session silently stuck mid-switch forever.
+    if (result instanceof SupervisorError && result.code === "QUERY_TIMEOUT") {
+      const timeoutError = new SupervisorError({
+        code: "MOUNT_TIMEOUT",
+        reason: `no ready for page "${page.pageSlug}" within ${MOUNT_TIMEOUT_MS / 1_000}s`,
+      });
+      onPumpFatal(timeoutError);
+      return timeoutError;
+    }
+    return result;
   }
 
   // Kill + reap the child and tear down all resources; used on every failure path.
@@ -842,6 +890,8 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     requestTable.clear(); // settles stragglers; no-op if empty (a post-ready fatal already cleared with the specific error)
     mailboxDrainTimer?.cancel(); // no dangling scheduled drain past teardown (clock.pending() must return to 0)
     mailboxDrainTimer = null;
+    firstFrameTimer?.cancel(); // no dangling first-frame deadline past teardown (design §9.4)
+    firstFrameTimer = null;
     if (child !== null) await reapChild(child, kill);
     stderrDrain?.stop();
     if (stderrDrain !== null) await stderrDrain.settled;

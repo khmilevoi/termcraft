@@ -432,8 +432,10 @@ function renderPreviewRegion(
         />
       );
     }
-    // The host never got as far as the page (spec §3.2.1) — a spawn failure, a handshake or
-    // mount timeout, a broken pipe, a runtime-integrity mismatch. Design `wsHostUnavailable`
+    // The host never got as far as the page (spec §3.2.1) — a spawn failure, a handshake
+    // timeout, a broken pipe, a runtime-integrity mismatch. A mount/first-frame timeout is
+    // NOT one of these (design §9.4): the handshake already proved the child alive, so that
+    // hang is the page's, routed to `HostCrashPanel` above instead. Design `wsHostUnavailable`
     // (iteration 9), which clears the page of blame and names no repair key at all.
     return (
       <HostUnavailablePanel
