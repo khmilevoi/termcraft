@@ -318,10 +318,11 @@ export type RestartAction =
   | { readonly action: "open"; readonly attempts: number; readonly reason: string };
 
 /**
- * The per-`(pageSlug, sourceHash)` restart budget + base-2 backoff + circuit
- * breaker (§10). Pure and clock-free — `now` is a parameter. Shared by preview
- * and historical sessions for one source so opening/closing views cannot evade
- * crash-loop protection.
+ * The per-`(treeRevision, pageSlug)` restart budget + base-2 backoff + circuit breaker (§10;
+ * design-tree §9.2). Pure and clock-free — `now` is a parameter. Keyed by the page that was
+ * mounting when a failure occurred, NOT by `supervisor.ts`'s own session key — since design-tree
+ * phase 3 Task 5 one incarnation serves a whole tree revision, so a page-scoped restart key is
+ * what stops one looping page from spending the budget of every other page sharing it.
  */
 export interface RestartPolicy {
   /** Classify + record an incarnation failure; decide restart (backoff) or open. */
@@ -505,9 +506,11 @@ export interface ExportPool {
 }
 
 /**
- * The standalone Kernel-side supervisor that owns multiple preview sessions (§2,
- * §10, §13): per-`(pageSlug, sourceHash)` restart budget + backoff + circuit, the
- * ≤10 global host limit + 64-deep `HOST_CAPACITY` start queue, and manual retry.
+ * The standalone Kernel-side supervisor that owns multiple preview sessions (§2, §10, §13). One
+ * incarnation is keyed by `treeRevision` alone and mounts one page at a time (design-tree §9.2,
+ * phase 3 Task 5); the per-`(treeRevision, pageSlug)` restart budget + backoff + circuit is a
+ * DIFFERENT key from the session's own, so one page looping does not spend every other page's
+ * budget. The ≤10 global host limit + 64-deep `HOST_CAPACITY` start queue, and manual retry.
  * Phase 6 injects it behind the Kernel command/event boundary.
  */
 export interface HostSupervisor {

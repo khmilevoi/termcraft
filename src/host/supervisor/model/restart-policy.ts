@@ -42,7 +42,7 @@ interface KeyState {
 }
 
 /**
- * The per-`(pageSlug, treeRevision)` restart budget + base-2 backoff + circuit
+ * The per-`(treeRevision, pageSlug)` restart budget + base-2 backoff + circuit
  * breaker (host-supervision §10). Pure and clock-free: `now` is a parameter, so a
  * budgeted failure count is a deterministic function of the recorded timestamps.
  * "60 s continuous ready clears the history" is realized by the rolling-60 s
@@ -50,11 +50,15 @@ interface KeyState {
  * prior failure out of the window, which is exactly that clear (no background
  * timer needed). The circuit latches open until a user `retry` clears the key.
  *
- * The budget FOLLOWS `supervisor.ts`'s own key, whatever it is: this module is keyed by an
- * opaque `string` and never derives one. That key became `(pageSlug, treeRevision)` in
- * design-tree phase 2 Task 10 (it was `(pageSlug, sourceHash)`), so a crash-loop budget now
- * belongs to one page at one tree revision — any tree edit starts a fresh budget, exactly as
- * any entry-file edit already did.
+ * This module is keyed by an opaque `string` and never derives one — the caller decides. Until
+ * design-tree phase 3 Task 5 that key WAS `supervisor.ts`'s own session key, `(pageSlug,
+ * treeRevision)` (phase 2 Task 10; it was `(pageSlug, sourceHash)` before that). Task 5 keyed
+ * the session by `treeRevision` ALONE — one incarnation serves the whole tree revision — and
+ * the two keys had to split apart there: `supervisor.ts`'s `restartKeyOf` still builds
+ * `` `${treeRevision} ${pageSlug}` `` and passes it here, so a crash-loop budget still belongs
+ * to one page at one tree revision even though the incarnation it is failing inside of does
+ * not. Without the split, one page looping would latch the circuit for every OTHER page
+ * sharing that incarnation after three failures of the one page.
  */
 export function createRestartPolicy(opts?: {
   windowMs?: number;

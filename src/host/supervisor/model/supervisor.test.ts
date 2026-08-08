@@ -13,6 +13,7 @@ import type {
   GeometryQuery,
   HostSession,
   HostSessionDeps,
+  MountPageV1,
   ReadyOutcome,
   StopOutcome,
   SupervisorEvent,
@@ -71,6 +72,18 @@ interface FakeIncarnation {
   readonly resizeCalls: Size[];
   readonly setModeCalls: InteractionMode[];
   readonly queryCalls: { frameIdentity: FrameIdentity; query: GeometryQuery }[];
+  /** Every `mount()` this incarnation received (design-tree phase 3 Task 5). */
+  readonly mountCalls: MountPageV1[];
+  /** Single-shot override: the next `mount()` call resolves to this instead of `ready`. */
+  nextMountResult: ProtocolError | SupervisorError | null;
+  /**
+   * When true, `mount()` parks instead of resolving — proving `reconcileMount` never issues a
+   * SECOND concurrent `mount()` while one is in flight (design-tree phase 3 Task 5;
+   * `session.ts`'s real `mount()` refuses a concurrent call with `TRANSPORT_ERROR` rather than
+   * queuing it). Resolve every parked call with `resolvePendingMounts()`.
+   */
+  deferMounts: boolean;
+  resolvePendingMounts(): void;
 }
 
 /**
@@ -118,6 +131,8 @@ function fakeFactory(opts?: {
       responseTo: "1",
       body: { size: { w: spec.size.w, h: spec.size.h }, interactionMode: spec.interactionMode },
     };
+    let deferMounts = false;
+    const pendingMountResolvers: (() => void)[] = [];
     const inc: FakeIncarnation = {
       spec,
       sessionId,
@@ -128,6 +143,18 @@ function fakeFactory(opts?: {
       resizeCalls: [],
       setModeCalls: [],
       queryCalls: [],
+      mountCalls: [],
+      nextMountResult: null,
+      get deferMounts() {
+        return deferMounts;
+      },
+      set deferMounts(value: boolean) {
+        deferMounts = value;
+      },
+      resolvePendingMounts() {
+        const resolvers = pendingMountResolvers.splice(0);
+        for (const resolve of resolvers) resolve();
+      },
       session: {
         identity,
         get phase() {
@@ -180,8 +207,23 @@ function fakeFactory(opts?: {
           // test prove WHICH incarnation actually answered, across a restart.
           return { ok: true, frameIdentity, result: { answeredByNonce: nonce } };
         },
-        async mount() {
-          return ready;
+        async mount(page) {
+          inc.mountCalls.push(page);
+          if (deferMounts) {
+            await new Promise<void>((resolve) => pendingMountResolvers.push(resolve));
+          }
+          if (inc.nextMountResult !== null) {
+            const result = inc.nextMountResult;
+            inc.nextMountResult = null;
+            return result;
+          }
+          return {
+            ...ready,
+            body: {
+              size: { w: page.size.w, h: page.size.h },
+              interactionMode: page.interactionMode,
+            },
+          };
         },
       },
       crash(error) {
@@ -477,24 +519,212 @@ describe("createHostSupervisor — keys, source change, frames relay (§10, §10
   });
 });
 
+describe("createHostSupervisor — one incarnation per tree revision, in-process page switch (design-tree §9.2, phase 3 Task 5)", () => {
+  test("two pages of one revision share ONE incarnation and one sessionId", async () => {
+    const factory = fakeFactory();
+    const { supervisor } = makeSupervisor(factory);
+    const a = supervisor.preview(specFor({ pageSlug: "a" }));
+    const b = supervisor.preview(specFor({ pageSlug: "b" }));
+    if (a instanceof Error) throw a;
+    if (b instanceof Error) throw b;
+    expect(b).toBe(a); // the same facade object
+    await waitUntil(() => a.state() === "ready", "ready");
+    expect(supervisor.liveCount()).toBe(1);
+    expect(factory.incarnations).toHaveLength(1);
+    await supervisor.stopAll();
+  });
+
+  test("a page switch on a ready incarnation issues a mount, never a spawn", async () => {
+    const factory = fakeFactory();
+    const { supervisor } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor({ pageSlug: "a" }));
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => handle.state() === "ready", "a ready");
+
+    const switched = supervisor.preview(specFor({ pageSlug: "b" }));
+    if (switched instanceof Error) throw switched;
+    await waitUntil(() => factory.incarnations[0]!.mountCalls.length === 1, "mount issued");
+    expect(factory.incarnations[0]!.mountCalls.map((m) => m.pageSlug)).toEqual(["b"]);
+    expect(factory.incarnations).toHaveLength(1); // no second spawn
+    await supervisor.stopAll();
+  });
+
+  test("a page switch requested BEFORE ready is reconciled once the incarnation is ready", async () => {
+    const factory = fakeFactory();
+    const { supervisor } = makeSupervisor(factory);
+    const a = supervisor.preview(specFor({ pageSlug: "a" })); // starting
+    if (a instanceof Error) throw a;
+    const b = supervisor.preview(specFor({ pageSlug: "b" })); // still starting, same key
+    if (b instanceof Error) throw b;
+    expect(b).toBe(a);
+
+    await waitUntil(() => a.state() === "ready", "ready");
+    await waitUntil(() => factory.incarnations[0]!.mountCalls.length === 1, "switch reconciled");
+    // the incarnation's own start() mounted "a" (whatever `ks.spec` said when it was spawned);
+    // the ONLY mount() call recorded is the reconciling one, for "b".
+    expect(factory.incarnations[0]!.mountCalls.map((m) => m.pageSlug)).toEqual(["b"]);
+    expect(factory.incarnations).toHaveLength(1);
+    await supervisor.stopAll();
+  });
+
+  test("re-selecting the page already mounted issues no mount at all", async () => {
+    const factory = fakeFactory();
+    const { supervisor } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor({ pageSlug: "a", size: { w: 80, h: 24 } }));
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => handle.state() === "ready", "ready");
+
+    const again = supervisor.preview(specFor({ pageSlug: "a", size: { w: 100, h: 30 } }));
+    if (again instanceof Error) throw again;
+    await new Promise((resolve) => setTimeout(resolve, 0)); // let any fire-and-forget settle
+    expect(factory.incarnations[0]!.mountCalls).toEqual([]); // a size change is a resize, not a re-mount
+    await supervisor.stopAll();
+  });
+
+  test("a page switch requested while one is already in flight does not double-mount; the last request wins", async () => {
+    const factory = fakeFactory();
+    const { supervisor } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor({ pageSlug: "a" }));
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => handle.state() === "ready", "a ready");
+
+    factory.incarnations[0]!.deferMounts = true;
+    const toB = supervisor.preview(specFor({ pageSlug: "b" }));
+    if (toB instanceof Error) throw toB;
+    await waitUntil(() => factory.incarnations[0]!.mountCalls.length === 1, "mount to b issued");
+
+    // A third page requested while the switch to "b" is still parked. `session.ts`'s real
+    // mount() refuses a concurrent call with TRANSPORT_ERROR rather than queuing it, so this
+    // must NOT issue a second concurrent mount() — that refusal would otherwise be misread as
+    // an incarnation failure.
+    const toC = supervisor.preview(specFor({ pageSlug: "c" }));
+    if (toC instanceof Error) throw toC;
+    expect(factory.incarnations[0]!.mountCalls).toHaveLength(1); // still only "b"'s
+
+    factory.incarnations[0]!.resolvePendingMounts();
+    // The mount to "b" resolves; reconcileMount notices the spec has since moved to "c" and
+    // issues the correcting mount on its own — no second spawn, no fatal.
+    await waitUntil(() => factory.incarnations[0]!.mountCalls.length === 2, "mount to c issued");
+    expect(factory.incarnations[0]!.mountCalls.map((m) => m.pageSlug)).toEqual(["b", "c"]);
+    expect(factory.incarnations).toHaveLength(1);
+    expect(handle.state()).toBe("ready");
+    await supervisor.stopAll();
+  });
+
+  test("a mount failure fails the incarnation and names the page that was mounting", async () => {
+    const factory = fakeFactory();
+    const { supervisor, events } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor({ pageSlug: "a" }));
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => handle.state() === "ready", "a ready");
+
+    factory.incarnations[0]!.nextMountResult = new SupervisorError({
+      code: "DESIGN_RENDER_FAILED",
+      reason: "boom",
+    });
+    const switched = supervisor.preview(specFor({ pageSlug: "b" }));
+    if (switched instanceof Error) throw switched;
+    await waitUntil(() => handle.state() === "backoff", "mount failure enters the budgeted path");
+    expect(events.at(-1)).toMatchObject({ type: "backoff", pageSlug: "b" });
+    await supervisor.stopAll();
+  });
+
+  test("the restart budget belongs to (revision, page), not to the revision", async () => {
+    const factory = fakeFactory({
+      startFor: (n) =>
+        n <= 3 ? new SupervisorError({ code: "CHILD_EXITED", reason: "boom" }) : null,
+    });
+    const { supervisor, clock, events } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor({ pageSlug: "a" }));
+    if (handle instanceof Error) throw handle;
+
+    // "a"'s 1st failure → backoff 250 (attempt 1 of restartKeyOf("R a")).
+    await waitUntil(() => handle.state() === "backoff", "backoff after a's 1st failure");
+
+    // switch to page "b" of the SAME revision WHILE "a" is backing off, before its respawn.
+    const switched = supervisor.preview(specFor({ pageSlug: "b" }));
+    if (switched instanceof Error) throw switched;
+    clock.advance(250);
+
+    // The respawn mounts "b" (specAtSpawn follows `ks.spec`, already switched) and fails too.
+    // If the restart budget were shared per REVISION (the pre-Task-5 shape), this would be
+    // counted as the key's SECOND failure and back off at 500ms. Because the budget is keyed by
+    // `(revision, page)`, this is "b"'s OWN FIRST failure, so it backs off at 250ms again.
+    await waitUntil(
+      () => factory.incarnations.length === 2 && handle.state() === "backoff",
+      "backoff after b's 1st failure",
+    );
+    expect(events.filter((e) => e.type === "backoff").at(-1)).toMatchObject({
+      pageSlug: "b",
+      delayMs: 250,
+    });
+    await supervisor.stopAll();
+  });
+
+  test("switching pages while the circuit is open, then retrying, starts the NEW page with a fresh budget", async () => {
+    const factory = fakeFactory({
+      startFor: (n) =>
+        n <= 4 ? new SupervisorError({ code: "CHILD_EXITED", reason: "boom" }) : null,
+    });
+    const { supervisor, clock } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor({ pageSlug: "a" }));
+    if (handle instanceof Error) throw handle;
+
+    await waitUntil(() => handle.state() === "backoff", "1st failure");
+    clock.advance(250);
+    await waitUntil(
+      () => factory.incarnations.length === 2 && handle.state() === "backoff",
+      "2nd failure",
+    );
+    clock.advance(500);
+    await waitUntil(
+      () => factory.incarnations.length === 3 && handle.state() === "backoff",
+      "3rd failure",
+    );
+    clock.advance(1000);
+    await waitUntil(
+      () => factory.incarnations.length === 4 && handle.state() === "circuit-open",
+      "a's circuit opens on the 4th failure",
+    );
+
+    // The user gives up on "a" and switches to "b" while the circuit is still open. `preview`
+    // folds the new page into `ks.spec`; `reconcileMount` defers because the key is not ready.
+    const switched = supervisor.preview(specFor({ pageSlug: "b" }));
+    if (switched instanceof Error) throw switched;
+    expect(switched).toBe(handle); // same key, same facade
+
+    switched.retry();
+    // "b" has never failed, so its restart key's budget is untouched by "a"'s exhaustion — the
+    // retry starts a genuinely fresh incarnation for "b", not a resumption of "a"'s failed one.
+    await waitUntil(
+      () => factory.incarnations.length === 5 && handle.state() === "ready",
+      "retry starts the NEW page, not a's exhausted incarnation",
+    );
+    await supervisor.stopAll();
+  });
+});
+
 describe("createHostSupervisor — global limit + HOST_CAPACITY (§13)", () => {
   test("past the global host limit new previews queue, then fail with HOST_CAPACITY when the queue is full", async () => {
     const factory = fakeFactory();
     const { supervisor } = makeSupervisor(factory, { maxGlobalHosts: 2, startQueueCapacity: 1 });
-    const h1 = supervisor.preview(specFor({ pageSlug: "p1", sourceHash: "1".repeat(64) }));
-    const h2 = supervisor.preview(specFor({ pageSlug: "p2", sourceHash: "2".repeat(64) }));
+    // Since design-tree phase 3 Task 5 the session key is `treeRevision` ALONE (§9.2): four
+    // DIFFERENT revisions are what buys four candidate incarnations here, not four pageSlugs of
+    // one revision, which would now share a single incarnation.
+    const h1 = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    const h2 = supervisor.preview(specFor({ treeRevision: "2".repeat(64) }));
     if (h1 instanceof Error) throw h1;
     if (h2 instanceof Error) throw h2;
     await waitUntil(() => h1.state() === "ready" && h2.state() === "ready", "two live");
     expect(supervisor.liveCount()).toBe(2);
 
     // 3rd is queued (limit reached, queue has room)
-    const h3 = supervisor.preview(specFor({ pageSlug: "p3", sourceHash: "3".repeat(64) }));
+    const h3 = supervisor.preview(specFor({ treeRevision: "3".repeat(64) }));
     if (h3 instanceof Error) throw h3;
     expect(h3.state()).toBe("queued");
 
     // 4th overflows the 1-deep queue → HOST_CAPACITY
-    const h4 = supervisor.preview(specFor({ pageSlug: "p4", sourceHash: "4".repeat(64) }));
+    const h4 = supervisor.preview(specFor({ treeRevision: "4".repeat(64) }));
     expect(h4).toBeInstanceOf(SupervisorError);
     if (h4 instanceof SupervisorError) expect(h4.code).toBe("HOST_CAPACITY");
 
@@ -510,12 +740,13 @@ describe("createHostSupervisor — global limit + HOST_CAPACITY (§13)", () => {
       maxGlobalHosts: 2,
       startQueueCapacity: 1,
     });
-    const a = supervisor.preview(specFor({ pageSlug: "p1", sourceHash: "1".repeat(64) }));
-    const b = supervisor.preview(specFor({ pageSlug: "p2", sourceHash: "2".repeat(64) }));
+    // Three DIFFERENT tree revisions (§9.2, Task 5) — the session key is `treeRevision` alone.
+    const a = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    const b = supervisor.preview(specFor({ treeRevision: "2".repeat(64) }));
     if (a instanceof Error) throw a;
     if (b instanceof Error) throw b;
     await waitUntil(() => a.state() === "ready" && b.state() === "ready", "a,b ready");
-    const c = supervisor.preview(specFor({ pageSlug: "p3", sourceHash: "3".repeat(64) }));
+    const c = supervisor.preview(specFor({ treeRevision: "3".repeat(64) }));
     if (c instanceof Error) throw c;
     expect(c.state()).toBe("queued");
 
@@ -552,8 +783,10 @@ describe("createHostSupervisor — trust + teardown (§13)", () => {
   test("stopAll stops every live incarnation, cancels timers, and returns to the shell", async () => {
     const factory = fakeFactory();
     const { supervisor, clock } = makeSupervisor(factory);
-    const a = supervisor.preview(specFor({ pageSlug: "p1", sourceHash: "1".repeat(64) }));
-    const b = supervisor.preview(specFor({ pageSlug: "p2", sourceHash: "2".repeat(64) }));
+    // Two DIFFERENT tree revisions (§9.2, Task 5) — proves stopAll iterates every KEY, not just
+    // the one incarnation a shared-revision pair would collapse to.
+    const a = supervisor.preview(specFor({ treeRevision: "1".repeat(64) }));
+    const b = supervisor.preview(specFor({ treeRevision: "2".repeat(64) }));
     if (a instanceof Error) throw a;
     if (b instanceof Error) throw b;
     await waitUntil(() => a.state() === "ready" && b.state() === "ready", "both ready");

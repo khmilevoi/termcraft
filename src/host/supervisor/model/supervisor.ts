@@ -23,9 +23,10 @@ const DEFAULT_MAX_GLOBAL_HOSTS = 10;
 const DEFAULT_START_QUEUE_CAPACITY = 64;
 
 /**
- * Per-key supervised session state. One `KeyState` lives for one logical `sessionId`, and the
- * key is `(pageSlug, treeRevision)` — see {@link keyOf}, which owns the whole argument for why
- * the tree's revision and not the entry file's hash.
+ * Per-key supervised session state. One `KeyState` lives for one logical `sessionId` and one
+ * `treeRevision` — see {@link keyOf}, which owns the whole argument for why the tree's revision
+ * and not the entry file's hash. It was `(pageSlug, treeRevision)` before design-tree phase 3
+ * Task 5; the restart budget kept that shape instead — see {@link restartKeyOf}.
  */
 interface KeyState {
   readonly key: string;
@@ -58,6 +59,25 @@ interface KeyState {
   pumpTask: Promise<void>;
   state: SupervisorState;
   closed: boolean;
+  /**
+   * The slug this incarnation has actually mounted, or `null` before its first `ready` (design
+   * §9.2, Task 5). The difference between this and `spec.pageSlug` is the whole switching
+   * mechanism: `reconcileMount` closes it, and every path that reaches `ready` calls
+   * `reconcileMount` rather than deciding for itself, so a switch requested while starting,
+   * backing off or restarting cannot be lost.
+   */
+  mountedSlug: string | null;
+  /**
+   * True while a `reconcileMount`-issued `mount()` is in flight. `HostSession.mount()` itself
+   * REFUSES a second concurrent call with a `TRANSPORT_ERROR` (`session.ts`'s own
+   * `pendingMount !== null` guard) rather than queuing it — so without this flag, a THIRD page
+   * requested while a switch to the SECOND is still in flight would make `reconcileMount` issue
+   * a second `mount()` call, get back that refusal, and misread an ordinary scheduling
+   * collision as an incarnation failure. Guarding here instead makes a mid-flight `preview()`
+   * call a safe no-op: the in-flight mount's own completion handler calls `reconcileMount`
+   * again and picks up whatever `ks.spec.pageSlug` is by then — last click still wins.
+   */
+  mounting: boolean;
 }
 
 /**
@@ -82,15 +102,31 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
   const keys = new Map<string, KeyState>();
   const startQueue: KeyState[] = [];
 
-  // THE SESSION KEY IS `(pageSlug, treeRevision)` (design-tree phase 2 Task 10) — it was
-  // `(pageSlug, sourceHash)`, the ENTRY file's hash, and that could not see a shared-module
-  // edit: a turn rewriting a module the page imports moves no entry hash, so `preview()` below
-  // matched this key and returned the LIVE child, whose module registry still held the old
-  // module. No re-mount, therefore no closure re-verification and nothing new on screen, for the
-  // rest of the run. `sourceHash` stays on the spec — `mount-request.ts` verifies the entry
-  // against its inventory row with it — because verifying the mount and identifying the session
-  // are different questions.
-  const keyOf = (spec: HostSessionSpec) => `${spec.pageSlug} ${spec.treeRevision}`;
+  // THE SESSION KEY IS THE TREE REVISION ALONE (design-tree phase 3 Task 5, design §9.2: "an
+  // incarnation is keyed by `treeRevision`"). It was `(pageSlug, treeRevision)` between phase 2
+  // Task 10 and here — that change fixed WHICH edits re-establish a session; this one fixes WHAT
+  // an incarnation IS: one process serves the whole tree revision and mounts one page at a time,
+  // so two pages of the same revision now share one incarnation and a page switch is a `mount()`
+  // on the live child, never a second spawn.
+  //
+  // M1 (plan Task 5, Step 6), MEASURED against a real `_host --stdio` child, Bun 1.3.14,
+  // 2026-08-09, five runs each: wall-clock from `preview()` for the second page to a frame
+  // carrying its source hash. Respawn (a different tree revision, the pre-Task-5 shape every
+  // page switch used to take): 633-711ms, median 667.9ms. In-process mount (same revision,
+  // this key): 65.3-67.3ms, median 65.9ms — roughly 10x faster, and the gap is dominated by the
+  // respawn side's own boot cost (`timeouts.ts`'s handshake-budget doc: transpiling and loading
+  // the whole application graph before the child's first statement), not by anything this key
+  // change adds.
+  const keyOf = (spec: HostSessionSpec) => spec.treeRevision;
+
+  // THE RESTART KEY IS NOT THE SESSION KEY (design §9.2, last bullet). The crash-loop budget and
+  // the circuit belong to (revision, the slug that was mounting when the failure occurred), so
+  // one page looping does not spend the budget of every other page in the tree — with a
+  // revision-keyed incarnation that would latch the circuit for the WHOLE design after three
+  // failures of one page. `ks.spec.pageSlug` is that slug by construction: `preview` folds the
+  // requested page into `ks.spec` before any mount is issued, and `startIncarnation` builds the
+  // incarnation from it.
+  const restartKeyOf = (ks: KeyState) => `${ks.spec.treeRevision} ${ks.spec.pageSlug}`;
   const hashPrefix = (spec: HostSessionSpec) => spec.sourceHash.slice(0, 8);
   const emit = (event: SupervisorEvent) => deps.onEvent?.(event);
 
@@ -155,7 +191,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     if (ks.closed) return;
     ks.incarnationFailed = false;
     ks.state = "starting";
-    const attempt = policy.failureCount(ks.key, clock.now()) + 1;
+    const attempt = policy.failureCount(restartKeyOf(ks), clock.now()) + 1;
     emit({
       type: "spawning",
       key: ks.key,
@@ -164,7 +200,13 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
       sourceHashPrefix: hashPrefix(ks.spec),
       attempt,
     });
-    const session = createSession(ks.spec, sessionDepsFor(ks));
+    // Captured now, not read live off `ks.spec` in the ready hook below: `ks.spec` can move
+    // again while this incarnation is still starting (a page switch requested while
+    // negotiating/mounting), and `createSession` already closed over WHATEVER spec object THIS
+    // call passes it — that is the page `start()` actually mounts, regardless of what `ks.spec`
+    // says by the time `ready` arrives.
+    const specAtSpawn = ks.spec;
+    const session = createSession(specAtSpawn, sessionDepsFor(ks));
     ks.current = session;
     ks.pumpTask = pumpFrames(ks, session);
     void session.start().then((outcome) => {
@@ -187,8 +229,58 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         pageSlug: ks.spec.pageSlug,
         sourceHashPrefix: hashPrefix(ks.spec),
       });
+      // THE ONE PLACE `mountedSlug` IS SEEDED (design §9.2, Task 5). `start()` mounted whatever
+      // page `specAtSpawn` named, which is not necessarily `ks.spec` any more — a switch
+      // requested while this incarnation was still starting already moved `ks.spec` on. Seeding
+      // from the SPAWN-time spec, then reconciling against the CURRENT one, is what makes a
+      // switch requested before ready still take effect instead of being mistaken for a no-op.
+      ks.mountedSlug = specAtSpawn.pageSlug;
       flushPendingResize(ks);
+      reconcileMount(ks);
     });
+  }
+
+  // Bring the live incarnation in line with `ks.spec` — the ONE place a page switch is issued
+  // (design §9.2). Called from the ready hook (covering a switch requested while starting or
+  // backing off) and from `preview` when the key is already ready. Fire-and-forget with a logged
+  // failure routed into the ordinary fatal path (errore rule 21): a refused mount is an
+  // incarnation failure, not a silent no-op, and `onIncarnationFatal` is what budgets and
+  // reports it.
+  function reconcileMount(ks: KeyState): void {
+    if (ks.closed || ks.state !== "ready" || ks.mounting) return;
+    if (ks.mountedSlug === ks.spec.pageSlug) return;
+    const current = ks.current;
+    if (current === null) return;
+    const requested = ks.spec.pageSlug;
+    ks.mounting = true;
+    void current
+      .mount({
+        pageSlug: requested,
+        entryRelPath: ks.spec.entryRelPath,
+        sourceHash: ks.spec.sourceHash,
+        kitApiVersion: ks.spec.kitApiVersion,
+        size: ks.spec.size,
+        interactionMode: ks.spec.interactionMode,
+        theme: ks.spec.theme,
+      })
+      .then((result) => {
+        // This incarnation was superseded (a fatal + respawn, or `close()`) while the mount
+        // was in flight. `onIncarnationFatal`/`close` already reset `mounting`/`mountedSlug`
+        // for whatever runs now, and teardown can easily outlast a 250ms backoff — a stale
+        // reply here must never touch a LATER incarnation's state.
+        if (ks.current !== current) return;
+        ks.mounting = false;
+        if (result instanceof Error) {
+          console.warn(`host-supervisor: mount(${requested}) failed:`, result.message);
+          onIncarnationFatal(ks, result);
+          return;
+        }
+        ks.mountedSlug = requested;
+        // The spec may have moved again while this mount was in flight (two quick tab
+        // clicks). Re-running the same reconciliation is what makes the last click win
+        // without a queue: it is a no-op when nothing moved.
+        reconcileMount(ks);
+      });
   }
 
   // The single decision point for a failed incarnation (a startup error OR a
@@ -215,8 +307,10 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     }
     const failed = ks.current;
     ks.current = null;
+    ks.mountedSlug = null;
+    ks.mounting = false;
     void failed?.stop();
-    const decision = policy.recordFailure(ks.key, error, clock.now());
+    const decision = policy.recordFailure(restartKeyOf(ks), error, clock.now());
     if (decision.action === "open") {
       ks.state = "circuit-open";
       emit({
@@ -367,7 +461,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
 
   function retry(ks: KeyState): void {
     if (ks.closed) return;
-    policy.retry(ks.key);
+    policy.retry(restartKeyOf(ks));
     if (ks.state !== "circuit-open" && ks.state !== "stopped") return;
     if (liveCount() >= maxGlobalHosts) {
       if (startQueue.length < startQueueCapacity && !startQueue.includes(ks)) {
@@ -426,6 +520,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     const existing = keys.get(key);
     if (existing !== undefined && !existing.closed) {
       existing.spec = spec; // a size/theme/capability change keeps the key + budget (§10)
+      reconcileMount(existing); // a PAGE change is a mount on the live child (§9.2)
       return sessionFor(existing);
     }
     const ks: KeyState = {
@@ -442,6 +537,8 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
       pumpTask: Promise.resolve(),
       state: "queued",
       closed: false,
+      mountedSlug: null,
+      mounting: false,
     };
     keys.set(key, ks);
     if (liveCount() >= maxGlobalHosts) {
