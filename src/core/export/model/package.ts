@@ -23,9 +23,13 @@ import type { ExportRenderJobResultV1 } from "./render-jobs";
  * ["design/..."] }`, with every path prefixed the same way, so a reader of the package never
  * has to know the tree-relative convention exists.
  *
- * `design-prompt.md`'s own shared-module section (design §11) is PLAN 3's — the prompt names
- * each page's entry and closure file today and deliberately does not yet explain module-level
- * state across pages, rather than half-writing that explanation here.
+ * `design-prompt.md`'s own shared-module section (design §11, phase 3 Task 7): `## Shared
+ * modules` lists every closure member reached by more than one page — never a page's own
+ * entry, which is already named on that page's `## Pages` block — plus the module-level-state
+ * paragraph that agrees with the system prompt's own `DESIGN_CODE_RULES` wording
+ * (`agent/prompt/model/prose.ts`). Each page's block also gains a `- shared with:` line naming
+ * the other pages it shares at least one module with. Everything here is derived from
+ * `input.closures` alone — no new port, no new read, no guess — via `readersByModule()` below.
  *
  * `layout/<slug>.json` (WP-5 Task B1, D-Q1) is a SIZE-KEYED JSON object — one key per
  * rendered ladder size (`sizeLabel()` below, the same `WxH` label the snapshot files use),
@@ -88,7 +92,33 @@ function sizeLabel(size: { readonly w: number; readonly h: number }): string {
   return `${size.w}x${size.h}`;
 }
 
+/**
+ * Which pages reach each non-entry closure member, tree-relative path → sorted page slugs
+ * (design §11, phase 3 Task 7).
+ *
+ * A page's OWN entry is excluded: it is already named on that page's `## Pages` block, and
+ * calling the file a page lives in a "module the page reaches" would send an implementer
+ * looking for shared code where there is none. Everything else in a closure IS a module, and
+ * the ones reached by two or more pages are the decomposition §11 wants carried into the
+ * implementation. Everything here falls out of `input.closures` with no new port, no new read,
+ * and no guess — a page whose closure is absent from `input.closures` contributes nothing,
+ * exactly as it is absent from its own `## Pages` closure line.
+ */
+function readersByModule(closures: readonly ExportClosureV1[]): Map<string, readonly string[]> {
+  const readers = new Map<string, Set<string>>();
+  for (const closure of closures) {
+    for (const relPath of closure.files) {
+      if (relPath === closure.entry) continue;
+      const seen = readers.get(relPath) ?? new Set<string>();
+      seen.add(closure.pageSlug);
+      readers.set(relPath, seen);
+    }
+  }
+  return new Map([...readers].map(([relPath, slugs]) => [relPath, [...slugs].sort()]));
+}
+
 function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
+  const readers = readersByModule(input.closures);
   const lines: string[] = [
     "# Design Prompt",
     "",
@@ -112,6 +142,20 @@ function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
         ? "- closure: unavailable — this page's import graph could not be resolved"
         : `- closure: closures/${page.pageSlug}.json (${closure.files.length} file(s))`,
     );
+    if (closure !== undefined) {
+      const sharedWith = new Set<string>();
+      for (const relPath of closure.files) {
+        if (relPath === closure.entry) continue;
+        for (const otherSlug of readers.get(relPath) ?? []) {
+          if (otherSlug !== closure.pageSlug) sharedWith.add(otherSlug);
+        }
+      }
+      lines.push(
+        sharedWith.size === 0
+          ? "- shared with: none — this page's modules are all its own"
+          : `- shared with: ${[...sharedWith].sort().join(", ")}`,
+      );
+    }
     lines.push(
       `- layout: layout/${page.pageSlug}.json (per-size resolved layout trees; ` +
         `ids/boxes populated, text awaits the runtime catalog — D-Q6)`,
@@ -128,6 +172,35 @@ function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
     }
     lines.push("");
   }
+
+  lines.push("## Shared modules");
+  lines.push("");
+  lines.push(
+    "The design is one source tree, not one file per page. A module below is imported by more",
+    "than one page, so it is a real shared component or token set — implement it once and reuse",
+    "it, the same way the design does.",
+  );
+  lines.push("");
+  const shared = [...readers]
+    .filter(([, slugs]) => slugs.length > 1)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  if (shared.length === 0) {
+    lines.push(
+      "No module is reached by more than one page: every page in this design is self-contained.",
+    );
+  } else {
+    for (const [relPath, slugs] of shared) {
+      lines.push(`- design/${relPath} — reached by: ${slugs.join(", ")}`);
+    }
+  }
+  lines.push("");
+  lines.push(
+    "Module-level state in a shared module is SHARED ACROSS PAGES within one design revision",
+    "and resets when the design changes (design §9.5). A page you switch away from and back to",
+    "within one revision is as you left it. If your implementation gives each page its own copy",
+    "of that state, it will not behave like the snapshots.",
+  );
+  lines.push("");
 
   lines.push("## Runtime");
   lines.push("");

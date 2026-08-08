@@ -369,3 +369,92 @@ describe("assembleExportPackage", () => {
     expect(paths).toContain("snapshots/home/120x40.txt");
   });
 });
+
+describe("design-prompt.md — shared modules section (design §11, phase 3 Task 7)", () => {
+  const ABOUT_BYTES = new TextEncoder().encode(
+    "export const meta = {} \n export default function About() {}\n",
+  );
+  const ABOUT: ExportPageSnapshotV1 = {
+    ...HOME,
+    pageSlug: slug("about"),
+    entryRelPath: "pages/about.tsx",
+    bytes: ABOUT_BYTES,
+  };
+  const PRIVATE_BYTES = new TextEncoder().encode('export const onlyAbout = "x"\n');
+  const TWO_PAGE_TREE: readonly ExportTreeFileV1[] = [
+    ...TREE,
+    { relPath: "pages/about.tsx", bytes: ABOUT_BYTES },
+    { relPath: "lib/private-to-about.ts", bytes: PRIVATE_BYTES },
+  ];
+  const TWO_PAGE_SNAPSHOT: ExportSnapshotV1 = {
+    ...SNAPSHOT,
+    pages: [HOME, ABOUT],
+    tree: TWO_PAGE_TREE,
+  };
+  const SHARED_CLOSURES: readonly ExportClosureV1[] = [
+    { pageSlug: slug("home"), entry: "pages/home.tsx", files: ["lib/theme.ts", "pages/home.tsx"] },
+    {
+      pageSlug: slug("about"),
+      entry: "pages/about.tsx",
+      files: ["lib/private-to-about.ts", "lib/theme.ts", "pages/about.tsx"],
+    },
+  ];
+
+  function promptFor(closures: readonly ExportClosureV1[]): string {
+    const result = assembleExportPackage({
+      snapshot: TWO_PAGE_SNAPSHOT,
+      renders: [],
+      runtimeDeclaration: RUNTIME_DECLARATION,
+      closures,
+    });
+    if (result.kind !== "assembled") throw new Error("expected assembled");
+    return new TextDecoder().decode(fileMap(result.files).get("design-prompt.md"));
+  }
+
+  test("a module two pages reach is listed as shared, with both pages named", () => {
+    const prompt = promptFor(SHARED_CLOSURES);
+    expect(prompt).toContain("## Shared modules");
+    expect(prompt).toContain("- design/lib/theme.ts — reached by: about, home");
+  });
+
+  test("a module only one page reaches is NOT listed as shared", () => {
+    const prompt = promptFor(SHARED_CLOSURES);
+    expect(prompt).not.toContain("design/lib/private-to-about.ts — reached by");
+  });
+
+  test("a tree with no shared module says so instead of printing an empty section", () => {
+    const prompt = promptFor([
+      { pageSlug: slug("home"), entry: "pages/home.tsx", files: ["pages/home.tsx"] },
+      { pageSlug: slug("about"), entry: "pages/about.tsx", files: ["pages/about.tsx"] },
+    ]);
+    expect(prompt).toContain(
+      "No module is reached by more than one page: every page in this design is self-contained.",
+    );
+  });
+
+  test("the module-level state paragraph is present whenever a shared module is", () => {
+    expect(promptFor(SHARED_CLOSURES)).toContain("Module-level state");
+  });
+
+  test("a page whose closure could not be resolved is absent from the shared listing", () => {
+    const prompt = promptFor([
+      {
+        pageSlug: slug("about"),
+        entry: "pages/about.tsx",
+        files: ["lib/theme.ts", "pages/about.tsx"],
+      },
+    ]);
+    expect(prompt).toContain("- closure: unavailable");
+    expect(prompt).not.toContain("reached by: home");
+  });
+
+  test("paths in the shared section carry the design/ prefix, like every other package path", () => {
+    expect(promptFor(SHARED_CLOSURES)).not.toMatch(/^- lib\//m);
+  });
+
+  test("a page's own entry is never listed as a module it shares, even though it appears in every closure", () => {
+    // Both closures list their OWN entry among `files` (as every real closure does); the entry
+    // must not be mistaken for a shared module just because it is a "files" member.
+    expect(promptFor(SHARED_CLOSURES)).not.toContain("pages/home.tsx — reached by");
+  });
+});
