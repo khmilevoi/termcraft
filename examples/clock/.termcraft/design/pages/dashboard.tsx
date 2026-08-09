@@ -11,6 +11,7 @@ import {
   Separator,
   Tabs,
 } from "@termcraft/runtime"
+import { pad2, WEEKDAYS_RU, fullTime } from "../lib/time"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -20,20 +21,6 @@ export const meta = definePage({
 })
 
 // ── pure helpers (no timers, no randomness — safe for a deterministic export frame) ──
-
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n)
-}
-
-const WEEKDAYS_RU = [
-  "Воскресенье",
-  "Понедельник",
-  "Вторник",
-  "Среда",
-  "Четверг",
-  "Пятница",
-  "Суббота",
-]
 
 const MONTHS_RU = [
   "января",
@@ -49,10 +36,6 @@ const MONTHS_RU = [
   "ноября",
   "декабря",
 ]
-
-function fullTime(d: Date): string {
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
-}
 
 function fullDate(d: Date): string {
   return `${d.getDate()} ${MONTHS_RU[d.getMonth()]} ${d.getFullYear()}`

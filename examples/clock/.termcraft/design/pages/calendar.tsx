@@ -12,6 +12,7 @@ import {
   Button,
   Separator,
 } from "@termcraft/runtime"
+import { pad2 } from "../lib/time"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -89,10 +90,6 @@ function buildMonthGrid(
     weeks.push(cells.slice(i, i + 7))
   }
   return weeks
-}
-
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n)
 }
 
 // ── state ──

@@ -8,6 +8,18 @@
     {
       "slug": "calendar",
       "entry": "pages/calendar.tsx"
+    },
+    {
+      "slug": "alarm",
+      "entry": "pages/alarm.tsx"
+    },
+    {
+      "slug": "stopwatch",
+      "entry": "pages/stopwatch.tsx"
+    },
+    {
+      "slug": "timer",
+      "entry": "pages/timer.tsx"
     }
   ]
 }
