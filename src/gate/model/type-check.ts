@@ -33,6 +33,19 @@ export interface TypeCheckerConfig {
  * boundary. It NEVER means "the page is clean": a crash must surface as a fatal
  * `TYPE_CHECK_UNAVAILABLE` error, never as an empty diagnostic list.
  */
+/**
+ * The `GateError.code` a crashed or unconstructable compiler yields — ONE fatal for the whole
+ * tree, with no `file`, deliberately so it is never mis-attributed to a page
+ * (`core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages`).
+ *
+ * EXPORTED because a consumer has to be able to tell this apart from every other diagnostic, and
+ * a duplicated string literal is how that goes silently wrong. It says whether the compiler is up
+ * — NOT anything about the tree's content — so a consumer caching results by tree content must
+ * refuse to cache a report carrying it (`entrypoint/model/design-checker.ts`'s memo). Exported
+ * rather than re-spelled there so a rename here is a compile error, not a silently disabled guard.
+ */
+export const TYPE_CHECK_UNAVAILABLE_CODE = "TYPE_CHECK_UNAVAILABLE";
+
 export class TypeCheckUnavailableError extends errore.createTaggedError({
   name: "TypeCheckUnavailableError",
   message: "the TypeScript type-check subprocess was unavailable",
@@ -439,7 +452,7 @@ export function createTreeTypeChecker(
     const result = runTreeTypeCheck(config, files);
     if (result instanceof Error)
       return [
-        { kind: "type", code: "TYPE_CHECK_UNAVAILABLE", message: unavailableMessage(result) },
+        { kind: "type", code: TYPE_CHECK_UNAVAILABLE_CODE, message: unavailableMessage(result) },
       ];
     return result;
   };

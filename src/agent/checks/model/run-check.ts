@@ -10,12 +10,22 @@ import { renderDesignCheckFailure, renderDesignCheckReport } from "./render";
  * the same shared-vs-vendor split `agent/confinement`, `agent/session`, `agent/health` and
  * `agent/run` already follow.
  *
- * CALLS THE PORT ON EVERY INVOCATION, and memoizes NOTHING. That is not an omission to optimize
- * later: the tool exists so the agent can edit, check, and edit again inside one attempt, and a
- * cached answer would report the code the agent already fixed. `workspacePath` is captured from
- * the `AgentTask` when the tool is built (there is no path in the tool's input schema — C9), so
- * what varies between two calls is the CONTENT of that workspace, which is exactly what has to
+ * CALLS THE PORT ON EVERY INVOCATION, and holds no cache of its own. `workspacePath` is captured
+ * from the `AgentTask` when the tool is built (there is no path in the tool's input schema — C9),
+ * so what varies between two calls is the CONTENT of that workspace, which is exactly what has to
  * be re-read.
+ *
+ * THE PORT'S PRODUCTION ADAPTER DOES CACHE, AND THAT IS STILL HONEST — worth stating here, since
+ * an earlier revision of this comment claimed nothing anywhere memoized, and that stopped being
+ * true one layer down. `entrypoint/model/design-checker.ts` re-walks, re-reads and re-hashes the
+ * whole tree on every call and reuses its previous report ONLY when the fold over every file's
+ * hash is byte-identical — a content address, never a timer. So it cannot answer for content it
+ * has not just read: the failure this paragraph used to warn about (reporting code the agent
+ * already fixed) is impossible by construction, because one changed byte changes the key. What it
+ * skips on a hit is the expensive `tsc` program, which is also the part that freezes the process
+ * (~0.1-0.35 s, measured — see that file's header). The one result it deliberately never stores
+ * is a `TYPE_CHECK_UNAVAILABLE` fatal, which reports the compiler's health rather than the tree's
+ * content.
  *
  * Errors are values, never thrown past this boundary: a port that could not run at all renders
  * as a loud failure rather than an empty — and therefore clean-looking — report.

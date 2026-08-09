@@ -2194,9 +2194,21 @@ costs ~2.5 minutes and a complete re-read of every doc and page.
 
 - [ ] **Step 1: Confirm the dependency direction before writing anything**
 
-`agent` may not import `gate`. The tool must consume the `GateRunner` PORT
-(`core/ports/gate-runner.ts`) — which lives under `core/`, and `agent` may not import `core`
-either. So the port type has to reach `agent` some other way. Resolve this FIRST:
+No part of `agent` imports `gate`. The tool must therefore consume the `GateRunner` PORT
+(`core/ports/gate-runner.ts`) — but that lives under `core/`, and the SHARED TIER of `agent`
+(`checks`, `confinement`, `session`, `health`, `run`) imports no `core` at all, so it is out of
+reach from there too. So the port type has to reach `agent` some other way. Resolve this FIRST:
+
+> **CORRECTED (Task 12, fix round 2).** This paragraph originally read "`agent` may not import
+> `gate` … and `agent` may not import `core` either", which is FALSE as a blanket rule and
+> propagated into seven code comments and two architecture docs before review caught it. `agent`
+> DOES import `core/ports` — in `agent/adapters/agent-registry.ts` and `agent/prompt/` — which is
+> the sanctioned adapter edge `code-structure.md`'s own diagram draws ("Adapters implement the
+> ports they are handed"). The wording above is now the verified rule: `agent` imports no `gate`
+> anywhere and reaches `core` only through `core/ports`, never `core`'s internals, while the
+> shared tier imports no `core` at all — and it is that last clause, not a blanket ban, that
+> forces `agent/checks` to declare its own port. The step's CONCLUSION was right for the right
+> reason; only its stated premise was too broad. A later task should follow the corrected rule.
 
 - Read `docs/architecture/code-structure.md`'s rules for the `agent` ring and check how
   `agent/types.ts`'s `AgentBackend` is "lifted verbatim into `core/ports/`" (its own comment,

@@ -81,6 +81,6 @@ test("the description states the MEASURED cost and that the pause is termcraft's
   // the agent's own time. Both halves are corrected, and pinned so a future edit cannot quietly
   // reintroduce either.
   expect(CHECK_DESIGN_DESCRIPTION).not.toContain("a few seconds");
-  expect(CHECK_DESIGN_DESCRIPTION).toContain("0.1-0.2 s");
+  expect(CHECK_DESIGN_DESCRIPTION).toContain("0.1-0.35 s");
   expect(CHECK_DESIGN_DESCRIPTION).toContain("pauses termcraft's whole interface");
 });

@@ -429,13 +429,29 @@ vendor tier's own pre-split run-loop file.
   `gate`-backed implementation — the mirror image of `AgentBackend` being lifted into
   `core/ports/`
 - `src/agent/checks/model/render.ts` — the check's own renderer. An EXPLICITLY
-  duplicated copy of `core/turns/model/prompt.ts`'s retry-fold line format (same
-  wall: `agent` cannot import `core`), identical character for character so the agent
-  reads one vocabulary mid-attempt and in a retry prompt; its own header states the
-  one deliberate selection difference and why
+  duplicated copy of `core/turns/model/prompt.ts`'s retry-fold line format (same wall
+  as the port above: those formatters are module-private to `core`'s internals, which
+  no part of `agent` reaches, and this shared-tier module imports no `core` at all),
+  identical character for character so the agent reads one vocabulary mid-attempt and
+  in a retry prompt; its own header states the one deliberate selection difference and
+  why. It also exports the rendered/excluded warning-kind sets so
+  `src/entrypoint/model/design-checker.test.ts` — the one place that sees both rings —
+  can prove every `GateWarningKindV1` is classified, which a renderer keyed on string
+  literals cannot check for itself
 - `src/agent/checks/model/run-check.ts` — `runDesignCheck`: one self-check, rendered.
-  Calls the port on EVERY invocation and memoizes nothing, which is what makes the
-  tool a LIVE read of the workspace rather than a snapshot
+  Calls the port on EVERY invocation and holds no cache of its own. The port's
+  production adapter does cache, but content-addressed — see
+  `src/entrypoint/model/design-checker.ts` below — so the tool stays a LIVE read of
+  the workspace rather than a snapshot
+- `src/entrypoint/model/design-checker.ts` — `createGateDesignChecker`, the
+  composition root's `DesignCheckerPort`: the only place that sees both `agent` and
+  `gate`. Walks the workspace's `design/` tree off disk and runs
+  `GateRunner.runManifestSlice` + `runTree` over the SAME runner the turn's own verdict
+  uses. Two properties its header documents at length: the whole path is SYNCHRONOUS,
+  so a call freezes the process for ~0.1-0.35 s (measured, with a 10 ms interval firing
+  zero times throughout), and its one-entry cache is keyed on a `computeTreeRevision`
+  fold over every file's hash, so an unchanged tree skips the compiler while any changed
+  byte re-runs it
 - `src/agent/confinement/model/policy.ts` — `createConfinementPolicy`, the SHARED
   deny-by-default rule, parameterized over a `ConfinementTables` record so it holds
   no vendor tool names itself

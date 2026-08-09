@@ -13,6 +13,9 @@ import {
   createDesignTreeInventory,
 } from "entities/design-tree";
 import type { DesignFileEntryV1 } from "entities/design-tree";
+// IMPORTED, NEVER RE-SPELLED: `gate` owns this code, and a local literal is exactly how the memo
+// guard below would go silently dead after a rename there. See that constant's own doc.
+import { TYPE_CHECK_UNAVAILABLE_CODE } from "gate";
 
 /**
  * THE COMPOSITION ROOT'S ANSWER TO `agent`'s `DesignCheckerPort` (spec WP-10, Task 12).
@@ -61,8 +64,10 @@ import type { DesignFileEntryV1 } from "entities/design-tree";
  * | 25 pages (28 files)      | 188 ms                  | 158 ms      | **0** (expected ~15-18)|
  *
  * ZERO ticks in every run: the loop is not merely slow, it is starved. One call is therefore a
- * ~100-200 ms freeze of the entire app, growing sub-linearly with tree size — NOT the "few
- * seconds" an earlier draft of the tool description guessed at.
+ * ~0.1-0.35 s freeze of the entire app (the widest single gap observed spanning a call was
+ * 342 ms), growing sub-linearly with tree size — NOT the "few seconds" an earlier draft of the
+ * tool description guessed at. Every figure quoted elsewhere — the tool description, the system
+ * prompt, the flow doc — is this same 0.1-0.35 s range, so no reader meets two numbers.
  *
  * WHY THAT IS ACCEPTED RATHER THAN FIXED HERE. Before this task the same cost was paid once per
  * attempt, by `core/turns/model/validation.ts`, on this same thread — this tool changes how OFTEN
@@ -209,7 +214,7 @@ export function createGateDesignChecker(gateRunner: GateRunner): DesignCheckerPo
    *
    * WHAT IT IS FOR: the system prompt asks the agent to check after each round of edits, and a
    * model can legitimately emit two `check_design` calls in one message. Without this, two calls
-   * with no edit between them freeze the app twice (~100-200 ms each, measured in this file's
+   * with no edit between them freeze the app twice (~0.1-0.35 s each, measured in this file's
    * header) to compute the identical answer.
    *
    * WHY IT CANNOT SERVE A STALE ANSWER, which is the property this whole tool lives or dies by.
@@ -225,6 +230,14 @@ export function createGateDesignChecker(gateRunner: GateRunner): DesignCheckerPo
    * freshness guarantee depends on is never skipped. Keyed on `workspacePath` as well as the
    * fingerprint: two workspaces holding identical bytes would also produce identical reports, but
    * making that reasoning unnecessary costs nothing.
+   *
+   * ONE RESULT IS NEVER STORED, AND IT IS THE EXCEPTION THAT PROVES THE RULE ABOVE. "Pure
+   * function of the bytes" holds for every diagnostic except {@link TYPE_CHECK_UNAVAILABLE_CODE}:
+   * that fatal reports whether the COMPILER is up, not anything about the tree. Cached, it would
+   * stick until the agent happened to edit a file — so the natural recovery from a transient
+   * compiler hiccup (call `check_design` again, unchanged, to see whether it was transient) would
+   * be answered with the very failure it is trying to retry. So a report carrying it is returned
+   * and discarded, and the next call attempts the compiler again.
    */
   let memo: { readonly key: string; readonly report: DesignCheckReportV1 } | null = null;
 
@@ -264,7 +277,12 @@ export function createGateDesignChecker(gateRunner: GateRunner): DesignCheckerPo
         errors: [...slice.errors, ...tree.errors].map(toCheckError),
         warnings: tree.warnings.map(toCheckWarning),
       };
-      if (key !== null) memo = { key, report };
+      // See the memo's own doc: a compiler-unavailability fatal is not a fact about these bytes,
+      // so storing it would answer the agent's retry with the failure it is retrying.
+      const compilerWasUnavailable = tree.errors.some(
+        (error) => error.code === TYPE_CHECK_UNAVAILABLE_CODE,
+      );
+      if (key !== null && !compilerWasUnavailable) memo = { key, report };
       return report;
     },
   };

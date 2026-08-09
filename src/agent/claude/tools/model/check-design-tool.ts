@@ -74,7 +74,7 @@ export const CHECK_DESIGN_INPUT_SCHEMA = {} as const;
  * carries the "call it before you finish" instruction; this is the reference card.
  *
  * THE COST SENTENCE IS MEASURED, NOT GUESSED. An earlier draft said "costs a few seconds", which
- * overstated it by an order of magnitude; the real figure is ~0.1-0.2 s, and it is a freeze of
+ * overstated it by an order of magnitude; the real figure is ~0.1-0.35 s, and it is a freeze of
  * termcraft itself rather than only of the agent's own progress. Both facts are stated: an
  * inflated cost would discourage exactly the calls this tool exists to encourage, and hiding the
  * freeze would invite calling it after every single line.
@@ -85,7 +85,7 @@ export const CHECK_DESIGN_DESCRIPTION =
   "call it again after each round of edits. Covers the pages.json manifest, the import " +
   "allowlist, the import graph, every page's closure, non-determinism, and one TypeScript " +
   "program over the whole tree. Does not run the page contract or the smoke render. " +
-  "Cost: about 0.1-0.2 s, during which it pauses termcraft's whole interface, not just your " +
+  "Cost: about 0.1-0.35 s, during which it pauses termcraft's whole interface, not just your " +
   "own progress — so run it after a batch of edits rather than after every single line. A turn " +
   "the Gate rejects costs minutes and a full re-read, so checking is almost always worth it. " +
   "Calling it twice with no edit in between is free: the second call reuses the first answer.";

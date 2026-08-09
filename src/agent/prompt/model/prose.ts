@@ -102,7 +102,7 @@ You have one tool beyond your file tools: "check_design". It takes no arguments.
 
 Call it before you finish. Call it again after each round of edits — it always re-reads the tree, so it never reports something you already fixed, and calling it twice with nothing changed in between is free.
 
-What it costs, measured: about 0.1-0.2 seconds, during which termcraft's whole interface is paused — not only your own progress. That is cheap against a turn the Gate rejects, which costs minutes and makes you re-read every document and page from scratch. So batch your edits and check after the batch, rather than after every single line.
+What it costs, measured: about 0.1-0.35 seconds, during which termcraft's whole interface is paused — not only your own progress. That is cheap against a turn the Gate rejects, which costs minutes and makes you re-read every document and page from scratch. So batch your edits and check after the batch, rather than after every single line.
 
 What it covers: ${DESIGN_DIRNAME}/pages.json, the import allowlist, the import graph, every page's closure, non-determinism, and one TypeScript program over the whole tree — so a shared module that does not compile shows up here even though no page names it directly. What it does NOT cover: the page contract and the smoke render. A clean check is strong evidence, not a guarantee, and it is never a reason to skip reading the runtime docs.`;
 

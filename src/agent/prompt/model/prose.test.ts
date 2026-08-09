@@ -25,7 +25,7 @@ describe("agent/prompt static prose", () => {
    * figure, and must not encourage per-line checking.
    */
   test("SELF_CHECK discloses the real, measured cost and that the pause is termcraft's", () => {
-    expect(SELF_CHECK).toContain("0.1-0.2 seconds");
+    expect(SELF_CHECK).toContain("0.1-0.35 seconds");
     expect(SELF_CHECK).toContain("termcraft's whole interface is paused");
     expect(SELF_CHECK).toContain("not only your own progress");
     // The inflated guess an earlier draft carried, and the per-line instruction it paired with.

@@ -14,7 +14,7 @@ import type { GateRunner, GateWarningKindV1 } from "core/ports";
 import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
-import { resolveCompilerPath } from "gate";
+import { TYPE_CHECK_UNAVAILABLE_CODE, resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 
 import { buildGateRunner } from "./create-shell";
@@ -177,7 +177,7 @@ describe("createGateDesignChecker over a real turn workspace", () => {
 
 /**
  * THE CONTENT-KEYED MEMO (fix round 1, I1). Two calls with no edit between them must not pay the
- * ~100-200 ms whole-process freeze twice — but the memo must never be the reason a stale answer
+ * ~0.1-0.35 s whole-process freeze twice — but the memo must never be the reason a stale answer
  * is served, which is the one property this tool cannot lose. Both halves are pinned here.
  */
 describe("createGateDesignChecker's repeat-call memo", () => {
@@ -239,6 +239,69 @@ describe("createGateDesignChecker's repeat-call memo", () => {
     REAL_COMPILER_TIMEOUT_MS,
   );
 
+  test("a compiler-unavailable failure is NEVER served from cache, and the retry sees it recover", async () => {
+    // `TYPE_CHECK_UNAVAILABLE` is the one Gate fatal that is not a fact about the tree's bytes —
+    // it reports whether the compiler process is up. Cached under a content key it would stick
+    // until the agent happened to edit something, so the natural recovery from a transient
+    // hiccup (call again, unchanged, to see whether it passed) would be answered with the very
+    // failure being retried.
+    //
+    // A SCRIPTED `GateRunner`, not the real one with a bogus compiler path: making the real
+    // `typescript/unstable/sync` API fail to spawn raises an ASYNCHRONOUS `error` event that
+    // escapes `type-check.ts`'s own try/catch and fails the run for an unrelated reason. That
+    // is unreachable in production — `create-shell.ts` resolves and validates the compiler
+    // before any project I/O and aborts the whole shell if it cannot — so provoking it here
+    // would test the harness, not the memo. `TYPE_CHECK_UNAVAILABLE_CODE` is IMPORTED from
+    // `gate`, so the code this asserts on is the one the Gate really emits, by construction
+    // rather than by a matching literal.
+    const workspace = createWorkspace(CLEAN_SOURCE);
+    let runTreeCalls = 0;
+    const flaky: GateRunner = {
+      runManifestSlice: () => Promise.resolve({ errors: [], slice: { pages: [], active: null } }),
+      runTree: () => {
+        runTreeCalls += 1;
+        // Unavailable on the first call, healthy on every later one — the transient hiccup.
+        return Promise.resolve({
+          errors:
+            runTreeCalls === 1
+              ? [
+                  {
+                    kind: "type" as const,
+                    code: TYPE_CHECK_UNAVAILABLE_CODE,
+                    message: "the compiler could not be started",
+                  },
+                ]
+              : [],
+          warnings: [],
+          closures: [],
+        });
+      },
+      runPage: () => {
+        throw new Error("runPage must not be called by the design check");
+      },
+      extractPageMeta: () => {
+        throw new Error("extractPageMeta must not be called by the design check");
+      },
+    };
+    const checker = createGateDesignChecker(flaky);
+
+    const first = await runDesignCheck(checker, workspace);
+    expect(first).toContain(TYPE_CHECK_UNAVAILABLE_CODE);
+    expect(first).not.toContain(DESIGN_CHECK_CLEAN_HEADLINE);
+
+    // Identical tree bytes, so a naive content memo would replay the failure forever.
+    const second = await runDesignCheck(checker, workspace);
+    expect(runTreeCalls).toBe(2);
+    expect(second).toContain(DESIGN_CHECK_CLEAN_HEADLINE);
+    expect(second).not.toContain(TYPE_CHECK_UNAVAILABLE_CODE);
+
+    // …and the now-healthy result IS cached, so the guard is scoped to the failure rather than
+    // disabling the memo outright.
+    const third = await runDesignCheck(checker, workspace);
+    expect(runTreeCalls).toBe(2);
+    expect(third).toBe(second);
+  });
+
   test(
     "a NEW file with no effect on any page still invalidates — the key is the tree, not the entry",
     async () => {
@@ -252,6 +315,51 @@ describe("createGateDesignChecker's repeat-call memo", () => {
       const after = await runDesignCheck(checker, workspace);
       expect(after).toContain("dead-module");
       expect(after).not.toContain(DESIGN_CHECK_CLEAN_HEADLINE);
+    },
+    REAL_COMPILER_TIMEOUT_MS,
+  );
+});
+
+/**
+ * THE "HARD FREEZE, NOT JUST SLOW" CLAIM, PINNED BY A TEST RATHER THAN BY PROSE (fix round 2).
+ *
+ * Four places now tell a reader — and the agent — that one `check_design` call blocks the whole
+ * process: `design-checker.ts`'s header, the tool's description, `SELF_CHECK`, and
+ * `flows/generation-turn.md` step 3a. All four rested on a measurement run once from a throwaway
+ * probe. This is that measurement as a committed regression test, in the repo's own spirit of
+ * keeping a spike's probe rather than only its conclusion.
+ *
+ * NOT FLAKY, and the direction matters: a synchronous section provably cannot let a timer fire,
+ * so `0` is deterministic rather than merely typical, and load makes the call SLOWER — which
+ * widens the window the interval would have fired in, strengthening the assertion instead of
+ * weakening it. The guard below fails loudly if the call ever gets fast enough for the tick
+ * assertion to become vacuous, rather than letting it quietly stop proving anything.
+ */
+describe("one check_design call blocks the event loop for its whole duration", () => {
+  test(
+    "a 10 ms interval fires ZERO times while the check runs",
+    async () => {
+      const workspace = createWorkspace(TWO_DEFECT_SOURCE);
+      const checker = createRealChecker();
+
+      const ticks: number[] = [];
+      const timer = setInterval(() => ticks.push(performance.now()), 10);
+      // Prove the interval is alive BEFORE the blocking work — otherwise "zero ticks during"
+      // would also be satisfied by a timer that never worked at all.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(ticks.length).toBeGreaterThan(0);
+
+      const startedAt = performance.now();
+      await runDesignCheck(checker, workspace);
+      const elapsed = performance.now() - startedAt;
+      clearInterval(timer);
+
+      const ticksDuring = ticks.filter((t) => t > startedAt && t < startedAt + elapsed).length;
+      // THE CLAIM: not "few", ZERO. A loop that merely ran slowly would still fire.
+      expect(ticksDuring).toBe(0);
+      // …and the window was long enough for a live loop to have fired several times, so the
+      // assertion above is not vacuously true of a call that finished in under a tick.
+      expect(elapsed).toBeGreaterThan(25);
     },
     REAL_COMPILER_TIMEOUT_MS,
   );
