@@ -68,6 +68,32 @@ function norm(p: string): string {
  * alongside the facade itself (`scripts/gen-runtime-dts.ts`, `buildJsxSubmodules`) —
  * exactly the wiring `src/runtime/model/jsx.ts`'s own NOTE names as the phase-8 job.
  * This affects the TYPE CHECK only; the transform that renders a saved page is Bun's.
+ *
+ * WHAT `skipLibCheck: true` COSTS, PER SPECIFIER — stated here because it is a property of THESE
+ * options, not of the declaration alone, and because the generator's matching claim ("the
+ * unresolved specifiers are harmless to the Gate") was RETRACTED on 2026-08-09 after it turned
+ * out to be false for one of them. Nothing resolves a bare specifier from `os.tmpdir()`, and
+ * `skipLibCheck` suppresses the `TS2307` a served `.d.ts` would otherwise raise, so any specifier
+ * the declaration still names by reference degrades to `any`:
+ *
+ *  - `@reatom/core` — RESOLVED, since 2026-08-09. `scripts/gen-runtime-dts.ts` inlines the real
+ *    installed package as a second ambient module inside the same `runtimeDts` text. Before that,
+ *    `atom` was `any`, a type argument on an `any` callee was ignored, and `.map()` on the result
+ *    had no contextual signature — so this check MANUFACTURED fatal `TS7006`s against
+ *    correctly-typed pages while being unable to catch a misspelled field on atom state at all.
+ *    Both directions are pinned in `type-check.test.ts` (spec WP-4, spike 10).
+ *  - `@reatom/react` (`reatomComponent`) — still unresolved, so a component's return type is
+ *    unchecked. It cannot be inlined honestly: its declaration imports `React` from `react`, and
+ *    `@types/react` is not installed anywhere in this project (`react@19` ships none).
+ *  - `@opentui/react/jsx-runtime` + `/jsx-dev-runtime`, and the unqualified `React.ReactNode` —
+ *    unresolved for the same reason. ONE MEASURED CONSEQUENCE IS A DEFECT, not a soft gap:
+ *    `JSX.IntrinsicElements` lives in that unresolved namespace, so every LOWERCASE raw element
+ *    (`<box>`, `<text>`) — the escape hatch the agent prompt actively teaches, and the one
+ *    `lints.ts`'s `lintUnpointedElements` presumes is legal — is a fatal `TS7026`. Pinned as a
+ *    failing-behaviour fixture in `type-check.test.ts`; the fix is a declaration decision.
+ *
+ * A page's own PROP types are unaffected by all of this: every `*Props` interface is declared
+ * inside the ambient block and is checked for real.
  */
 const SYNTHESIZED_COMPILER_OPTIONS = {
   strict: true,

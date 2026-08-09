@@ -145,8 +145,10 @@ flowchart LR
    subfolder rather than scattered at `runtime/`'s top level — and `generated/` names
    what the folder actually holds more precisely than `model/` would: content that is
    machine-emitted, never hand-edited, and guarded by its own drift test rather than
-   authored logic. The one file in it today, `RUNTIME_DTS` (see Source anchors), is
-   deliberately not re-exported from `src/runtime/index.ts`, the module's public
+   authored logic. It holds TWO artifacts from ONE emit (see Source anchors), split by
+   audience: `runtime-dts.ts`'s `RUNTIME_DTS` is the GATE copy, and
+   `runtime.generated.d.ts` is the PROMPT copy staged into the agent's turn workspace.
+   Neither is re-exported from `src/runtime/index.ts`, the module's public
    `@termcraft/runtime` facade an authored design page imports from (item 10):
    folding a build artifact into that facade would widen the authored-source import
    surface the design spec's §5.8 allowlist exists to keep narrow.
@@ -345,9 +347,11 @@ final group's own heading spells out which is which).
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
   Claude backend produces both and `src/core/ports/agent-backend.ts` consumes them
-- `src/runtime/generated/runtime-dts.ts` — the landed example of the `generated/`
-  exception this item records: machine-emitted by `scripts/gen-runtime-dts.ts`,
-  guarded by `src/runtime/generated/runtime-dts.test.ts`'s drift check, and never
+- `src/runtime/generated/runtime-dts.ts`, `src/runtime/generated/runtime.generated.d.ts` —
+  the landed examples of the `generated/`
+  exception this item records: both machine-emitted by `scripts/gen-runtime-dts.ts` in
+  one run, each
+  guarded by `src/runtime/generated/runtime-dts.test.ts`'s own drift check, and neither
   re-exported from `src/runtime/index.ts` (verified: that file's export list carries
   the page contract, Reatom bindings, theme tokens, the JSX helper surface, and the
   component catalog — no `RUNTIME_DTS`). The design spec that introduced this folder
@@ -613,7 +617,15 @@ vendor tier's own pre-split run-loop file.
   `@termcraft/runtime` declaration text (`scripts/gen-runtime-dts.ts` emits it from
   `src/runtime/index.ts`'s real public surface; `src/runtime/generated/runtime-dts.test.ts`
   is the drift test that fails the gates when the committed artifact and a fresh emit
-  disagree). Two readers exist today: that drift test, and
+  disagree). Since spec WP-4 it also carries the REAL installed `@reatom/core`
+  declarations, inlined as a second ambient module: nothing resolves a bare specifier
+  from the hermetic check's `os.tmpdir()` cwd, and `skipLibCheck` suppressed the
+  `TS2307`, so `atom`/`computed`/`action`/`wrap` degraded to `any` and the check
+  manufactured fatal `TS7006`s against correctly-typed pages while being unable to
+  catch a misspelled field on atom state. That inline is what makes `runtime-dts.ts`
+  the GATE copy specifically; `runtime.generated.d.ts` is the same emit WITHOUT it,
+  because that one is a prompt attachment where size is the constraint. Two readers
+  exist today: that drift test, and
   `src/gate/model/type-check.test.ts`'s `realChecker`, whose own comment names it "the
   one place `gate` reaches into `runtime` — a TEST-ONLY edge," importing
   `{ RUNTIME_DTS } from "runtime/generated/runtime-dts"` to type-check a fixture page

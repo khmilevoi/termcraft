@@ -1,14 +1,24 @@
-// Regenerates `src/runtime/generated/runtime-dts.ts`: the ambient `@termcraft/runtime`
-// declaration the Gate's hermetic type check (`src/gate/model/type-check.ts`) hands the Go
-// compiler, and the same text the agent prompt library ships as its runtime API reference
-// (phase-8 design §WP-2, §WP-3). Run `bun run scripts/gen-runtime-dts.ts` after any change to
-// `src/runtime`'s public surface; `--stdout` prints the text instead of writing the file, which
-// is how `src/runtime/generated/runtime-dts.test.ts` proves the committed artifact has not
-// drifted. The output is COMMITTED rather than generated at install time: it is small, it is
-// read by humans reviewing what the agent is told, and the drift test is the staleness guard.
-// (Phase 8 deleted the one generated artifact this repository used to keep gitignored and
-// rebuild from a `postinstall` hook — that shape broke a fresh clone, because the tree could
-// not even be imported until the hook had run.)
+// Regenerates the ambient `@termcraft/runtime` declaration, in TWO artifacts from ONE emit
+// (phase-8 design §WP-2, §WP-3; split by spec WP-4 on 2026-08-09):
+//
+//   src/runtime/generated/runtime-dts.ts        the GATE copy — `RUNTIME_DTS`, the string the
+//                                               hermetic type check (`src/gate/model/type-check.ts`)
+//                                               hands the Go compiler. Carries the real installed
+//                                               `@reatom/core` declarations inline; see
+//                                               `buildReatomCoreBlock`.
+//   src/runtime/generated/runtime.generated.d.ts  the PROMPT copy — the same facade WITHOUT that
+//                                               block, staged into the agent's turn workspace by
+//                                               path. A prompt attachment, so its size is a
+//                                               first-class constraint.
+//
+// Run `bun run scripts/gen-runtime-dts.ts` after any change to `src/runtime`'s public surface.
+// `--stdout` prints the PROMPT copy's text instead of writing the files, and `--stdout=gate`
+// prints the gate copy's — which is how `src/runtime/generated/runtime-dts.test.ts` proves each
+// committed artifact has not drifted from its own fresh emit. The output is COMMITTED rather than
+// generated at install time: it is read by humans reviewing what the agent is told, and the drift
+// tests are the staleness guard. (Phase 8 deleted the one generated artifact this repository used
+// to keep gitignored and rebuild from a `postinstall` hook — that shape broke a fresh clone,
+// because the tree could not even be imported until the hook had run.)
 //
 // ── WHY declaration emit + flattening, and not the obvious alternatives ────────────────────
 //
@@ -34,7 +44,11 @@
 //     surface EXACTLY — `activeTokens`, which `model/tokens.ts` exports but `index.ts` does
 //     not, stays internal, as it must.
 //
-//  2. THE EXTERNAL TYPE SURFACE STAYS BY REFERENCE, NOT INLINED. The emitted declarations
+//  2. THE EXTERNAL TYPE SURFACE STAYS BY REFERENCE, NOT INLINED. ⚠ AMENDED 2026-08-09 for
+//     `@reatom/core` ONLY — see `buildReatomCoreBlock` below, which states what changed and why
+//     this is not a re-litigation. The rest of point 2, and above all its refusal to hand-write
+//     stand-ins, stand unchanged. The original text follows:
+//     The emitted declarations
 //     reference three external identities: `@reatom/core` (`Atom`, `Computed`, `AtomLike`,
 //     `Ext` plus the re-exported `atom`/`computed`/`action`/`wrap`/`with*` values),
 //     `@reatom/react` (`reatomComponent`), and `@opentui/react/jsx-runtime` +
@@ -48,6 +62,15 @@
 //     rule forbids.
 //
 //  3. THE UNRESOLVED SPECIFIERS ARE HARMLESS TO THE GATE, AND THAT WAS VERIFIED, NOT ASSUMED.
+//     ⚠ RETRACTED 2026-08-09: this claim was FALSE for `@reatom/core`, and the verification
+//     below is exactly the half-check it warns others against. What it verified — a valid page
+//     passes, a bad PROP still fails — was true and stayed true; what it never thought to check
+//     is that the `any`-degraded `atom` MANUFACTURED four fatal `TS7006`s against correctly-typed
+//     pages, and that the check could not detect a misspelled field on atom state at all.
+//     `buildReatomCoreBlock` fixes it for `@reatom/core`; the claim still holds, unamended, for
+//     `@reatom/react` and `@opentui/react/jsx-*` — with one measured exception recorded there
+//     (lowercase raw JSX elements are a fatal TS7026). The original text follows verbatim, since
+//     its reasoning is what the retraction is about:
 //     The runtime declaration is served to the compiler as a `.d.ts`, and the synthesized
 //     tsconfig sets `skipLibCheck: true`, so a specifier that does not resolve raises no
 //     diagnostic and the imported names degrade to the error type (`any`-like). The
@@ -107,6 +130,7 @@ const ENTRY = path.join(RUNTIME_DIR, "index.ts");
 const OUT_FILE = path.join(REPO_ROOT, "src/runtime/generated/runtime-dts.ts");
 const DTS_OUT_FILE = path.join(REPO_ROOT, "src/runtime/generated/runtime.generated.d.ts");
 const MODULE_SPECIFIER = "@termcraft/runtime";
+const REATOM_CORE_SPECIFIER = "@reatom/core";
 /** The emitted chunk that owns the JSX factory re-exports, and the upstream scope it re-exports. */
 const JSX_CHUNK = "model/jsx.d.ts";
 const UPSTREAM_JSX_SCOPE = "@opentui/react/";
@@ -455,6 +479,103 @@ function buildDeclaration(outDir: string): string | RuntimeDtsEmitError {
   return [facade, ...jsxSubmodules].join("\n");
 }
 
+/**
+ * Locate the installed `@reatom/core`'s own declaration through MODULE RESOLUTION, never a
+ * hand-built `node_modules/...` path — the same rule {@link resolveTscExe} follows, and for a
+ * sharper reason here: what gets inlined must provably be the package this repository actually
+ * depends on, and a literal path is a claim about a layout rather than a resolution of one.
+ */
+function resolveReatomCoreDts(): string | RuntimeDtsEmitError {
+  const pkg = `${REATOM_CORE_SPECIFIER}/package.json`;
+  const manifest = errore.try({
+    try: () => Bun.resolveSync(pkg, REPO_ROOT),
+    catch: (cause) => new RuntimeDtsEmitError({ reason: `cannot resolve ${pkg}`, cause }),
+  });
+  if (manifest instanceof Error) return manifest;
+
+  const dts = path.join(path.dirname(manifest), "dist", "index.d.ts");
+  if (!fs.existsSync(dts)) return new RuntimeDtsEmitError({ reason: `${dts} does not exist` });
+  return dts;
+}
+
+/**
+ * Inline the REAL `@reatom/core` declarations into the GATE copy (defect fix, 2026-08-09,
+ * spec WP-4). Verified end-to-end before it was written: `docs/spikes/10-reatom-dts-inline`.
+ *
+ * WHY THIS REVERSES POINT 2 OF THIS FILE'S HEADER, AND WHY THAT IS NOT REOPENING IT. Point 2
+ * rejected inlining on measured size — ~296 KB — because "this same string is the agent's runtime
+ * reference". That premise is what changed: the prompt copy and the gate copy are now separate
+ * artifacts with separate audiences, so the size objection applies to the prompt copy only, and
+ * the prompt copy does not get this block. Point 3's "the unresolved specifiers are harmless to
+ * the Gate" is what turned out to be false, and the mechanism is precise: `skipLibCheck` makes
+ * the unresolved `@reatom/core` names `any`, a type argument on an `any` callee is ignored, and
+ * `.map()` on `any` has NO contextual signature — which `noImplicitAny` reports as TS7006. So
+ * the hermetic check MANUFACTURED four fatal diagnostics against correctly-typed pages, and no
+ * annotation the author writes can really fix them, because the code is unchecked either way.
+ * The spike measured the reverse direction too: before the inline the Gate could not detect a
+ * misspelled field on atom state AT ALL (it answered `TS7006`, never naming the field); after
+ * it, that page yields `TS2339`. The check got stronger, not merely quieter.
+ *
+ * SCOPE IS `@reatom/core` ALONE, and that is the whole measured origin. `@reatom/react`'s
+ * `reatomComponent` stays by reference: its declaration imports `React`, `ChangeEvent` from
+ * `react` and `JSX` from `react/jsx-runtime`, and `@types/react` is not installed
+ * (`react@19` ships none), so inlining it would mean inventing React's types — which the
+ * honest-values rule forbids outright. `@opentui/react`'s JSX factories and the unqualified
+ * `React.ReactNode` stay by reference for the same reason, and stay documented as unchecked.
+ * One measured consequence of that, pinned by `gate/model/type-check.test.ts`'s S1 fixture:
+ * every LOWERCASE raw JSX element is a fatal `TS7026`, because `JSX.IntrinsicElements` lives in
+ * the unresolved `@opentui/react/jsx-runtime` namespace. That defect predates this function and
+ * is not fixed by it.
+ *
+ * WHAT IS INLINED IS EMITTED, NEVER WRITTEN. The source is the installed package's own
+ * `dist/index.d.ts`, resolved through module resolution and transformed only by the same
+ * declare-strip the facade flattening already applies (see {@link stripDeclareModifier}) plus the
+ * two-space indent every block in this file gets. Note what that does to the package's single
+ * `declare global { … }` block: it becomes `global { … }`, which is the correct form inside an
+ * already-ambient block — the spike proved it by diffing the diagnostics against a variant with
+ * that block deleted, and they are identical, so the block ships. `runtime-dts.test.ts` re-derives
+ * this transformation from the package and asserts the committed block line-for-line, which is
+ * what keeps "emitted, never written" checkable instead of merely claimed.
+ *
+ * It is COMMITTED, so nothing at install or run time depends on a `node_modules` layout — which
+ * is precisely the binding point 3 refused, and this does not reintroduce it.
+ *
+ * THE COST IS REAL AND MEASURED, not waved past: the gate copy grows from ~30 KB to ~338 KB, and
+ * the compiler parses that on every whole-tree check. Spike 10, median of five runs over a
+ * five-page tree with a shared module: 48 ms → 61 ms. The per-check compiler-API construction at
+ * `src/gate/model/type-check.ts` stays a ledger row, not a consequence of this.
+ */
+function buildReatomCoreBlock(): string | RuntimeDtsEmitError {
+  const dtsPath = resolveReatomCoreDts();
+  if (dtsPath instanceof Error) return dtsPath;
+
+  const raw = errore.try({
+    try: () => fs.readFileSync(dtsPath, "utf8"),
+    catch: (cause) => new RuntimeDtsEmitError({ reason: `cannot read ${dtsPath}`, cause }),
+  });
+  if (raw instanceof Error) return raw;
+
+  // An ambient module declaration may not name a relative module, and a `/// <reference>` inside
+  // one is not honoured — so a package whose declaration grew either would be inlined WRONG and
+  // silently. Refuse rather than emit a declaration that lies about the runtime.
+  const lines = raw.replace(/\r\n/g, "\n").split("\n");
+  // `^import\s` and not `^import\b`: a line-leading `import("…")` TYPE QUERY is legal inside an
+  // ambient block and must not be mistaken for an import statement.
+  const offender = lines.findIndex((line) =>
+    /^(import\s|export\s+\*|\/\/\/\s*<reference)/.test(line),
+  );
+  if (offender !== -1)
+    return new RuntimeDtsEmitError({
+      reason:
+        `${dtsPath}:${String(offender + 1)} is "${lines[offender] ?? ""}" — a top-level import, ` +
+        "star re-export or triple-slash reference, none of which survive being wrapped in an " +
+        "ambient module declaration. The flattening only handles a self-contained declaration.",
+    });
+
+  const body = lines.map(stripDeclareModifier).join("\n");
+  return `declare module "${REATOM_CORE_SPECIFIER}" {\n${indent(body)}\n}\n`;
+}
+
 /** Escape the declaration text for a template literal so the constant's value is byte-exact. */
 function asTemplateLiteral(text: string): string {
   return text.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
@@ -466,17 +587,24 @@ function renderModule(declaration: string): string {
     "// GENERATED by scripts/gen-runtime-dts.ts — do not hand-edit. Regenerate with",
     "// `bun run scripts/gen-runtime-dts.ts` after any change to src/runtime's public surface;",
     "// `src/runtime/generated/runtime-dts.test.ts` fails the gates when this drifts from a fresh",
-    "// emit. See the generator's header for why the declaration is flattened and why its external",
-    "// specifiers (@reatom/core, @reatom/react, @opentui/react/jsx-runtime) stay unresolved under",
-    "// the Gate's hermetic `skipLibCheck` check.",
+    "// emit. See the generator's header for why the declaration is flattened.",
+    "//",
+    "// This is the GATE copy: the facade declaration PLUS the real installed `@reatom/core`",
+    "// declarations, inlined as an ambient module so `atom`/`computed`/`action`/`wrap` and the",
+    "// types they return resolve under the Gate's hermetic check instead of degrading to `any`",
+    "// (`buildReatomCoreBlock`). `@reatom/react` and `@opentui/react/jsx-*` deliberately stay",
+    "// unresolved — `@types/react` is not installed anywhere in this project, so inlining them",
+    "// would mean inventing React's types. The PROMPT copy, `runtime.generated.d.ts`, is the same",
+    "// facade WITHOUT the inlined block: it is a prompt attachment, where size is the constraint.",
     "//",
     "// This module imports NOTHING on purpose: `runtime` is a leaf in the module DAG",
     "// (docs/architecture/code-structure.md), and a generated string constant keeps it one.",
     "",
     "/**",
-    " * The ambient `@termcraft/runtime` declaration, emitted from the real `src/runtime/index.ts`.",
-    " * Consumed twice: as the Gate's `runtimeDts` (`src/gate/model/type-check.ts`) and as the",
-    " * agent prompt library's runtime API reference (phase-8 design §WP-2, §WP-3).",
+    " * The ambient `@termcraft/runtime` declaration, emitted from the real `src/runtime/index.ts`,",
+    " * plus the inlined `@reatom/core` declarations. Consumed by the Gate's hermetic type check",
+    " * alone (`src/gate/model/type-check.ts`, phase-8 design §WP-2); the agent prompt library reads",
+    " * the smaller sibling file `runtime.generated.d.ts` instead (§WP-3).",
     " */",
     `export const RUNTIME_DTS = \`${asTemplateLiteral(declaration)}\`;`,
     "",
@@ -503,31 +631,67 @@ function generate(): string | RuntimeDtsEmitError {
   }
 }
 
+/**
+ * Which artifact `--stdout` should print. BARE `--stdout` STILL MEANS THE PROMPT COPY — the
+ * meaning it had before Task 7 split one artifact into two — so no existing invocation changed
+ * meaning silently when the second target appeared. `runtime-dts.test.ts` asserts that default
+ * rather than leaving it to a reader of this file.
+ */
+type StdoutTarget = "prompt" | "gate";
+
+const STDOUT_RE = /^--stdout(?:=(.*))?$/;
+
+/** `null` = no `--stdout` flag at all (write the files instead). */
+function parseStdoutTarget(argv: readonly string[]): StdoutTarget | null | RuntimeDtsEmitError {
+  const flag = argv.map((arg) => STDOUT_RE.exec(arg)).find((match) => match !== null);
+  if (flag === undefined) return null;
+  const selector = flag[1];
+  if (selector === undefined || selector === "prompt") return "prompt";
+  if (selector === "gate") return "gate";
+  return new RuntimeDtsEmitError({
+    reason: `unknown --stdout target "${selector}"; expected "prompt" or "gate"`,
+  });
+}
+
 function main(): RuntimeDtsEmitError | null {
+  const target = parseStdoutTarget(process.argv);
+  if (target instanceof Error) return target;
+
+  // ONE emit, TWO artifacts. Emitting twice would let the copies disagree; deriving both from
+  // this single `declaration` makes that impossible by construction.
   const declaration = generate();
   if (declaration instanceof Error) return declaration;
 
-  // `--stdout` prints the DECLARATION TEXT — the exact value of `RUNTIME_DTS`, not the module
-  // that wraps it — so the drift test can diff a fresh emit against the committed constant
-  // without writing anything into the working tree.
-  if (process.argv.includes("--stdout")) {
-    process.stdout.write(declaration);
+  const reatomBlock = buildReatomCoreBlock();
+  if (reatomBlock instanceof Error) return reatomBlock;
+  const gateDeclaration = `${declaration}\n${reatomBlock}`;
+
+  // `--stdout` prints DECLARATION TEXT — not the module that wraps the gate copy — so the drift
+  // tests can diff a fresh emit of either artifact against the committed one without writing
+  // anything into the working tree.
+  if (target !== null) {
+    process.stdout.write(target === "gate" ? gateDeclaration : declaration);
     return null;
   }
 
   fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
-  fs.writeFileSync(OUT_FILE, renderModule(declaration));
-  // A second, plain-text artifact: the SAME declaration text as `RUNTIME_DTS` above, but as
-  // an ordinary `.d.ts` file rather than a JS string constant. `RUNTIME_DTS` serves the
-  // Gate's in-process `runtimeDts: string` parameter; this file serves the agent-prompt
-  // library (phase-8 WP-3, `agent/prompt/model/runtime-docs.ts`), which stages a real,
-  // human/agent-readable declaration file into the turn workspace BY PATH — "under npm these
-  // are ordinary files inside the installed package" (phase-8 design §WP-3). Both are written
-  // from the SAME `declaration` string in this one run, so they cannot drift from each other;
-  // `runtime-dts.test.ts`'s own drift test pins that.
+  // The GATE copy. `RUNTIME_DTS` serves the hermetic type check's in-process `runtimeDts: string`
+  // parameter and nothing else, so it can afford the ~308 KB of inlined `@reatom/core`
+  // declarations that make a page's atom reads actually typed.
+  fs.writeFileSync(OUT_FILE, renderModule(gateDeclaration));
+  // The PROMPT copy: the same facade declaration as an ordinary `.d.ts` file rather than a JS
+  // string constant, and WITHOUT the inlined block. It serves the agent-prompt library (phase-8
+  // WP-3, `agent/prompt/model/runtime-docs.ts`), which stages a real, human/agent-readable
+  // declaration file into the turn workspace BY PATH — "under npm these are ordinary files inside
+  // the installed package" (phase-8 design §WP-3). It is a PROMPT ATTACHMENT, so its size is a
+  // first-class constraint and the inlined block would be a tenfold regression against no benefit
+  // at all: the agent reads this to learn the facade's surface, not `@reatom/core`'s internals.
+  // Both artifacts come from the SAME `declaration` in this one run, so the facade text they
+  // share cannot drift; `runtime-dts.test.ts` pins that the gate copy is this file plus exactly
+  // one block, and pins this file's size ceiling.
   fs.writeFileSync(DTS_OUT_FILE, declaration);
-  console.log(`wrote ${OUT_FILE} (${String(declaration.length)} chars of declaration)`);
-  console.log(`wrote ${DTS_OUT_FILE}`);
+  console.log(`wrote ${OUT_FILE} (${String(gateDeclaration.length)} chars, gate copy)`);
+  console.log(`wrote ${DTS_OUT_FILE} (${String(declaration.length)} chars, prompt copy)`);
   return null;
 }
 
