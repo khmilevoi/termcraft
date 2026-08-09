@@ -52,7 +52,7 @@ import {
   previewRegionSize,
 } from "ui/workspace";
 
-import { createEditorBridge, mirrorPrimaryInput } from "./primary-input";
+import { applyTurnTerminal, createEditorBridge, mirrorPrimaryInput } from "./primary-input";
 
 /** Poll interval (ms) the frame consumer waits between checks when no preview session exists. */
 const FRAME_POLL_MS = 30;
@@ -111,6 +111,20 @@ export interface UiLocalState {
    *  {@link WorkspaceLocalState.chatFollowing} for the full doc comment; this is that same fact,
    *  mirrored here for the same structural reason every other Workspace-read atom is. */
   readonly chatFollowing: Atom<boolean>;
+  /**
+   * The in-flight turn's own sent text, or `null` (WP-9, design-agent-feedback-loop repair,
+   * Task 11). No Kernel event ever echoes back the text a `turn.start` carried — every
+   * `turn.*` payload (`core/protocol`) names `turnId`s and diagnostics, never the message that
+   * started it — so this is the ONE place that fact survives between the composer clearing on
+   * accept and a possible LATER `turn.failed`. Set by `applyIntent`'s `composer-submit` the
+   * moment the Kernel accepts the dispatch (the SAME instant the composer itself clears);
+   * consumed and cleared by `primary-input.ts`'s `applyTurnTerminal`, called (from `deps.ts`'s
+   * own `applyEnvelope`) for every terminal turn event (`turn.completed`/`turn.failed`/
+   * `turn.cancelled`) — see that function's own doc for why only `turn.failed` restores it into
+   * the draft. Only one turn can ever be in flight at once (`TURN_ALREADY_ACTIVE`), so this
+   * single slot needs no `turnId` correlation.
+   */
+  readonly pendingTurnText: Atom<string | null>;
   /**
    * The `operationId` of the last export result the user dismissed (M14), or `null`. There is
    * no kernel export-ack command (`core/protocol`'s `CommandKindV1` has no such member — export
@@ -648,6 +662,17 @@ export function createUiDeps(
         if (distributed.kind === "preview.geometryResult") {
           handleGeometryResult(deps, distributed);
         }
+        // WP-9 (design-agent-feedback-loop repair, Task 11): the ONE spot every turn-terminal
+        // event lands, so it is also the ONE spot that can restore (or discard) the in-flight
+        // turn's own remembered text — see `applyTurnTerminal`'s own doc (`primary-input.ts`)
+        // for why only `turn.failed` restores it.
+        if (
+          distributed.kind === "turn.completed" ||
+          distributed.kind === "turn.failed" ||
+          distributed.kind === "turn.cancelled"
+        ) {
+          applyTurnTerminal(deps, distributed.kind);
+        }
         mirror.apply(distributed);
         // AFTER the mirror fold, not before: `preview.sessionReady`/`preview.sourceChanged` are
         // what make `port.preview()` report the successor, and the fold is what the rest of the
@@ -1010,6 +1035,7 @@ export function createUiDeps(
     // Seeded `true`: a freshly mounted chat opens sticky-bottom (`Workspace.tsx`'s own
     // `stickyStart="bottom"`). See `WorkspaceLocalState.chatFollowing`'s doc comment.
     chatFollowing: atom(true, "ui.local.chatFollowing"),
+    pendingTurnText: atom<string | null>(null, "ui.local.pendingTurnText"),
     exportDismissed: atom<UUIDv7 | null>(null, "ui.local.exportDismissed"),
     agentHealth: atom<AgentHealth>(DEFAULT_AGENT_HEALTH, "ui.local.agentHealth"),
     agentSelection: atom<HomeAgentSelection | null>(agentSelection, "ui.local.agentSelection"),

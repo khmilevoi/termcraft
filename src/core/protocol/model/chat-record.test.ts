@@ -124,4 +124,35 @@ describe("chatRecordDtoV1Schema", () => {
       chatRecordDtoV1Schema.safeParse({ ...validSystemError, outcome: "aborted" }).success,
     ).toBe(false);
   });
+
+  describe("per-warning file/line (Task 11, design-agent-feedback-loop repair)", () => {
+    test("accepts a warning carrying an explicit file/line", () => {
+      const withLocatedWarning = {
+        ...validAgent,
+        warnings: [
+          {
+            kind: "nondeterministic-time",
+            message: "`Date.now()` reads wall-clock time",
+            file: "pages/stopwatch.tsx",
+            line: 55,
+          },
+        ],
+      };
+      expect(chatRecordDtoV1Schema.safeParse(withLocatedWarning).success).toBe(true);
+    });
+
+    test("requires explicit null file/line on a warning, never omission — the DTO's own rule", () => {
+      const omittedFileLine = {
+        ...validAgent,
+        warnings: [{ kind: "gate:orphan-import", message: "unused import" }],
+      };
+      expect(chatRecordDtoV1Schema.safeParse(omittedFileLine).success).toBe(false);
+
+      const explicitNulls = {
+        ...validAgent,
+        warnings: [{ kind: "gate:orphan-import", message: "unused import", file: null, line: null }],
+      };
+      expect(chatRecordDtoV1Schema.safeParse(explicitNulls).success).toBe(true);
+    });
+  });
 });

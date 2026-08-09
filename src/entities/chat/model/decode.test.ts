@@ -115,6 +115,31 @@ describe("decodeChatRecord", () => {
     }
   });
 
+  test("decodes a warning carrying file/line (Task 11 widening) — TREE-relative, matching GateWarningV1.file", () => {
+    const rec = ok(
+      decodeChatRecord({
+        kind: "agent",
+        recordId: uuidv7(),
+        turnId: uuidv7(),
+        text: "done",
+        changedPages: [],
+        warnings: [
+          {
+            kind: "nondeterministic-time",
+            message: "`Date.now()` reads wall-clock time",
+            file: "pages/stopwatch.tsx",
+            line: 55,
+          },
+        ],
+        ts: TS,
+      }),
+    );
+    if (rec.kind === "agent") {
+      expect(rec.warnings[0]?.file).toBe("pages/stopwatch.tsx");
+      expect(rec.warnings[0]?.line).toBe(55);
+    }
+  });
+
   test("decodes an empty-diff agent record", () => {
     const rec = ok(
       decodeChatRecord({

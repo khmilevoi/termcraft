@@ -201,4 +201,148 @@ describe("ChatRecord component (design §3.2 markdown-lite chat record)", () => 
     expect(run).toBeDefined();
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.fg);
   });
+
+  // WP-11a (design-agent-feedback-loop repair, Task 11): a turn record persisted with residual
+  // Gate warnings must SHOW them — the measured defect this closes had four `unguarded-timer`
+  // warnings surviving on a turn record while the agent's own chat message said "fixed", with
+  // no way for the user to see otherwise. The red, ✗-prefixed treatment is the design's own
+  // vocabulary (`design/termcraft-engine.js:807`'s `wsCancelled` scene: `{system:'✗ pages/main/
+  // page.tsx needs a newer termcraft (kit 2.1)',c:P.red}`), reused rather than invented.
+  describe("residual warnings (WP-11a, Task 11)", () => {
+    test("an accepted turn carrying warnings renders them, red and ✗-prefixed", async () => {
+      const handle = await createHeadlessRenderer({ w: 60, h: 6 });
+      open = handle;
+      handle.mount(
+        <ChatRecord
+          id="rec"
+          role="agent"
+          agentLabel="claude"
+          lines={[{ spans: [{ text: "done" }] }]}
+          warnings={[
+            { kind: "nondeterministic-time", message: "`Date.now()` reads wall-clock time" },
+            { kind: "dropped-id", message: "element has no id" },
+          ]}
+        />,
+      );
+      await handle.render();
+      const frame = handle.capture();
+
+      const first = findRun(frame, "Date.now()");
+      expect(first).toBeDefined();
+      expect(first?.text.startsWith("✗ ")).toBe(true);
+      expect(first && extractRgb(first.fg)).toBe<string>(SHELL_PALETTE.red);
+
+      const second = findRun(frame, "element has no id");
+      expect(second).toBeDefined();
+      expect(second?.text.startsWith("✗ ")).toBe(true);
+      expect(second && extractRgb(second.fg)).toBe<string>(SHELL_PALETTE.red);
+    });
+
+    test("a warning renders its file when the record carries one", async () => {
+      const handle = await createHeadlessRenderer({ w: 60, h: 4 });
+      open = handle;
+      handle.mount(
+        <ChatRecord
+          id="rec"
+          role="agent"
+          agentLabel="claude"
+          lines={[]}
+          warnings={[
+            {
+              kind: "nondeterministic-time",
+              message: "reads wall-clock time",
+              file: "pages/stopwatch.tsx",
+              line: 55,
+            },
+          ]}
+        />,
+      );
+      await handle.render();
+      const frame = handle.capture();
+      const rendered = frame.rows
+        .flat()
+        .map((run) => run.text)
+        .join("");
+      expect(rendered).toContain("design/pages/stopwatch.tsx");
+    });
+
+    test("a file already prefixed with design/ is never double-prefixed", async () => {
+      const handle = await createHeadlessRenderer({ w: 60, h: 4 });
+      open = handle;
+      handle.mount(
+        <ChatRecord
+          id="rec"
+          role="agent"
+          agentLabel="claude"
+          lines={[]}
+          warnings={[
+            {
+              kind: "nondeterministic-time",
+              message: "reads wall-clock time",
+              // Nothing produces this today (`GateWarningV1.file` is always TREE-relative), but
+              // the guard exists for the same reason `core/turns/model/prompt.ts`'s
+              // `toWorkspacePath` carries an identical one — see `designTreePath`'s own comment.
+              file: "design/pages/stopwatch.tsx",
+              line: 55,
+            },
+          ]}
+        />,
+      );
+      await handle.render();
+      const frame = handle.capture();
+      const rendered = frame.rows
+        .flat()
+        .map((run) => run.text)
+        .join("");
+      expect(rendered).toContain("design/pages/stopwatch.tsx");
+      expect(rendered).not.toContain("design/design/pages/stopwatch.tsx");
+    });
+
+    test("a warning with no file renders without a dangling separator", async () => {
+      const handle = await createHeadlessRenderer({ w: 60, h: 4 });
+      open = handle;
+      handle.mount(
+        <ChatRecord
+          id="rec"
+          role="agent"
+          agentLabel="claude"
+          lines={[]}
+          // The pre-Task-11 shape: no `file` at all — must render, not crash, and never a
+          // dangling `✗ message in ` with nothing after the "in".
+          warnings={[{ kind: "unguarded-timer", message: "setTimeout without guard" }]}
+        />,
+      );
+      await handle.render();
+      const frame = handle.capture();
+      const run = findRun(frame, "setTimeout without guard");
+      expect(run).toBeDefined();
+      expect(run?.text).toBe("✗ setTimeout without guard");
+      expect(run?.text).not.toContain(" in ");
+    });
+
+    test("an agent record with no warnings renders exactly as it does today (regression fence)", async () => {
+      const handle = await createHeadlessRenderer({ w: 30, h: 3 });
+      open = handle;
+      handle.mount(
+        <ChatRecord
+          id="rec"
+          role="agent"
+          agentLabel="claude"
+          lines={[{ spans: [{ text: "done — no warnings" }] }]}
+        />,
+      );
+      await handle.render();
+      const frame = handle.capture();
+      const rows = frame.rows
+        .map((row) =>
+          row
+            .map((run) => run.text)
+            .join("")
+            .trimEnd(),
+        )
+        .filter((text) => text !== "");
+      // Header + one body line, nothing else — no stray `✗` row painted for an omitted prop.
+      expect(rows).toEqual(["● claude", "done — no warnings"]);
+    });
+  });
 });

@@ -82,6 +82,36 @@ describe("recordToChatRecordProps (WP-10 Task 8 — the M11 handoff mapping)", (
     ]);
   });
 
+  test("an agent record's residual warnings thread through, file/line normalized from wire null to undefined (Task 11)", () => {
+    const record = agentRecord({
+      warnings: [
+        { kind: "gate:orphan-import", message: "unused import", file: null, line: null },
+        {
+          kind: "nondeterministic-time",
+          message: "reads wall-clock time",
+          file: "pages/stopwatch.tsx",
+          line: 55,
+        },
+      ],
+    });
+    const props = recordToChatRecordProps(record, "claude");
+    expect(props.warnings).toEqual([
+      { kind: "gate:orphan-import", message: "unused import", file: undefined, line: undefined },
+      {
+        kind: "nondeterministic-time",
+        message: "reads wall-clock time",
+        file: "pages/stopwatch.tsx",
+        line: 55,
+      },
+    ]);
+  });
+
+  test("a user record omits warnings entirely — only an agent record carries any", () => {
+    const record = userRecord();
+    const props = recordToChatRecordProps(record, "claude");
+    expect(props.warnings).toBeUndefined();
+  });
+
   test("system:error and system:cancelled records render their own text as an agent-role record", () => {
     const errorRecord: ChatRecordDto = {
       kind: "system:error",

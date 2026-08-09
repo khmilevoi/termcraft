@@ -280,12 +280,15 @@ export function appendPromptFold(baseUserMessage: string, fold: string): string 
  * SAME functions {@link foldGateDiagnosticsIntoPrompt} already uses — one rendering of a Gate
  * warning, one determinism-kind filter, two entry points into the prompt. The only new piece
  * is {@link toSurvivingWarningDto}, a pure adapter from what the chat actually persisted
- * (`entities/chat/types.ts`'s `ChatWarningSnapshot` — `kind`/`message` only; `file`/`line`/
- * `column`/`blockedPages` were never written there, see that type's own doc) into the shape
- * `formatGateWarning`/`isDeterminismWarning` already expect. `file`/`line`/`column`/
- * `blockedPages` land as `null` for a warning that never carried them — genuinely absent, not
- * fabricated, the exact convention `formatGateWarning`'s own doc already establishes for a
- * file-less warning.
+ * (`entities/chat/types.ts`'s `ChatWarningSnapshot`) into the shape `formatGateWarning`/
+ * `isDeterminismWarning` already expect. `column`/`blockedPages` land as `null` unconditionally
+ * — `ChatWarningSnapshot` never carries either (see that type's own doc). `file`/`line`
+ * DIFFER (Task 11, design-agent-feedback-loop repair, 2026-08-09): `ChatWarningSnapshot` gained
+ * both as OPTIONAL fields, so a record persisted from here on carries them when Gate's own
+ * `GateWarningV1.file`/`.line` did; a record persisted before Task 11 (or a genuinely tree-wide
+ * warning) still carries neither, and lands as `null` here exactly like `column`/`blockedPages`
+ * always have — genuinely absent, not fabricated, the exact convention `formatGateWarning`'s
+ * own doc already establishes for a file-less warning.
  */
 export interface SurvivingWarningV1 {
   readonly kind: string;

@@ -54,7 +54,18 @@ export function chatRecordToDtoV1(record: ChatRecord): ChatRecordDtoV1 {
       turnId: record.turnId,
       text: record.text,
       changedPages: record.changedPages,
-      warnings: record.warnings,
+      // `file`/`line` mapped explicitly (Task 11, design-agent-feedback-loop repair): a bare
+      // `record.warnings` passthrough would leave them `undefined` on the wire, violating this
+      // module's own "every `undefined`-typed optional becomes an explicit `null`" rule
+      // (`core/protocol/model/chat-record.ts`'s header) — `ChatWarningSnapshotDtoV1.file`/`.line`
+      // are `| null`, never `?`, precisely so a strict-schema `.parse()` never silently drops
+      // them for omission instead of rejecting a stale caller.
+      warnings: record.warnings.map((w) => ({
+        kind: w.kind,
+        message: w.message,
+        file: w.file ?? null,
+        line: w.line ?? null,
+      })),
       ts: record.ts,
     };
   }

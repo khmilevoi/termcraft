@@ -1300,3 +1300,36 @@ Four more were confirmed real but are NOT fixed here, each with the reason:
   `spawnFor` that DOES depend on `spec` to silently compute the wrong command for an adopted spare.
   NO OWNER — recorded so a future `spawnFor` implementer reads this before assuming `ks.spec` is
   used uniformly.
+
+## WP-9: no design screen for a backend-failed turn / no re-send affordance — NO OWNER, raised by Task 11 (design-agent-feedback-loop repair, 2026-08-09)
+
+`design/12-errors-edge-states.dc.html` has TEN error screens and none of them is a backend-failed
+turn or a re-send affordance. The design's own answer to a failed generation is the system line
+`⟲ generation failed after 3 tries — current design unchanged` (`design/termcraft-engine.js:793`,
+`wsErrRetry`'s scene) — a statement that the turn failed, nothing offering to retry it.
+CLAUDE.md's "Design is a source of truth — never invent it" forbids drawing the missing screen
+unilaterally, so Task 11 shipped ONLY the half of WP-9 that needs no new visual language at all:
+**on a terminal turn failure (`turn.failed`, never `turn.cancelled`), the failed turn's own sent
+text is restored into the EXISTING composer draft** — reusing the composer's already-designed
+held-draft state (`design/03-workspace-generating.dc.html`'s `ws-gen-typing-120`) and the SAME
+append-never-overwrite mechanism `compose-repair` (F6) already established
+(`src/ui/app/model/primary-input.ts`'s `applyTurnTerminal`, built on `setPrimaryInput`). This
+alone satisfies WP-9's own done-when: the user is one keystroke (⏎) from retrying.
+
+**NOT shipped, and NOT invented:** a new attach line, a new status-bar hint, or a "retry"/
+"re-send" affordance drawn ON the failed chat record itself. Each needs a design decision this
+plan does not have. A real retry affordance needs, at minimum, these screens/states to exist
+first — none of them do today:
+
+- A failed-turn chat record's own visual treatment (color, glyph, whether it reads as a
+  `system:error` line or something new) — `design/12-errors-edge-states.dc.html` has no such row.
+- A re-send key hint on the status bar or the composer attach line, and its wording — the
+  existing attach-line vocabulary (`ws-gen-typing-120`, `wsHostCrash`'s F6 line) is for a
+  DIFFERENT case (a live repair prompt, not a settled failure record).
+- Whether re-send targets the SAME turn (retry) or opens a fresh one — a decision `design/`
+  nowhere states, and the two read very differently in a chat transcript.
+
+NO OWNER. Whoever picks this up must design the screen(s) first (per CLAUDE.md's own rule: design
+updates before code follows it, exactly as `docs/superpowers/red-debt.md`'s "UI: the repair
+prompt names a path that cannot exist" row above was eventually closed), then wire it — never the
+reverse.

@@ -134,6 +134,20 @@ describe("applyIntent — text inputs", () => {
     expect(deps.local.composer()).toBe("");
   });
 
+  // WP-9 (design-agent-feedback-loop repair, Task 11): the SAME accept that clears the composer
+  // is the only moment this text could otherwise be lost before a LATER `turn.failed` might need
+  // to restore it — see `UiLocalState.pendingTurnText` and `primary-input.ts`'s
+  // `applyTurnTerminal` for the consuming half of this round trip.
+  test("composer-submit remembers the sent text once accepted, for a later turn.failed to restore", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    deps.local.composer.set("add a gpu temperature panel");
+    applyIntent({ kind: "composer-submit" }, deps);
+    await tick();
+    expect(deps.local.pendingTurnText()).toBe("add a gpu temperature panel");
+  });
+
   // finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn, so Enter keeps
   // resolving to `composer-submit` (keymap.ts's `composerActive` no longer excludes
   // `turnRunning`) — the refusal now happens here, before a second `turn.start` is ever

@@ -98,6 +98,39 @@ export function setPrimaryInput(deps: UiDeps, text: string): void {
   withEditor(primaryEditorAtom(deps), "setPrimaryInput", (handle) => handle.setText(text));
 }
 
+/**
+ * Restores (or discards) the in-flight turn's own remembered text once its terminal event
+ * arrives — WP-9, design-agent-feedback-loop repair, Task 11's own done-when: "the user is one
+ * keystroke from retrying." Called from `deps.ts`'s `applyEnvelope` for every
+ * `turn.completed`/`turn.failed`/`turn.cancelled` event (the three share one payload shape,
+ * `core/protocol`'s `TurnTerminalPayloadV1` — this only needs to know WHICH of the three kind
+ * arrived, never the payload itself).
+ *
+ * Only a genuine BACKEND failure (`turn.failed`) restores the draft:
+ * - `turn.completed` needed no restore — the turn succeeded, there is nothing to retry.
+ * - `turn.cancelled` is the user's OWN deliberate stop (design's `wsCancelled` system line:
+ *   "generation cancelled — current design unchanged"). Re-filling the composer would fight a
+ *   choice the user just made — WP-9's own scope decision restores ONLY on a genuine failure,
+ *   never on a cancel.
+ *
+ * UPSTREAM, like {@link setPrimaryInput} just above, and built ON it — reusing the SAME
+ * mechanism `applyIntent`'s `compose-repair` branch already established, append rule included:
+ * "NEVER overwrite a draft: this codebase already carries two defect fixes built on that
+ * principle." A restore that clobbered whatever the user typed WHILE the turn was failing would
+ * be a THIRD instance of that exact defect, so this reuses {@link setPrimaryInput} rather than
+ * writing a second restore path.
+ */
+export function applyTurnTerminal(
+  deps: UiDeps,
+  kind: "turn.completed" | "turn.failed" | "turn.cancelled",
+): void {
+  const pendingText = deps.local.pendingTurnText();
+  deps.local.pendingTurnText.set(null);
+  if (kind !== "turn.failed" || pendingText === null) return;
+  const draft = deps.local.composer();
+  setPrimaryInput(deps, draft.length === 0 ? pendingText : `${draft}\n\n${pendingText}`);
+}
+
 /** UPSTREAM, for the pin popup's own draft. */
 export function setPinInput(deps: UiDeps, text: string): void {
   deps.local.pinDraft.set(text);

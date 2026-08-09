@@ -1551,6 +1551,16 @@ async function runTurnStart(
 
     finalizeSummary = {
       changedPages: terminalChangedPages(changedPageSlugs, validation.slice.pages, candidate),
+      // NOT widened (Task 11 audit, design-agent-feedback-loop repair): this feeds
+      // `TurnWarningV1`/`turnWarningV1Schema` (`core/protocol/model/event-payload.ts`) through
+      // the `turn.completed` event below — a DIFFERENT, KCC-FIXED wire payload
+      // (`TurnTerminalPayloadV1`'s own doc: "no NEW field was added ... a brand-new wire
+      // discriminant was considered and rejected both times"), not `ChatWarningSnapshot`. Task
+      // 11 widens the PERSISTED chat record's warnings (`agentRecord.warnings` just below) —
+      // this sibling literal only LOOKS like the same site because both once shared this exact
+      // `{ kind: w.kind, message: w.message }` text; they feed unrelated schemas, and widening
+      // this one would mean also widening `turnWarningV1Schema`, which is explicitly out of
+      // this task's scope and against that type's own documented decision.
       gateWarnings: validation.warnings.map((w) => ({ kind: w.kind, message: w.message })),
     };
 
@@ -1567,7 +1577,19 @@ async function runTurnStart(
         // — a `lib/theme.ts` edit belongs in this list as the pages it altered, and the raw
         // path would mean nothing in a chat transcript.
         changedPages: [...changedPageSlugs],
-        warnings: validation.warnings.map((w) => ({ kind: w.kind, message: w.message })),
+        // `file`/`line` CARRIED THROUGH (Task 11, design-agent-feedback-loop repair):
+        // `ChatWarningSnapshot` used to drop them here, which is the exact measured defect this
+        // task fixes — a warning the chat persisted but never named a file for, so the user (and
+        // the next turn's surviving-warnings fold, `resolveSurvivingWarningsFold` below) had no
+        // way to locate it. `w.file`/`w.line` are `GateWarningV1`'s own optional fields,
+        // TREE-relative, carried verbatim — `ChatWarningSnapshot.file`/`.line` are optional for
+        // exactly this reason.
+        warnings: validation.warnings.map((w) => ({
+          kind: w.kind,
+          message: w.message,
+          file: w.file,
+          line: w.line,
+        })),
         ts: context.deps.clock.now().toISOString(),
       },
       // THE PINS THIS MESSAGE CARRIED (defect fix, 2026-07-26).

@@ -64,15 +64,29 @@ export const chatUserRecordDtoV1Schema = z.strictObject({
 // agent
 // ---------------------------------------------------------------------------
 
-/** Mirrors `entities/chat`'s `ChatWarningSnapshot` (`types.ts:23-26`): an immutable historical Gate-warning snapshot, decoupled from `gate/`'s own live warning type. */
+/**
+ * Mirrors `entities/chat`'s `ChatWarningSnapshot` (`types.ts`): an immutable historical
+ * Gate-warning snapshot, decoupled from `gate/`'s own live warning type.
+ *
+ * `file`/`line` ADDED (Task 11, design-agent-feedback-loop repair, 2026-08-09), mirroring
+ * `ChatWarningSnapshot.file`/`.line` — TREE-relative, matching `GateWarningV1.file`. `| null`,
+ * never `?`, matching this file's own "every `undefined`-typed optional on the entities side
+ * becomes an explicit `null` here" rule stated above: `core/chats/model/records.ts`'s
+ * `chatRecordToDtoV1` maps `w.file ?? null`/`w.line ?? null` for every warning, never omits the
+ * key.
+ */
 export interface ChatWarningSnapshotDtoV1 {
   readonly kind: string;
   readonly message: string;
+  readonly file: string | null;
+  readonly line: number | null;
 }
 
 const chatWarningSnapshotDtoV1Schema = z.strictObject({
   kind: z.string().min(1),
   message: z.string(),
+  file: z.string().min(1).nullable(),
+  line: z.number().int().positive().nullable(),
 });
 
 export interface ChatAgentRecordDtoV1 {

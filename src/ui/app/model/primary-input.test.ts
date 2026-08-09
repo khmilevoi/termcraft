@@ -5,7 +5,12 @@ import { createFakeKernel, snapshot } from "ui/testing";
 import type { TextEditorHandle } from "ui/text-input";
 
 import { createUiDeps } from "./deps";
-import { mirrorPrimaryInput, primaryInputAtom, setPrimaryInput } from "./primary-input";
+import {
+  applyTurnTerminal,
+  mirrorPrimaryInput,
+  primaryInputAtom,
+  setPrimaryInput,
+} from "./primary-input";
 
 /**
  * A handle that records what was done to it, standing in for a mounted editor.
@@ -69,6 +74,53 @@ describe("setPrimaryInput — the one upstream write (§7.2)", () => {
     expect(deps.local.prompt()).toBe("/");
     expect(deps.local.composer()).toBe("");
     expect(handle.calls).toEqual(["setText:/"]);
+  });
+});
+
+// WP-9 (design-agent-feedback-loop repair, Task 11): "on a terminal turn failure, the failed
+// turn's user text is restored into the EXISTING composer draft" — never a new affordance, see
+// `applyTurnTerminal`'s own doc comment above for the full reasoning and its citations.
+describe("applyTurnTerminal — restoring (or discarding) the in-flight turn's own text", () => {
+  test("a terminal turn failure leaves the failed turn's text in the composer draft", () => {
+    const deps = workspaceDeps();
+    deps.local.pendingTurnText.set("add a gpu temperature panel");
+    applyTurnTerminal(deps, "turn.failed");
+    expect(deps.local.composer()).toBe("add a gpu temperature panel");
+    // Consumed, not left around for a LATER unrelated terminal event to restore again.
+    expect(deps.local.pendingTurnText()).toBeNull();
+  });
+
+  test("restoring APPENDS to whatever the user typed while the turn was failing — never overwrites (R5)", () => {
+    const deps = workspaceDeps();
+    deps.local.composer.set("meanwhile I also want");
+    deps.local.pendingTurnText.set("add a gpu temperature panel");
+    applyTurnTerminal(deps, "turn.failed");
+    expect(deps.local.composer()).toBe("meanwhile I also want\n\nadd a gpu temperature panel");
+  });
+
+  test("a CANCELLED turn does not restore the draft — the user chose to stop", () => {
+    const deps = workspaceDeps();
+    deps.local.pendingTurnText.set("add a gpu temperature panel");
+    applyTurnTerminal(deps, "turn.cancelled");
+    expect(deps.local.composer()).toBe("");
+    // Still consumed — a cancel is terminal too, and a stray later restore would be worse.
+    expect(deps.local.pendingTurnText()).toBeNull();
+  });
+
+  test("a COMPLETED turn discards the remembered text without touching the composer", () => {
+    const deps = workspaceDeps();
+    deps.local.composer.set("already typing the next thing");
+    deps.local.pendingTurnText.set("add a gpu temperature panel");
+    applyTurnTerminal(deps, "turn.completed");
+    expect(deps.local.composer()).toBe("already typing the next thing");
+    expect(deps.local.pendingTurnText()).toBeNull();
+  });
+
+  test("no pending text (e.g. this turn started before Task 11 wired the atom) is a no-op, not a crash", () => {
+    const deps = workspaceDeps();
+    expect(deps.local.pendingTurnText()).toBeNull();
+    expect(() => applyTurnTerminal(deps, "turn.failed")).not.toThrow();
+    expect(deps.local.composer()).toBe("");
   });
 });
 

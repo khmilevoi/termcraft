@@ -433,8 +433,11 @@ describe("foldSurvivingWarnings — warnings that survived an ACCEPTED turn (Tas
    * Reatom. Its input shape is deliberately looser than `TurnGateWarningDtoV1`
    * (`file`/`line`/`column`/`blockedPages` are all optional): the real caller
    * (`core/kernel/model/handlers/turn.ts`'s `resolveSurvivingWarningsFold`) only ever has
-   * `entities/chat/types.ts`'s `ChatWarningSnapshot` to hand it — `kind`/`message` only, since
-   * that is all the chat record ever persisted.
+   * `entities/chat/types.ts`'s `ChatWarningSnapshot` to hand it. Since Task 11
+   * (design-agent-feedback-loop repair, 2026-08-09) that carries `file`/`line` when Gate itself
+   * set them — `column`/`blockedPages` are still never persisted there (that type's own doc) —
+   * so the test right below exercises the now-common "with a location" case, and the one after
+   * it pins the older/absent-file case this whole file used to be the only shape of.
    */
 
   test("determinism warnings that survived an accepted turn fold into the next turn's prompt", () => {

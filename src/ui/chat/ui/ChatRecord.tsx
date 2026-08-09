@@ -1,6 +1,20 @@
+import { DESIGN_DIRNAME } from "entities/design-tree";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import type { MarkdownLine, MarkdownSpan } from "../model/markdown-lite";
+
+/**
+ * One residual Gate warning riding an agent record (WP-11a, `entities/chat`'s
+ * `ChatWarningSnapshot` by another name — this file does not import `entities/chat` directly,
+ * matching `ChatRecordProps`' own presentation-layer shape rather than a domain/DTO type).
+ * `file`/`line` are TREE-relative and optional: an old, pre-Task-11 record carries neither.
+ */
+export interface ChatWarningRowProps {
+  readonly kind: string;
+  readonly message: string;
+  readonly file?: string;
+  readonly line?: number;
+}
 
 /**
  * Props for the collapsed, persisted chat record (design §3.2 "Markdown-lite chat
@@ -23,6 +37,17 @@ export interface ChatRecordProps {
   readonly lines: readonly import("../model/markdown-lite").MarkdownLine[];
   /** Collapsed/persisted records render dim (design: finished records are P.dim, not green). */
   readonly dim?: boolean;
+  /**
+   * Residual Gate warnings this record's turn was accepted carrying (WP-11a,
+   * design-agent-feedback-loop repair, Task 11). MEASURED: a turn record persisted four
+   * `unguarded-timer` warnings while the agent's own chat message said the timer was fixed —
+   * the user had no way to see them, since the agent's prose was the only signal on screen.
+   * One row per warning, rendered after the record's own lines, ONLY for `role: "agent"`
+   * (`recordToChatRecordProps` never supplies this for a `user` record — same convention as
+   * `agentLabel` above). Optional/empty for the overwhelmingly common case (a record with no
+   * residual warnings) and for every `user` record.
+   */
+  readonly warnings?: readonly ChatWarningRowProps[];
 }
 
 /** One span's resolved foreground + attribute mask against the line's base color. */
@@ -44,6 +69,44 @@ function spanStyle(span: MarkdownSpan, baseFg: `#${string}`): SpanStyle {
     fg: baseFg,
     attrs: shellAttrs({ bold: span.bold === true, italic: span.italic === true }),
   };
+}
+
+const DESIGN_TREE_PREFIX = `${DESIGN_DIRNAME}/`;
+
+/**
+ * `warning.file` is TREE-relative, matching `GateWarningV1.file`'s own doc — the `design/`
+ * prefix is added at DISPLAY time, never persisted. `core/turns/model/prompt.ts`'s
+ * `toWorkspacePath` is the ORIGINAL place that prefix gets added (for the agent-facing retry
+ * prompt); this is a SECOND, UI-side echo of the identical rule for the chat panel the user
+ * reads, not a reuse of that function — `ui` may not import `core/turns` (mirror/DTO boundary,
+ * `entities/design-tree`'s `DESIGN_DIRNAME` is the one piece both sides share).
+ *
+ * Guarded against double-prefixing exactly like `toWorkspacePath`: nothing produces an
+ * already-prefixed `file` today, but a silent `design/design/pages/a.tsx` would be a worse
+ * failure than this `startsWith` check.
+ */
+function designTreePath(file: string): string {
+  return file.startsWith(DESIGN_TREE_PREFIX) ? file : `${DESIGN_TREE_PREFIX}${file}`;
+}
+
+/**
+ * One residual warning's display line — the design's OWN vocabulary for a red, ✗-prefixed
+ * system line naming a file inside the chat sequence: `wsCancelled`'s scene ends with
+ * `{system:'✗ pages/main/page.tsx needs a newer termcraft (kit 2.1)',c:P.red}`
+ * (`design/termcraft-engine.js:807`). Reused rather than invented — this is the one place the
+ * engine source draws a per-file diagnostic inside `chatSeq`, and residual warnings are exactly
+ * that: a per-file (or, when `file` is absent, tree-wide) diagnostic.
+ *
+ * `file`-less warnings (every record persisted before Task 11, or a genuinely tree-wide Gate
+ * warning) render with NO location clause — never a dangling `✗ message in ` with nothing after
+ * it, mirroring `core/turns/model/prompt.ts`'s `formatGateWarning`'s identical omission rule.
+ */
+function formatWarningLine(warning: ChatWarningRowProps): string {
+  const location =
+    warning.file === undefined
+      ? ""
+      : ` in ${designTreePath(warning.file)}${warning.line === undefined ? "" : ` line ${warning.line}`}`;
+  return `✗ ${warning.message}${location}`;
 }
 
 /**
@@ -97,6 +160,19 @@ export function ChatRecord(props: ChatRecordProps) {
               </span>
             );
           })}
+        </text>
+      ))}
+      {(props.warnings ?? []).map((warning, warningIndex) => (
+        // Stable `id` per row (`gate/model/lints.ts`'s `lintUnpointedElements` warns on a raw
+        // element with none, and this project's own UI is subject to the same convention it
+        // enforces on authored pages).
+        <text
+          key={`warning-${warningIndex}`}
+          id={`${props.id}-warning-${warningIndex}`}
+          fg={SHELL_PALETTE.red}
+          wrapMode="word"
+        >
+          {formatWarningLine(warning)}
         </text>
       ))}
     </box>

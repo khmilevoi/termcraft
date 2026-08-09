@@ -229,6 +229,46 @@ describe("createUiDeps runtime", () => {
     scoped.run(() => unsubscribe?.());
   });
 
+  // WP-9 (design-agent-feedback-loop repair, Task 11): the FULL wire, not just its two halves —
+  // `applyIntent`'s `composer-submit` remembers the sent text, `applyEnvelope`'s `turn.failed`
+  // branch calls `applyTurnTerminal`, and the composer draft ends up holding it. Each half also
+  // has its own focused unit test (`intent.test.ts`, `primary-input.test.ts`); this is the one
+  // proof they are actually wired together through `createUiDeps`'s real `applyEnvelope`.
+  test("a genuine turn.failed event, delivered through the real Kernel subscription, restores the composer draft", async () => {
+    // The snapshot goes through the `FakeKernel`'s OWN bootstrap delivery (`options.snapshot`),
+    // not a manual `deps.mirror.apply` before subscribing — `subscribe`'s first synchronous
+    // delivery is the FakeKernel's default (bare) snapshot (`fake-kernel.ts`'s own comment: "the
+    // real bus delivers one snapshot synchronously, before returning the unsubscribe"), which
+    // would silently overwrite a pre-subscribe manual apply and put `deps.screen()` back on
+    // `"home"` — exactly the mistake this comment exists to head off for the next editor.
+    const kernel = createFakeKernel({
+      snapshot: { projectId: uuidv7(), activePageSlug: "main", trust: "trusted" },
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+
+    deps.local.composer.set("add a gpu temperature panel");
+    applyIntent({ kind: "composer-submit" }, deps);
+    await tick();
+    expect(deps.local.composer()).toBe("");
+
+    kernel.emit(
+      event("turn.failed", {
+        turnId: uuidv7(),
+        outcome: "failed",
+        changedPages: [],
+        warnings: [],
+        failure: { code: "BACKEND_FAILED", retryable: true, safeMessage: "backend crashed", details: {} },
+      }),
+    );
+    await tick();
+
+    unsubscribe();
+    expect(deps.local.composer()).toBe("add a gpu temperature panel");
+  });
+
   test("disconnect terminates a blocked frame consumer", async () => {
     const preview = createFakePreviewSession();
     const kernel = createFakeKernel();

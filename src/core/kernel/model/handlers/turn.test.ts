@@ -1966,6 +1966,114 @@ describe('turnHandlers["turn.start"]', () => {
     expect(call.smoke).toBe("run");
   });
 
+  test("an accepted turn's persisted ChatAgentRecord carries a Gate warning's file/line, not just kind/message (WP-11a, Task 11)", async () => {
+    const HOME = "home" as PageSlug;
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    const gateRunner: GateRunner = {
+      runManifestSlice: async () => ({
+        errors: [],
+        slice: { pages: [{ slug: HOME, entry: defaultFakeEntry(HOME) }], active: null },
+      }),
+      extractPageMeta: async () => ({
+        meta: null,
+        errors: [
+          { kind: "contract", code: "NOT_STUBBED", message: "extractPageMeta is not stubbed here" },
+        ],
+      }),
+      runTree: async () => ({ errors: [], warnings: [], closures: [] }),
+      // Warnings never fail a candidate (`GateRunResultV1`'s own doc) — `ok: true` carrying one
+      // is the ordinary "accepted, but not clean" outcome the measured defect was about.
+      runPage: async (input) => ({
+        ok: true,
+        errors: [],
+        warnings: [
+          {
+            kind: "nondeterministic-time",
+            message: "`Date.now()` reads wall-clock time",
+            file: "pages/stopwatch.tsx",
+            line: 55,
+          },
+        ],
+        descriptor: {
+          slug: input.slug,
+          meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
+        },
+      }),
+    };
+
+    const pageStore = createFakeDesignStoreForPages({
+      pages: [{ pageSlug: HOME, bytes: HOME_SOURCE_BYTES, sha256: HOME_SOURCE_HASH }],
+    });
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: "sonnet",
+          effort: "medium",
+          activeChatId: chatHeader.chatId,
+        },
+      }),
+      designReader: pageStore,
+      pageMutations: pageStore,
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+      gateRunner,
+    });
+
+    turnHandlers["turn.start"]({ text: "add a stopwatch" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    async function waitForStartTurn(): Promise<void> {
+      for (let i = 0; i < 200; i++) {
+        if (agentBackend.calls.some((c) => c.method === "startTurn")) return;
+        await wrap(Bun.sleep(0));
+      }
+      throw new Error("waitForStartTurn: never observed a startTurn call");
+    }
+    await waitForStartTurn();
+    const firstStart = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (firstStart?.method !== "startTurn") throw new Error("expected a startTurn call");
+    agentBackend.completeRun(firstStart.fence, {
+      kind: "completed",
+      finalText: "done — fixed the timer",
+      usage: null,
+      sessionId: "s1",
+    });
+
+    await runPromise;
+
+    // Read the durably-appended agent record straight back off the chat store — the exact
+    // thing `entities/chat`'s `ChatAgentRecord.warnings` (and, downstream, `ChatRecord.tsx`)
+    // reads. `withHonestChatAppendBase` seeds `chatStore` with `finalize()`'s own `agentRecord`
+    // on every successful commit (its own header comment).
+    const handle = await chatStore.open(chatHeader.chatId);
+    if ("code" in handle) throw new Error("unexpected chat-open failure");
+    const tail = await handle.loadTail();
+    if ("code" in tail) throw new Error("unexpected loadTail failure");
+    const agentRecord = tail.records.find((record) => record.kind === "agent");
+    if (agentRecord === undefined || agentRecord.kind !== "agent") {
+      throw new Error("expected a persisted agent record");
+    }
+    expect(agentRecord.warnings).toEqual([
+      {
+        kind: "nondeterministic-time",
+        message: "`Date.now()` reads wall-clock time",
+        file: "pages/stopwatch.tsx",
+        line: 55,
+      },
+    ]);
+  });
+
   test("a Gate rejection surfaced through this path carries the SHORT page file name in the published diagnostic's `file` field — no drive letter, no candidate root, no absolute path — while the absolute staged location travels separately in `runPage`'s own `treeRoot` (Finding #6)", async () => {
     const HOME = "home" as PageSlug;
     const chatStore = createFakeChatStore();

@@ -149,7 +149,14 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
             return;
           }
           trace("ui.dispatch.result", { kind: "turn.start", result });
-          if (result.status === "accepted") setPrimaryInput(deps, "");
+          if (result.status === "accepted") {
+            setPrimaryInput(deps, "");
+            // WP-9 (design-agent-feedback-loop repair, Task 11): remembers what was just SENT,
+            // the instant it is cleared from the composer — the one place this text could
+            // otherwise be lost before `deps.ts`'s `applyTurnTerminal` might need to restore it
+            // on a later `turn.failed`. See `UiLocalState.pendingTurnText`'s own doc comment.
+            local.pendingTurnText.set(text);
+          }
         }),
       );
       return;

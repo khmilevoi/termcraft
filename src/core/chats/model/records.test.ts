@@ -91,7 +91,7 @@ describe("chatRecordToDtoV1", () => {
     expect(chatRecordDtoV1Schema.safeParse(dto).success).toBe(true);
   });
 
-  test("maps an agent record's changedPages/warnings verbatim", () => {
+  test("maps an agent record's changedPages/warnings verbatim, filling absent file/line with null", () => {
     const recordId = uuidv7();
     const turnId = uuidv7();
     const record: ChatAgentRecord = {
@@ -112,7 +112,50 @@ describe("chatRecordToDtoV1", () => {
       turnId,
       text: "**bold** result",
       changedPages: ["home"],
-      warnings: [{ kind: "gate:orphan-import", message: "unused import" }],
+      // No `file`/`line` on the domain record — the DTO's own "never omission" rule (Task 11)
+      // fills both with `null`, not `undefined`.
+      warnings: [{ kind: "gate:orphan-import", message: "unused import", file: null, line: null }],
+      ts: TS,
+    });
+    expect(chatRecordDtoV1Schema.safeParse(dto).success).toBe(true);
+  });
+
+  test("maps an agent record's warning file/line through to the DTO verbatim (Task 11)", () => {
+    const recordId = uuidv7();
+    const turnId = uuidv7();
+    const record: ChatAgentRecord = {
+      kind: "agent",
+      recordId,
+      turnId,
+      text: "done",
+      changedPages: [slug("home")],
+      warnings: [
+        {
+          kind: "nondeterministic-time",
+          message: "`Date.now()` reads wall-clock time",
+          file: "pages/stopwatch.tsx",
+          line: 55,
+        },
+      ],
+      ts: TS,
+    };
+
+    const dto = chatRecordToDtoV1(record);
+
+    expect(dto).toEqual({
+      kind: "agent",
+      recordId,
+      turnId,
+      text: "done",
+      changedPages: ["home"],
+      warnings: [
+        {
+          kind: "nondeterministic-time",
+          message: "`Date.now()` reads wall-clock time",
+          file: "pages/stopwatch.tsx",
+          line: 55,
+        },
+      ],
       ts: TS,
     });
     expect(chatRecordDtoV1Schema.safeParse(dto).success).toBe(true);

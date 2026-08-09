@@ -67,6 +67,22 @@ export function recordToChatRecordProps(
     ...(role === "agent" ? { agentLabel } : {}),
     lines: flattenMarkdownLite(recordText(record)),
     dim: true,
+    // Residual Gate warnings (WP-11a, Task 11) — ONLY an `agent` record carries any
+    // (`ChatAgentRecordDtoV1.warnings`, `core/protocol`). `file`/`line` come off the wire as
+    // `| null` (this DTO's own "never omission" rule); `ChatRecordProps` is a presentation-layer
+    // shape that uses `undefined`-based optionals like `agentLabel`/`dim` above, so `null` is
+    // normalized to `undefined` here rather than threading the wire's own convention past this
+    // mapping boundary.
+    ...(record.kind === "agent"
+      ? {
+          warnings: record.warnings.map((w) => ({
+            kind: w.kind,
+            message: w.message,
+            file: w.file ?? undefined,
+            line: w.line ?? undefined,
+          })),
+        }
+      : {}),
   };
 }
 

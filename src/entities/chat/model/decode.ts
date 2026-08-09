@@ -46,6 +46,11 @@ const chatSelectionSchema = z.object({
 const chatWarningSnapshotSchema = z.object({
   kind: z.string().min(1),
   message: z.string().min(1),
+  // `.optional()`, matching `ChatWarningSnapshot`'s own doc (`../types.ts`): ADDED 2026-08-09,
+  // and every already-persisted record (written before this field existed) has neither key at
+  // all, so it must still decode.
+  file: z.string().min(1).optional(),
+  line: z.number().int().positive().optional(),
 });
 
 const chatUserRecordSchema = z.object({

@@ -19,10 +19,18 @@ export interface ChatSelection {
  * A gate-warning snapshot stored on an agent record. IMMUTABLE historical
  * presentation (projections §6.2) — never the source of current diagnostics.
  * Decoupled from gate's `GateWarning` because `entities/` imports no adapter.
+ *
+ * `file`/`line` ADDED 2026-08-09. A warning the user cannot locate is the exact shape one
+ * measured run proved unactionable: four `unguarded-timer` warnings with no file, spread across
+ * two different files, which the agent "fixed" while the turn record it produced still carried
+ * all four. Optional, so every already-persisted record still decodes; TREE-relative, matching
+ * `GateWarningV1.file`, and prefixed for display exactly where the agent's prompt prefixes it.
  */
 export interface ChatWarningSnapshot {
   readonly kind: string;
   readonly message: string;
+  readonly file?: string;
+  readonly line?: number;
 }
 
 /** The initiating record of a turn (storage-identity §11.2; turn-durability §6.1). */
