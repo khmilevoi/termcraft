@@ -22,7 +22,7 @@ const HOME = "home" as PageSlug;
 /** Shared minimal fields for the file-stamping tests below — each overrides `entryRelPath`/`source`. */
 const base = { slug: SLUG, smoke: "run" as const };
 
-/** Triggers all three token-scannable per-page warning kinds at once: `unguarded-timer`
+/** Triggers all three token-scannable per-page warning kinds at once: `nondeterministic-time`
  *  (`Date.now()`), `silencing-any` (`: any`), and `unpointed-element` (`<box>` with no `id`). */
 const MULTI_WARNING_SOURCE = `import { definePage, reatomComponent } from "@termcraft/runtime"
 export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })
@@ -101,7 +101,7 @@ describe("runGate (§6.3 pipeline)", () => {
       smoke: "run",
     });
     expect(result.ok).toBe(true);
-    expect(result.warnings.some((w) => w.kind === "unguarded-randomness")).toBe(true);
+    expect(result.warnings.some((w) => w.kind === "nondeterministic-randomness")).toBe(true);
   });
 
   test("absent referencedIds skips the dropped-id lint", async () => {
@@ -181,7 +181,7 @@ describe("runGate (§6.3 pipeline)", () => {
       entryRelPath: "pages/stopwatch.tsx",
       source: "export const meta = { kitApiVersion: 1 };\nconst t = Date.now();\n",
     });
-    const timer = result.warnings.find((w) => w.kind === "unguarded-timer");
+    const timer = result.warnings.find((w) => w.kind === "nondeterministic-time");
     expect(timer?.file).toBe("pages/stopwatch.tsx");
   });
 

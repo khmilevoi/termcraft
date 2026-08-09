@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { PageSlug } from "entities/page";
 
+import type { GateWarning } from "../types";
 import type { SourceStreamTruncatedError } from "./lexer";
 import {
   lintDeterminism,
@@ -73,33 +74,33 @@ describe("lintSilencingAny (an `any` written to make a type error go away)", () 
   });
 });
 
-describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
+describe("lintDeterminism (§6.3 non-fatal determinism warnings — renamed 2026-08-09)", () => {
   test("a deterministic page produces no warnings", () => {
     expect(scanned(lintDeterminism(`const rows = [1, 2, 3].map((n) => n * 2)\n`, "jsx"))).toEqual(
       [],
     );
   });
 
-  test("setTimeout / setInterval each warn as an unguarded timer", () => {
+  test("setTimeout / setInterval each warn as nondeterministic-time", () => {
     const w = scanned(
       lintDeterminism(`setTimeout(() => {}, 10)\nsetInterval(() => {}, 10)\n`, "jsx"),
     );
     expect(w).toHaveLength(2);
-    expect(w.every((x) => x.kind === "unguarded-timer")).toBe(true);
+    expect(w.every((x) => x.kind === "nondeterministic-time")).toBe(true);
   });
 
-  test("Math.random warns as unguarded randomness", () => {
+  test("Math.random warns as nondeterministic-randomness", () => {
     const w = scanned(lintDeterminism(`const r = Math.random()\n`, "jsx"));
     expect(w).toHaveLength(1);
-    expect(w[0]?.kind).toBe("unguarded-randomness");
+    expect(w[0]?.kind).toBe("nondeterministic-randomness");
   });
 
-  test("Date.now / performance.now warn as unguarded timers", () => {
+  test("Date.now / performance.now warn as nondeterministic-time", () => {
     const w = scanned(
       lintDeterminism(`const a = Date.now()\nconst b = performance.now()\n`, "jsx"),
     );
     expect(w).toHaveLength(2);
-    expect(w.every((x) => x.kind === "unguarded-timer")).toBe(true);
+    expect(w.every((x) => x.kind === "nondeterministic-time")).toBe(true);
   });
 
   test("a property access unrelated to time/randomness does not warn", () => {
@@ -116,6 +117,81 @@ describe("lintDeterminism (§6.3 non-fatal determinism warnings)", () => {
   test("warnings carry a source position", () => {
     const w = scanned(lintDeterminism(`\nconst r = Math.random()\n`, "jsx"));
     expect(w[0]?.line).toBe(2);
+  });
+
+  /**
+   * THE FULL VOCABULARY (task-4, design-agent-feedback-loop repair). `new Date()` used to be
+   * the one wall-clock read this lint missed — an accident of token shape (`Date.now()` is
+   * identifier+dot+member, `new Date()` is `new`+identifier+`(`+`)`) rather than a judgement —
+   * and the measured run's agent noticed the asymmetry and explicitly declined to exploit it.
+   * `new Date(2026, 0, 1)` is deliberately absent from this list: see the dedicated seeded-
+   * constructor tests below for why it is a NEGATIVE case, not a positive one.
+   */
+  test.each([
+    ["Date.now()", "nondeterministic-time"],
+    ["performance.now()", "nondeterministic-time"],
+    ["new Date()", "nondeterministic-time"],
+    ["setTimeout(f, 0)", "nondeterministic-time"],
+    ["setInterval(f, 0)", "nondeterministic-time"],
+    ["setImmediate(f)", "nondeterministic-time"],
+    ["requestAnimationFrame(f)", "nondeterministic-time"],
+    ["Math.random()", "nondeterministic-randomness"],
+  ] as const)("%s is flagged as %s", (src, kind) => {
+    const out = lintDeterminism(`const x = ${src};`, "no-jsx");
+    expect(out).not.toBeInstanceOf(Error);
+    expect((out as GateWarning[]).map((w) => w.kind)).toContain(kind);
+  });
+
+  test.each([
+    "const d = { Date: 1 }.Date;",
+    "const o = { now: 1 }; o.now;",
+    "class Date2 {}; new Date2();",
+    "const random = 4; random;",
+    "obj.Math.random;", // a MEMBER named Math, not the global
+  ] as const)("%s is not flagged", (src) => {
+    expect(lintDeterminism(src, "no-jsx")).toEqual([]);
+  });
+
+  /**
+   * THE SEEDED-CONSTRUCTOR EXEMPTION (spike 13, load-bearing: three real dependents in
+   * `examples/clock`'s `calendar.tsx`). A `new Date(...)` call WITH explicit arguments reads
+   * no wall clock — it is the only wall-clock-free way to build a `Date` — so flagging it
+   * would teach an agent to avoid dates altogether rather than to avoid the clock. Only the
+   * four-token, argument-less shape (`new` `Date` `(` `)`) is flagged.
+   */
+  test("new Date(2026, 0, 1) is a seeded constructor and is NOT flagged", () => {
+    const out = scanned(lintDeterminism("const x = new Date(2026, 0, 1);", "no-jsx"));
+    expect(out).toEqual([]);
+  });
+
+  test("new Date(ms) — a single-argument seeded constructor — is NOT flagged either", () => {
+    const out = scanned(lintDeterminism("const x = new Date(1234567890);", "no-jsx"));
+    expect(out).toEqual([]);
+  });
+
+  test("new Date() is counted once, never double-counted as a bare `Date` identifier reference", () => {
+    const out = scanned(lintDeterminism("const x = new Date();", "no-jsx"));
+    expect(out).toHaveLength(1);
+  });
+
+  /**
+   * NO KIND NAME PROMISES A GUARD (rename, 2026-08-09). This lint is a token scan with no
+   * scope analysis, so it can never observe whether an `isExport()` wrapper encloses a call —
+   * the old `unguarded-*` names promised exactly that, and a measured retry added such a
+   * guard, reported "fixed", and the warnings never cleared because the scanner cannot see
+   * guards at all.
+   */
+  test("no kind name promises a guard", () => {
+    const out = scanned(lintDeterminism("Date.now(); Math.random();", "no-jsx"));
+    for (const w of out) {
+      expect(w.kind).not.toContain("unguarded");
+      expect(w.message).not.toContain("guard");
+    }
+  });
+
+  test("each message says what to do instead", () => {
+    const out = scanned(lintDeterminism("Date.now();", "no-jsx"));
+    expect(out[0]?.message).toContain("atom");
   });
 });
 

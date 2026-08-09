@@ -22,11 +22,17 @@ import type { PageSlug } from "entities/page";
  * would tell the agent to fix a problem in the wrong attempt's context.
  *
  * DETERMINISM WARNINGS: of Gate's ORIGINAL six warning kinds, exactly two are about
- * non-determinism (`unguarded-timer`, `unguarded-randomness` — code that would break
- * Export/replay by depending on wall-clock time or unseeded randomness). The other four
+ * non-determinism (`nondeterministic-time`, `nondeterministic-randomness` — code that would
+ * break Export/replay by depending on wall-clock time or unseeded randomness). The other four
  * (`dropped-id`, `unpointed-element`, `unlisted-navigation`, `silencing-any`) are UI-contract/
  * type-suppression warnings with no bearing on a Gate REJECTION retry, so they are
  * deliberately excluded from the fold entirely — not rendered under any header.
+ *
+ * RENAMED from `unguarded-timer`/`unguarded-randomness` (design-agent-feedback-loop repair,
+ * Task 4, 2026-08-09): the old names promised a guard (an `isExport()` wrapper) that
+ * `gate/model/lints.ts`'s `lintDeterminism` — a token scan with no scope analysis — has no way
+ * to ever observe clearing. See that function's own doc comment for the measured turn this
+ * fixes.
  *
  * GRAPH WARNINGS (design-tree phase 2 Task 4): `import-cycle`/`dead-module` are NEITHER
  * determinism warnings NOR one of the four excluded above — `DETERMINISM_WARNING_KINDS` stays
@@ -71,8 +77,8 @@ export interface TurnGateFoldInputV1 {
 
 /** Gate's own two non-determinism warning kinds (master §6.3) — see this file's header. */
 const DETERMINISM_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
-  "unguarded-timer",
-  "unguarded-randomness",
+  "nondeterministic-time",
+  "nondeterministic-randomness",
 ]);
 
 /** Design-tree phase 2 Task 4's two whole-tree graph warnings — see this file's header. */

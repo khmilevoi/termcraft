@@ -42,18 +42,24 @@ export interface GateError {
 /**
  * The category of a NON-FATAL gate warning (master §6.3). Warnings never reject a
  * candidate — the gate reminds, not rejects: an id an iteration dropped, a raw
- * element with no pointable id, an unguarded timer/randomness that breaks
- * determinism, navigation to a page not in the manifest, an import cycle (design §8
- * step 2 — ESM permits one, but it is a common source of `undefined`-at-module-init
- * in this shape of code), or a module no page's closure reaches (design §8 step 3 —
- * never auto-deleted, since deleting a half-finished refactor is worse than carrying
- * it).
+ * element with no pointable id, a wall-clock read or an unseeded randomness call
+ * that breaks determinism, navigation to a page not in the manifest, an import
+ * cycle (design §8 step 2 — ESM permits one, but it is a common source of
+ * `undefined`-at-module-init in this shape of code), or a module no page's closure
+ * reaches (design §8 step 3 — never auto-deleted, since deleting a half-finished
+ * refactor is worse than carrying it).
+ *
+ * RENAMED from `unguarded-timer`/`unguarded-randomness` (design-agent-feedback-loop
+ * repair, Task 4, 2026-08-09): the old names promised a guard (an `isExport()`
+ * wrapper) that `gate/model/lints.ts`'s `lintDeterminism` — a token scan with no
+ * scope analysis — has no way to ever observe clearing. See that function's own doc
+ * comment for the measured turn this fixes.
  */
 export type GateWarningKind =
   | "dropped-id"
   | "unpointed-element"
-  | "unguarded-timer"
-  | "unguarded-randomness"
+  | "nondeterministic-time"
+  | "nondeterministic-randomness"
   | "unlisted-navigation"
   | "silencing-any"
   | "import-cycle"

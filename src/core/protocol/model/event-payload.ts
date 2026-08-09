@@ -811,8 +811,11 @@ const GATE_ERROR_KINDS_V1 = ["import", "contract", "type", "manifest", "smoke"] 
 const GATE_WARNING_KINDS_V1 = [
   "dropped-id",
   "unpointed-element",
-  "unguarded-timer",
-  "unguarded-randomness",
+  // RENAMED from `unguarded-timer`/`unguarded-randomness` (design-agent-feedback-loop repair,
+  // Task 4, 2026-08-09) — the old names promised a guard the token-scan lint has no scope
+  // analysis to ever observe clearing. See `gate/model/lints.ts`'s `lintDeterminism`.
+  "nondeterministic-time",
+  "nondeterministic-randomness",
   "unlisted-navigation",
   // `any` written to make a type error go away — see `gate/model/lints.ts`'s
   // `lintSilencingAny` for the turn that made this its own warning kind.

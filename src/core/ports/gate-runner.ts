@@ -72,11 +72,18 @@ export interface GateErrorV1 {
   readonly blockedPages?: readonly PageSlug[];
 }
 
+/**
+ * RENAMED from `unguarded-timer`/`unguarded-randomness` (design-agent-feedback-loop repair,
+ * Task 4, 2026-08-09): the old names promised a guard (an `isExport()` wrapper) that
+ * `gate/model/lints.ts`'s `lintDeterminism` — a token scan with no scope analysis — has no way
+ * to ever observe clearing. See that function's own doc comment for the measured turn this
+ * fixes.
+ */
 export type GateWarningKindV1 =
   | "dropped-id"
   | "unpointed-element"
-  | "unguarded-timer"
-  | "unguarded-randomness"
+  | "nondeterministic-time"
+  | "nondeterministic-randomness"
   | "unlisted-navigation"
   // `any` written to make a type error go away — the escape hatch that turns a diagnostic the
   // gate DID catch into a crash it cannot. See `gate/model/lints.ts`'s `lintSilencingAny`.

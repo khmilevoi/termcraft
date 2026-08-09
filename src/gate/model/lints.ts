@@ -16,12 +16,35 @@ const TIMER_IDENTIFIERS = new Set<string>([
 const NOW_OBJECTS = new Set<string>(["Date", "performance"]);
 
 /**
+ * The renderable label for one non-deterministic TIME construct, and the message template
+ * every `nondeterministic-time` warning below shares verbatim (rename, 2026-08-09) — only the
+ * backtick-quoted construct text differs between `setTimeout`, `` Date.now() ``, and
+ * `` new Date() ``.
+ */
+function timeMessage(construct: string): string {
+  return (
+    `\`${construct}\` is non-deterministic — a sealed render has no wall clock and no tick. ` +
+    `Hold the value in an atom and advance it from an action; see RUNTIME.md's "Time and the ` +
+    `sealed render".`
+  );
+}
+
+/**
  * The token-scannable determinism warning lints (master §6.3). A page rendered for
  * smoke/export at logical `t = 0` must not depend on wall-clock time or randomness;
  * these produce NON-FATAL warnings (the gate reminds, not rejects). A raw
- * `setTimeout`/`setInterval`, a `Date.now()`/`performance.now()`, or a `Math.random()`
- * each surfaces one warning at its source position. (`dropped-id`,
- * `unpointed-element`, and `unlisted-navigation` are below.)
+ * `setTimeout`/`setInterval`, a `Date.now()`/`performance.now()`, an argument-less
+ * `new Date()`, or a `Math.random()` each surfaces one warning at its source position.
+ * (`dropped-id`, `unpointed-element`, and `unlisted-navigation` are below.)
+ *
+ * THESE KINDS NAME WHAT THE SCAN CAN SEE, AND NOTHING MORE (rename, 2026-08-09). They were
+ * `unguarded-timer`/`unguarded-randomness`, which promised a guard this function has no way to
+ * observe: it is a token scan with no scope analysis, so no `isExport()` wrapper can ever clear
+ * one. MEASURED: a retry produced `isExport()` guards, the agent reported "fixed", and the turn
+ * record it produced still carried all four warnings. A guard-aware lint is the alternative and
+ * is deliberately NOT taken — it needs scope analysis a token scanner cannot do honestly. The
+ * honest move is the one taken here: say the construct does not belong in a page at all, and say
+ * what belongs instead.
  */
 export function lintDeterminism(
   source: string,
@@ -34,29 +57,74 @@ export function lintDeterminism(
 
   for (let i = 0; i < toks.length; i += 1) {
     const t = toks[i]!;
+
+    // `new Date()` WITH NO ARGUMENTS — a wall-clock read wearing a constructor (defect fix,
+    // 2026-08-09). `Date.now()` was flagged and this was not, purely because the first is an
+    // identifier + `.` + member and the second is a `new` + identifier + `(` + `)`. The measured
+    // run's agent found the asymmetry and refused to exploit it; a rule with a hole an honest
+    // author works around is worse than one without.
+    //
+    // A SEEDED CONSTRUCTOR IS LEFT ALONE. `new Date(2026, 0, 1)` and `new Date(ms)` read no
+    // clock, and flagging them would warn on the only wall-clock-free way to build a date —
+    // teaching the agent to avoid dates altogether rather than to avoid the clock. The
+    // four-token empty-argument shape is exactly what the scanner can see, and exactly the
+    // shape that reads the clock.
+    //
+    // PLACED BEFORE the Identifier-only filter below: `NewKeyword` is not an `Identifier`, so a
+    // check placed after that filter would never run, and `new Date()`'s own `Date` identifier
+    // would fall through into the plain-identifier checks below and be misread as a bare
+    // reference. Handling it here, and `continue`-ing past it, keeps the two branches from ever
+    // double-counting the same call.
+    if (t.kind === SK.NewKeyword) {
+      const ctor = toks[i + 1];
+      const open = toks[i + 2];
+      const close = toks[i + 3];
+      if (
+        ctor?.kind === SK.Identifier &&
+        ctor.value === "Date" &&
+        open?.kind === SK.OpenParenToken &&
+        close?.kind === SK.CloseParenToken
+      ) {
+        warnings.push({
+          kind: "nondeterministic-time",
+          message: timeMessage("new Date()"),
+          ...at(t.pos),
+        });
+      }
+      continue;
+    }
+
     if (t.kind !== SK.Identifier) continue;
 
     if (TIMER_IDENTIFIERS.has(t.value)) {
       warnings.push({
-        kind: "unguarded-timer",
-        message: `\`${t.value}\` is non-deterministic — a smoke/export render is sealed at t=0`,
+        kind: "nondeterministic-time",
+        message: timeMessage(t.value),
         ...at(t.pos),
       });
       continue;
     }
-    // `Math.random` and `Date.now`/`performance.now` — an identifier + `.` + member.
+    // `Math.random` and `Date.now`/`performance.now` — an identifier + `.` + member. The
+    // PRECEDING token must not itself be a `.` (Minor, task-4 vocabulary sweep): `obj.Math.random`
+    // is a member named `Math` on `obj`, not the global `Math`, and treating every `Math`/`Date`/
+    // `performance` identifier as the global regardless of what precedes it warned on code that
+    // reads no clock and no RNG at all.
+    if (toks[i - 1]?.kind === SK.DotToken) continue;
     if (toks[i + 1]?.kind === SK.DotToken && toks[i + 2]?.kind === SK.Identifier) {
       const member = toks[i + 2]!.value;
       if (t.value === "Math" && member === "random") {
         warnings.push({
-          kind: "unguarded-randomness",
-          message: "`Math.random()` is non-deterministic — seed or precompute for a stable render",
+          kind: "nondeterministic-randomness",
+          message:
+            "`Math.random()` is non-deterministic — precompute the values into a module " +
+            "constant, or hold them in an atom seeded once; see RUNTIME.md's \"Time and the " +
+            'sealed render".',
           ...at(t.pos),
         });
       } else if (NOW_OBJECTS.has(t.value) && member === "now") {
         warnings.push({
-          kind: "unguarded-timer",
-          message: `\`${t.value}.now()\` reads wall-clock time — non-deterministic in a sealed render`,
+          kind: "nondeterministic-time",
+          message: timeMessage(`${t.value}.now()`),
           ...at(t.pos),
         });
       }

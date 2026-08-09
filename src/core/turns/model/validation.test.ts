@@ -486,7 +486,12 @@ describe("runTurnValidation — the verdict", () => {
         ok: true,
         errors: [],
         warnings: [
-          { kind: "unguarded-timer", message: "setTimeout without a guard", line: 12, column: 3 },
+          {
+            kind: "nondeterministic-time",
+            message: "setTimeout reads no seeded clock",
+            line: 12,
+            column: 3,
+          },
         ],
         descriptor: {
           slug: PAGE_ABOUT,
@@ -500,8 +505,8 @@ describe("runTurnValidation — the verdict", () => {
       expect(result.diagnostics.errors).toEqual(FAILING_PAGE_ERRORS_DTO);
       expect(result.diagnostics.warnings).toEqual([
         {
-          kind: "unguarded-timer",
-          message: "setTimeout without a guard",
+          kind: "nondeterministic-time",
+          message: "setTimeout reads no seeded clock",
           line: 12,
           column: 3,
           file: null,

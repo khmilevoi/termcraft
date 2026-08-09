@@ -121,7 +121,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
     expect(result).toContain("disallowed import");
   });
 
-  test("determinism warnings (unguarded-timer, unguarded-randomness) ARE folded in", () => {
+  test("determinism warnings (nondeterministic-time, nondeterministic-randomness) ARE folded in", () => {
     const result = foldGateDiagnosticsIntoPrompt(
       foldInput({
         diagnostics: diagnostics({
@@ -138,14 +138,14 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
           ],
           warnings: [
             {
-              kind: "unguarded-timer",
+              kind: "nondeterministic-time",
               message: "setTimeout without a seeded clock",
               line: 5,
               column: null,
               file: null,
             },
             {
-              kind: "unguarded-randomness",
+              kind: "nondeterministic-randomness",
               message: "Math.random without a seed",
               line: null,
               column: null,
@@ -158,6 +158,89 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
     if (result instanceof Error) throw result;
     expect(result).toContain("setTimeout without a seeded clock");
     expect(result).toContain("Math.random without a seed");
+  });
+
+  /**
+   * TASK 4 (design-agent-feedback-loop repair, 2026-08-09) — the renamed vocabulary. Both new
+   * kind names must route into the SAME determinism section the old `unguarded-*` names did;
+   * the rename changes only what the kind is called, never how it is folded.
+   */
+  test("the renamed kinds route into the determinism section", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "nondeterministic-time",
+              message: "`Date.now()` is non-deterministic",
+              line: null,
+              column: null,
+              file: null,
+            },
+            {
+              kind: "nondeterministic-randomness",
+              message: "`Math.random()` is non-deterministic",
+              line: null,
+              column: null,
+              file: null,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain("Gate also flagged non-deterministic code");
+    expect(result).toContain("`Date.now()` is non-deterministic");
+    expect(result).toContain("`Math.random()` is non-deterministic");
+  });
+
+  test("the four excluded kinds still render under no header", () => {
+    for (const kind of [
+      "dropped-id",
+      "unpointed-element",
+      "unlisted-navigation",
+      "silencing-any",
+    ]) {
+      const result = foldGateDiagnosticsIntoPrompt(
+        foldInput({
+          diagnostics: diagnostics({
+            warnings: [
+              { kind: kind as never, message: "m", line: null, column: null, file: "pages/a.tsx" },
+            ],
+          }),
+        }),
+      );
+      expect(result).toBe("");
+    }
+  });
+
+  test("the two graph kinds still render under their own header", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "import-cycle",
+              message: "an import cycle: lib/a.ts -> lib/b.ts -> lib/a.ts",
+              line: null,
+              column: null,
+              file: "lib/a.ts",
+            },
+            {
+              kind: "dead-module",
+              message: '"lib/orphan.ts" is not reached by any page\'s resolved closure',
+              line: null,
+              column: null,
+              file: "lib/orphan.ts",
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain("Gate also flagged the following import-graph issues");
+    expect(result).toContain("an import cycle: lib/a.ts -> lib/b.ts -> lib/a.ts");
+    expect(result).toContain('"lib/orphan.ts" is not reached');
   });
 
   test("non-determinism warnings (dropped-id, unpointed-element, unlisted-navigation) are NOT folded in", () => {
@@ -236,7 +319,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
     expect(result).toContain('"lib/orphan.ts" is not reached');
     expect(result).toContain(`in ${DESIGN_DIRNAME}/lib/orphan.ts`);
     // Not bucketed under the determinism header — DETERMINISM_WARNING_KINDS stays exactly its
-    // original two kinds (`unguarded-timer`, `unguarded-randomness`).
+    // original two kinds (`nondeterministic-time`, `nondeterministic-randomness`).
     expect(result).not.toContain("non-deterministic code");
   });
 
@@ -246,7 +329,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
         diagnostics: diagnostics({
           warnings: [
             {
-              kind: "unguarded-timer",
+              kind: "nondeterministic-time",
               message: "`Date.now()` reads wall-clock time",
               file: "pages/stopwatch.tsx",
               line: 55,
@@ -268,7 +351,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
       foldInput({
         diagnostics: diagnostics({
           warnings: [
-            { kind: "unguarded-timer", message: "m", line: null, column: null, file: null },
+            { kind: "nondeterministic-time", message: "m", line: null, column: null, file: null },
           ],
         }),
       }),
@@ -398,7 +481,7 @@ describe("foldGateDiagnosticsIntoPrompt — workspace-relative paths (Task 3)", 
         diagnostics: diagnostics({
           warnings: [
             {
-              kind: "unguarded-timer",
+              kind: "nondeterministic-time",
               message: "…",
               file: "pages/alarm.tsx",
               line: 98,

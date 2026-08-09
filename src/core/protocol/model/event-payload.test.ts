@@ -518,8 +518,8 @@ describe("turnGateRejectedPayloadV1Schema", () => {
       ],
       warnings: [
         {
-          kind: "unguarded-timer",
-          message: "setTimeout without guard",
+          kind: "nondeterministic-time",
+          message: "setTimeout reads no seeded clock",
           line: null,
           column: null,
           file: null,
@@ -605,11 +605,16 @@ describe("turnGateRejectedPayloadV1Schema", () => {
     // Widened by design-tree phase 2 Task 4 from a list of five that (pre-existing gap, fixed in
     // passing here) already omitted `silencing-any` — now the full six original kinds plus the
     // two new whole-tree graph kinds.
+    //
+    // RENAMED (design-agent-feedback-loop repair, Task 4, 2026-08-09): `unguarded-timer`/
+    // `unguarded-randomness` -> `nondeterministic-time`/`nondeterministic-randomness`. The old
+    // names promised a guard (an `isExport()` wrapper) this token scan has no scope analysis to
+    // ever observe; the new names say only what the scan can see.
     const warningKinds = [
       "dropped-id",
       "unpointed-element",
-      "unguarded-timer",
-      "unguarded-randomness",
+      "nondeterministic-time",
+      "nondeterministic-randomness",
       "unlisted-navigation",
       "silencing-any",
       "import-cycle",
