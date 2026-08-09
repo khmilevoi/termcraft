@@ -25,6 +25,16 @@ export type {
   FencedEvent,
 } from "./types";
 export { createProductionClaudeBackend } from "./claude";
+// WP-10: the design self-check the in-process `check_design` tool runs. `agent` DECLARES the
+// port (it may import neither `gate` nor `core`); the composition root injects a `gate`-backed
+// implementation into `createProductionAgentRegistry` below.
+export type {
+  DesignCheckErrorV1,
+  DesignCheckInputV1,
+  DesignCheckReportV1,
+  DesignCheckWarningV1,
+  DesignCheckerPort,
+} from "./checks";
 // M18: the one-entry production `AgentRegistry` over the backend above (WP-2
 // Task 7 — see `agent/adapters/agent-registry.ts` for the mapping notes).
 export { createProductionAgentRegistry } from "./adapters/agent-registry";

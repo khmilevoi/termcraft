@@ -1,9 +1,23 @@
 import { describe, expect, test } from "bun:test";
 
 import { DESIGN_DIRNAME } from "entities/design-tree";
-import { ANSWER_STYLE, DESIGN_CODE_RULES, PAGE_FILE_LAYOUT, ROLE } from "./prose";
+
+import { ANSWER_STYLE, DESIGN_CODE_RULES, PAGE_FILE_LAYOUT, ROLE, SELF_CHECK } from "./prose";
 
 describe("agent/prompt static prose", () => {
+  /**
+   * A TOOL THE PROMPT DOES NOT MENTION IS A TOOL THE AGENT DOES NOT USE (Task 12, Step 7).
+   * The measured saving this whole task exists to produce depends on the agent calling
+   * `check_design` unprompted, before it finishes — so the prompt has to name it, say what it
+   * costs relative to a rejected turn, and say that calling it is expected.
+   */
+  test("SELF_CHECK names the tool, its cost, and that calling it before finishing is expected", () => {
+    expect(SELF_CHECK).toContain("check_design");
+    expect(SELF_CHECK).toContain("before you finish");
+    // Honest about the scope: a clean check is not a guaranteed Gate pass.
+    expect(SELF_CHECK).toContain("smoke render");
+  });
+
   test("DESIGN_CODE_RULES names the slug mask verbatim and the Windows-reserved names", () => {
     expect(DESIGN_CODE_RULES).toContain("^[a-z0-9][a-z0-9-]{0,31}$");
     expect(DESIGN_CODE_RULES).toContain("con, nul, aux, prn, com1-com9, lpt1-lpt9");

@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
 
-import { CLAUDE_CONFINEMENT_TABLES } from "agent/claude/tools";
+import {
+  CHECK_DESIGN_TOOL_NAME,
+  CLAUDE_CONFINEMENT_TABLES,
+  CLAUDE_DISALLOWED_TOOLS,
+} from "agent/claude/tools";
 
 import { createConfinementPolicy } from "./policy";
 
@@ -36,6 +40,20 @@ test("denies WebFetch outright (Spike H case 5)", () => {
 test("denies an unknown tool by default", () => {
   const r = policy("SomeFutureTool", { anything: true });
   expect(r.behavior).toBe("deny");
+});
+
+test("the new self-check tool is allowed and every other unknown tool is still denied", () => {
+  expect(policy(CHECK_DESIGN_TOOL_NAME, {}).behavior).toBe("allow");
+  expect(policy("SomeNewTool", {}).behavior).toBe("deny");
+  // Deny-by-default must NOT become deny-by-default-except-MCP.
+  expect(policy("mcp__evil__exfiltrate", {}).behavior).toBe("deny");
+  expect(policy("mcp__termcraft__anything_else", {}).behavior).toBe("deny");
+});
+
+test("Bash is still denied", () => {
+  expect(CLAUDE_DISALLOWED_TOOLS).toContain("Bash");
+  expect(CLAUDE_CONFINEMENT_TABLES.deniedTools.has("Bash")).toBe(true);
+  expect(policy("Bash", { command: "echo hi" }).behavior).toBe("deny");
 });
 
 test("allows a Grep with an explicit path only when that path stays inside staging", () => {
@@ -107,8 +125,9 @@ test("[7] blockedPath wins over an innocuous input.file_path — the SDK's own r
 
 const SYNTHETIC_TABLES = {
   fileTools: new Set(["Peek", "Poke", "Sweep"]),
-  deniedTools: new Set(["Detonate"]),
+  deniedTools: new Set(["Detonate", "Overlap"]),
   optionalPathTools: new Set(["Sweep"]),
+  pathlessAllowedTools: new Set(["Ponder", "Overlap"]),
   pathFields: ["where", "target_path"] as const,
 };
 
@@ -147,4 +166,33 @@ test("the rule denies Claude's own tool names when they are absent from the supp
   // from tables that do not mention it.
   expect(synthetic("Write", { where: path.join(staging, "a.txt") }).behavior).toBe("deny");
   expect(synthetic("Bash", { command: "echo hi" }).behavior).toBe("deny");
+});
+
+// ---------------------------------------------------------------------------
+// The THIRD table set (C9): tools that are allowed and carry no path at all.
+// ---------------------------------------------------------------------------
+
+test("a pathless-allowed synthetic tool is allowed with an empty input", () => {
+  expect(synthetic("Ponder", {}).behavior).toBe("allow");
+});
+
+test("a pathless-allowed tool stays allowed however its input is decorated", () => {
+  // There is no path to resolve, so nothing in the input can change the answer — including a
+  // field that LOOKS like a path. If a caller could aim it by smuggling `where`, the set would
+  // be a hole rather than a third category.
+  expect(synthetic("Ponder", { where: "C:\\Windows\\System32" }).behavior).toBe("allow");
+});
+
+test("denied beats pathless-allowed — the order is denied, then pathless, then file tools", () => {
+  // `Overlap` is in BOTH sets. Deny must win, or a future table edit could quietly un-deny a
+  // tool by adding it to the newer set.
+  expect(synthetic("Overlap", {}).behavior).toBe("deny");
+});
+
+test("the pathless set widens the allowlist by exactly its own membership and nothing more", () => {
+  // Deny-by-default must NOT become deny-by-default-except-MCP: an unknown name that merely
+  // LOOKS like an MCP tool is still refused.
+  expect(synthetic("Ruminate", {}).behavior).toBe("deny");
+  expect(synthetic("mcp__evil__exfiltrate", {}).behavior).toBe("deny");
+  expect(synthetic("mcp__termcraft__not_a_real_tool", {}).behavior).toBe("deny");
 });

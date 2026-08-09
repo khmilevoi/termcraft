@@ -1,6 +1,6 @@
 import type { AgentPromptContextV1 } from "core/ports";
 
-import { ANSWER_STYLE, DESIGN_CODE_RULES, PAGE_FILE_LAYOUT, ROLE } from "./prose";
+import { ANSWER_STYLE, DESIGN_CODE_RULES, PAGE_FILE_LAYOUT, ROLE, SELF_CHECK } from "./prose";
 
 /**
  * Renders the one part of the prompt that depends on THIS turn's own context — everything
@@ -29,9 +29,21 @@ function renderContext(context: AgentPromptContextV1): string {
   return [activeLine, orderLine, kitApiLine, pinsLines].join("\n");
 }
 
-/** Composes the full system prompt: the static role/rules/layout/answer-style sections plus this turn's own honestly-held context. */
+/**
+ * Composes the full system prompt: the static role/rules/layout/self-check/answer-style sections
+ * plus this turn's own honestly-held context.
+ *
+ * `SELF_CHECK` sits AFTER the layout and BEFORE the turn context deliberately: it refers to the
+ * `design/` tree the layout section has just introduced, and it is an instruction about how to
+ * finish, which belongs next to the answer style rather than buried among the code rules.
+ */
 export function buildSystemPrompt(context: AgentPromptContextV1): string {
-  return [ROLE, DESIGN_CODE_RULES, PAGE_FILE_LAYOUT, renderContext(context), ANSWER_STYLE].join(
-    "\n\n",
-  );
+  return [
+    ROLE,
+    DESIGN_CODE_RULES,
+    PAGE_FILE_LAYOUT,
+    SELF_CHECK,
+    renderContext(context),
+    ANSWER_STYLE,
+  ].join("\n\n");
 }

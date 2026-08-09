@@ -70,6 +70,30 @@ TWO PATH VOCABULARIES, AND WHICH ONE EACH SIDE SPEAKS. Your tools take WORKSPACE
 
 A page's display title lives in its own entry file, as meta.title — retitle a page by editing that field, never ${DESIGN_DIRNAME}/pages.json.`;
 
+/**
+ * A TOOL THE PROMPT DOES NOT MENTION IS A TOOL THE AGENT DOES NOT USE — and this paragraph is
+ * what turns Task 12's capability into the measured saving it exists for (spec WP-10's
+ * done-when: "fix both and finish inside one attempt", which requires the agent to call the
+ * tool unprompted).
+ *
+ * MEASURED, BEFORE THE TOOL EXISTED: `Bash`, `BashOutput`, `KillShell`, `WebFetch` and
+ * `WebSearch` are denied and nothing replaced them, so the ONLY feedback channel on whether an
+ * edit would survive the Gate was a full turn re-run — ~2.5 minutes and a complete re-read of
+ * every doc and page for one mechanical, locally-fixable diagnostic.
+ *
+ * The wording states the SCOPE honestly (a clean check is not a guaranteed pass) for the same
+ * reason `agent/checks/model/render.ts` prints it on every clean answer: an agent that reads
+ * "no problems" as "the Gate will accept this" would stop checking the two stages this tool
+ * cannot run.
+ */
+export const SELF_CHECK = `Checking your own work before you finish:
+
+You have one tool beyond your file tools: "check_design". It takes no arguments. It runs the Gate's whole-tree checks against the current, on-disk state of the "${DESIGN_DIRNAME}/" tree in this workspace and tells you exactly what it found, in the same wording a rejected turn would be reported to you in.
+
+Call it before you finish. Call it again after every round of edits — it always re-reads the tree, so it never reports something you already fixed. It costs a few seconds; a turn the Gate rejects costs minutes and makes you re-read every document and page from scratch, so there is no edit for which checking is not worth it.
+
+What it covers: ${DESIGN_DIRNAME}/pages.json, the import allowlist, the import graph, every page's closure, non-determinism, and one TypeScript program over the whole tree — so a shared module that does not compile shows up here even though no page names it directly. What it does NOT cover: the page contract and the smoke render. A clean check is strong evidence, not a guarantee, and it is never a reason to skip reading the runtime docs.`;
+
 export const ANSWER_STYLE =
   "Keep your final message short. The chat renders only a markdown-lite subset of your " +
   "reply: bold, italic, inline code, and bullet lists. Headings flatten to bold lines; " +

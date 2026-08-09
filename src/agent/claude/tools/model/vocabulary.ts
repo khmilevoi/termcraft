@@ -1,6 +1,8 @@
 import type { ConfinementTables } from "agent/confinement";
 import type { AgentToolOp } from "entities/turn";
 
+import { CHECK_DESIGN_TOOL_NAME } from "./check-design-tool";
+
 /**
  * One Claude Code tool. `op` and `access` are deliberately ORTHOGONAL: a denied
  * tool can still appear in a `tool_use` block before the `canUseTool` veto
@@ -15,12 +17,17 @@ import type { AgentToolOp } from "entities/turn";
  *    be used"; `GrepInput.path` — "Defaults to current working directory".
  *    The agent's cwd IS the staging root (`buildQueryOptions`), so a path-less
  *    call means "the staging root itself" and resolves there.
+ *  - `pathless-allowed` — allowed, and carries NO path argument at all, so
+ *    there is nothing for confinement to resolve or aim (see
+ *    `ConfinementTables.pathlessAllowedTools`). Distinct from `path-optional`,
+ *    which is a statement about a path argument that exists and defaults to
+ *    the cwd.
  *  - `denied` — refused outright regardless of arguments (master §6.1).
  */
 interface ClaudeTool {
   readonly name: string;
   readonly op: AgentToolOp;
-  readonly access: "path-confined" | "path-optional" | "denied";
+  readonly access: "denied" | "path-confined" | "path-optional" | "pathless-allowed";
 }
 
 /**
@@ -49,6 +56,26 @@ const CLAUDE_TOOLS: readonly ClaudeTool[] = [
   { name: "KillShell", op: "run", access: "denied" },
   { name: "WebFetch", op: "search", access: "denied" },
   { name: "WebSearch", op: "search", access: "denied" },
+  // THE ONE NEW CAPABILITY (spec WP-10): the agent's in-process design self-check. `op: "other"`
+  // because it is none of read/edit/run/search of a file — it runs the Gate's whole-tree stages
+  // in this process against the workspace the tool was built with.
+  { name: CHECK_DESIGN_TOOL_NAME, op: "other", access: "pathless-allowed" },
+  // NOT A SECOND CAPABILITY — THE TRANSPORT THE FIRST ONE ARRIVES BY, and an explicit decision
+  // rather than a bet on the SDK's behaviour of the month (spike 11, S4).
+  //
+  // MEASURED: in the live tier-2 run the model emitted TWO `tool_use` blocks — `ToolSearch`
+  // first, then `mcp__termcraft__check_design` — while `canUseTool` was asked about only the
+  // second. So MCP tools are surfaced as DEFERRED tools the model must fetch a schema for
+  // first, and today that fetch bypasses the veto entirely. If a future SDK routes `ToolSearch`
+  // through `canUseTool`, deny-by-default refuses it and `check_design` becomes UNREACHABLE:
+  // advertised and never callable, which the plan names as strictly worse than no tool.
+  //
+  // ALLOWING IT WIDENS NOTHING SUBSTANTIVE. `ToolSearch` fetches tool SCHEMAS; it performs no
+  // filesystem, network or process I/O of its own, and it cannot grant a tool the rest of this
+  // table denies — `Bash` and the other four stay in `disallowedTools` AND in `deniedTools`, so
+  // learning `Bash`'s schema still ends in a refusal at the call. It carries no path, so it
+  // belongs in exactly this set.
+  { name: "ToolSearch", op: "other", access: "pathless-allowed" },
 ];
 
 function namesWhere(access: ClaudeTool["access"]): string[] {
@@ -78,6 +105,7 @@ export const CLAUDE_CONFINEMENT_TABLES: ConfinementTables = {
   fileTools: new Set([...namesWhere("path-confined"), ...namesWhere("path-optional")]),
   deniedTools: new Set(namesWhere("denied")),
   optionalPathTools: OPTIONAL_PATH_TOOLS,
+  pathlessAllowedTools: new Set(namesWhere("pathless-allowed")),
   pathFields: PATH_FIELDS,
 };
 

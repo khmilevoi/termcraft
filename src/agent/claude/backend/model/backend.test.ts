@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
+import type { DesignCheckerPort } from "agent/checks";
 import type { ClaudeQuery, ClaudeQueryFn } from "agent/claude/types";
 import { deriveSessionScope } from "agent/session";
 import type { AgentRun, AgentTask, FencedEvent } from "agent/types";
@@ -14,6 +15,16 @@ import { claudeCapabilities } from "./capabilities";
 
 /** Every async test gets a real timeout guard so a hang fails loudly instead of stalling the suite. */
 const GUARD_MS = 2000;
+
+/**
+ * The design self-check `buildQueryOptions` binds into every attempt's `check_design` tool
+ * (spec WP-10). Never actually called by any test in this file — no test drives a tool handler
+ * — but REQUIRED on `ClaudeBackendDeps` with no default, deliberately: an optional field here
+ * would let a real backend advertise the tool and answer nothing.
+ */
+const stubDesignChecker: DesignCheckerPort = {
+  check: () => Promise.resolve({ errors: [], warnings: [] }),
+};
 
 const task: AgentTask = {
   fence: { turnId: "t", attempt: 0, leaseNonce: "n" },
@@ -132,6 +143,7 @@ test(
       queryFn: () => query([success]),
       processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const run = backend.startTurn(task);
     const events: FencedEvent[] = [];
@@ -178,6 +190,7 @@ test(
       queryFn: () => query([rejectedResumeResult]),
       processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const run = backend.startTurn(resumeTask);
     const outcome = await run.outcome;
@@ -191,6 +204,7 @@ test("sessionScope is a pure, stable derivation matching deriveSessionScope", ()
     queryFn: () => query([success]),
     processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
     wait: async () => {},
+    designChecker: stubDesignChecker,
   });
   const input = { account: "x", model: "claude-opus-4-8", workspaceIdentity: "w" };
   const a = backend.sessionScope(input);
@@ -205,6 +219,7 @@ test("capabilities are the static Claude table", () => {
     queryFn: () => query([success]),
     processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
     wait: async () => {},
+    designChecker: stubDesignChecker,
   });
   expect(backend.capabilities()).toEqual(claudeCapabilities());
 });
@@ -223,6 +238,7 @@ test(
         queryFn: () => query([success]),
         processTreeFactory: () => new ProcessTreeError({ reason: "no Job Object support" }),
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       const run = backend.startTurn(task);
       // This assertion is not a duplicate of degraded-run.test.ts's own shape
@@ -256,6 +272,7 @@ test(
         queryFn: () => query([success]),
         processTreeFactory: () => new ProcessTreeError({ reason: "no Job Object support" }),
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       const run = backend.startTurn(task);
       await expect(backend.cancel(run)).resolves.toBeUndefined();
@@ -273,6 +290,7 @@ test(
       queryFn: () => query([success]),
       processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const foreignRun: AgentRun = {
       fence: task.fence,
@@ -304,6 +322,7 @@ test(
       queryFn: () => query([assistant]),
       processTreeFactory: () => tree,
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const run = backend.startTurn(task);
     await backend.cancel(run);
@@ -320,6 +339,7 @@ test(
       queryFn: () => query([initMessage]),
       processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const info = await backend.healthCheck();
     // `apiKeySource` (`'user'|'project'|'org'|'temporary'|'oauth'`) names WHERE
@@ -351,6 +371,7 @@ test(
         return tree;
       },
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     expect(factoryCalls).toBe(0); // not called until healthCheck() actually runs
     const info = await backend.healthCheck();
@@ -377,6 +398,7 @@ test(
         queryFn: () => query([initMessage]),
         processTreeFactory: () => new ProcessTreeError({ reason: "no Job Object support" }),
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       const info = await backend.healthCheck();
       // No tree was available to adopt into, but the probe still ran and
@@ -411,7 +433,12 @@ test(
         abortControllersSeen.push(params.options.abortController);
       return hangingQuery([assistant]);
     };
-    const backend = createClaudeBackend({ queryFn, processTreeFactory, wait: async () => {} });
+    const backend = createClaudeBackend({
+      queryFn,
+      processTreeFactory,
+      wait: async () => {},
+      designChecker: stubDesignChecker,
+    });
 
     const runA = backend.startTurn(task);
     const runB = backend.startTurn({ ...task, fence: { ...task.fence, attempt: 1 } });
@@ -444,6 +471,7 @@ test(
       queryFn: () => query([success]),
       processTreeFactory: () => tree,
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const run = backend.startTurn(task);
     expect(closeCalls()).toBe(0); // not called before outcome settles
@@ -468,6 +496,7 @@ test(
       queryFn: () => throwingQuery("boom"),
       processTreeFactory: () => tree,
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const run = backend.startTurn(task);
     expect(closeCalls()).toBe(0);
@@ -488,6 +517,7 @@ test(
       queryFn: () => query([assistant]),
       processTreeFactory: () => tree,
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const run = backend.startTurn(task);
     expect(closeCalls()).toBe(0);
@@ -512,6 +542,7 @@ test(
         queryFn: () => query([success]),
         processTreeFactory: () => tree,
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       const run = backend.startTurn(task);
       expect(closeCalls()).toBe(0);
@@ -534,6 +565,7 @@ test(
       queryFn: () => query([success]),
       processTreeFactory: () => tree,
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     const run = backend.startTurn(task);
     // The run already reached a natural outcome by the time cancel() is
@@ -562,6 +594,7 @@ test(
         queryFn,
         processTreeFactory: () => createFakeProcessTree({ counts: [0] }), // ownership never confirmed
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       const run = backend.startTurn(task);
       expect(await run.outcome).toEqual({ kind: "unconfirmed-exit" });
@@ -603,6 +636,7 @@ test(
           return createFakeProcessTree({ counts: [0] }); // ownership never confirmed
         },
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       const firstRun = backend.startTurn(task);
       expect(await firstRun.outcome).toEqual({ kind: "unconfirmed-exit" });
@@ -635,6 +669,7 @@ test(
         queryFn: () => query([success]),
         processTreeFactory: () => createFakeProcessTree({ counts: [0] }), // ownership never confirmed
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       expect(await staleBackend.startTurn(task).outcome).toEqual({ kind: "unconfirmed-exit" });
       expect((await staleBackend.healthCheck()).health).toEqual({
@@ -645,6 +680,7 @@ test(
         queryFn: () => query([initMessage]),
         processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
         wait: async () => {},
+        designChecker: stubDesignChecker,
       });
       expect(await freshBackend.healthCheck()).toEqual({
         backendId: CLAUDE_BACKEND_ID,
@@ -672,6 +708,7 @@ test(
       queryFn,
       processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
       wait: async () => {},
+      designChecker: stubDesignChecker,
       pathToClaudeCodeExecutable: "C:\\bin\\claude.exe",
     });
     await backend.startTurn(task).outcome;
@@ -692,6 +729,7 @@ test(
       queryFn,
       processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
       wait: async () => {},
+      designChecker: stubDesignChecker,
     });
     await backend.startTurn(task).outcome;
     expect(capturedOptions).toBeDefined();
@@ -716,6 +754,7 @@ test(
         wait: async () => {
           waitCalls += 1;
         },
+        designChecker: stubDesignChecker,
         confirmTimeoutMs: 300, // ceil(300 / POLL_INTERVAL_MS(100)) = 3 attempts per poll
       });
       const run = backend.startTurn(task);
@@ -744,6 +783,7 @@ test(
         wait: async () => {
           waitCalls += 1;
         },
+        designChecker: stubDesignChecker,
       });
       const run = backend.startTurn(task);
       await backend.cancel(run);

@@ -19,6 +19,10 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("This project has no pages yet");
   });
 
+  test("tells the agent the self-check tool exists (Task 12) — the prompt is what makes it get used", () => {
+    expect(buildSystemPrompt(EMPTY_CONTEXT)).toContain("check_design");
+  });
+
   test("names the active page, the full portable order, and the kit API version to declare", () => {
     const context: AgentPromptContextV1 = {
       activePageSlug: "home" as PageSlug,

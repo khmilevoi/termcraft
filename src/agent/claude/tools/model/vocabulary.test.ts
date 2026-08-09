@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
+import { CHECK_DESIGN_TOOL_NAME } from "./check-design-tool";
 import {
   CLAUDE_CONFINEMENT_TABLES,
   CLAUDE_DISALLOWED_TOOLS,
   PATH_FIELDS,
   TARGET_FIELDS,
+  toolOp,
 } from "./vocabulary";
 
 describe("derived tables match the pre-unification literals", () => {
@@ -62,5 +64,39 @@ describe("derived tables match the pre-unification literals", () => {
     expect(CLAUDE_CONFINEMENT_TABLES.pathFields).toEqual(PATH_FIELDS);
     expect(CLAUDE_CONFINEMENT_TABLES.pathFields).not.toContain("command");
     expect(CLAUDE_CONFINEMENT_TABLES.pathFields).not.toContain("url");
+  });
+});
+
+describe("the pathless-allowed set (C9)", () => {
+  test("holds exactly the self-check tool and the meta-tool that reaches it", () => {
+    expect([...CLAUDE_CONFINEMENT_TABLES.pathlessAllowedTools].sort()).toEqual(
+      [CHECK_DESIGN_TOOL_NAME, "ToolSearch"].sort(),
+    );
+  });
+
+  test("Bash is still denied and never leaks into the pathless set", () => {
+    expect(CLAUDE_DISALLOWED_TOOLS).toContain("Bash");
+    expect(CLAUDE_CONFINEMENT_TABLES.deniedTools.has("Bash")).toBe(true);
+    expect(CLAUDE_CONFINEMENT_TABLES.pathlessAllowedTools.has("Bash")).toBe(false);
+  });
+
+  test("the disallowed list is unchanged by this addition — exactly the five denied names", () => {
+    expect([...CLAUDE_DISALLOWED_TOOLS]).toEqual([
+      "Bash",
+      "BashOutput",
+      "KillShell",
+      "WebFetch",
+      "WebSearch",
+    ]);
+  });
+
+  test("a pathless-allowed tool is not a file tool", () => {
+    expect(CLAUDE_CONFINEMENT_TABLES.fileTools.has(CHECK_DESIGN_TOOL_NAME)).toBe(false);
+    expect(CLAUDE_CONFINEMENT_TABLES.optionalPathTools.has(CHECK_DESIGN_TOOL_NAME)).toBe(false);
+  });
+
+  test("the UI renders both pathless tools under an op it actually has", () => {
+    expect(toolOp(CHECK_DESIGN_TOOL_NAME)).toBe("other");
+    expect(toolOp("ToolSearch")).toBe("other");
   });
 });

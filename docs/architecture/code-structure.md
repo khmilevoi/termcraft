@@ -85,6 +85,7 @@ flowchart LR
        types.ts
        index.ts
      agent/             AgentBackend over the vendors' official TypeScript SDKs [landed]
+       checks/          SHARED tier — the design SELF-CHECK a turn runs on itself
        confinement/     SHARED tier — the deny-by-default confinement RULE
        session/         SHARED tier — session-scope derivation, resume/fresh prompt
        health/          SHARED tier — backend-agnostic health-probe policy
@@ -109,13 +110,16 @@ flowchart LR
    report models × efforts, derive a session scope) that names no vendor and
    imports no vendor SDK; `core/ports/agent-backend.ts` now carries the Kernel-side
    counterpart consumed by phase-6 orchestration.
-   Four sibling folders are the shared tier every backend may reuse:
+   Five sibling folders are the shared tier every backend may reuse:
    `confinement/` (the deny-by-default rule, parameterized over a table of tool
    names rather than hard-coding any), `session/` (session-scope derivation and
    the resume/fresh prompt), `health/` (the health-probe policy — deadline,
-   process-tree close, ambiguity classification), and `run/` (the run loop
+   process-tree close, ambiguity classification), `run/` (the run loop
    itself — the terminal latch, the event queue, and both exit-confirmation
-   ladders). None of the four imports a vendor SDK. `agent/claude/` is the one
+   ladders), and `checks/` (the design self-check a turn runs against its own
+   workspace mid-attempt, plus the `DesignCheckerPort` it consumes). None of the
+   five imports a vendor SDK — `checks/` in particular holds the renderer and the
+   port, while the SDK-shaped tool that wraps them lives in `claude/tools/`. `agent/claude/` is the one
    vendor tier that exists — the Claude Code adapter, which supplies its own
    tool table, its own SDK option building, and a driver that feeds the shared
    run loop, but owns no run loop of its own. A future Codex backend becomes a
@@ -407,6 +411,20 @@ vendor tier's own pre-split run-loop file.
 - `src/agent/index.ts` — the module's public entry: the port types plus
   `createProductionClaudeBackend`; deliberately vendor-neutral, with all
   Claude-specific construction re-exported from `agent/claude`
+- `src/agent/checks/types.ts` — `DesignCheckerPort`, the design self-check `agent`
+  CONSUMES and therefore declares (item 4). It cannot import
+  `core/ports/gate-runner.ts`, since `agent` may import neither `core` nor `gate`, so
+  the diagnostic shapes are redrawn narrowly here and
+  `src/entrypoint/model/design-checker.ts` injects the `gate`-backed implementation —
+  the mirror image of `AgentBackend` being lifted into `core/ports/`
+- `src/agent/checks/model/render.ts` — the check's own renderer. An EXPLICITLY
+  duplicated copy of `core/turns/model/prompt.ts`'s retry-fold line format (same
+  wall: `agent` cannot import `core`), identical character for character so the agent
+  reads one vocabulary mid-attempt and in a retry prompt; its own header states the
+  one deliberate selection difference and why
+- `src/agent/checks/model/run-check.ts` — `runDesignCheck`: one self-check, rendered.
+  Calls the port on EVERY invocation and memoizes nothing, which is what makes the
+  tool a LIVE read of the workspace rather than a snapshot
 - `src/agent/confinement/model/policy.ts` — `createConfinementPolicy`, the SHARED
   deny-by-default rule, parameterized over a `ConfinementTables` record so it holds
   no vendor tool names itself
@@ -474,12 +492,20 @@ vendor tier's own pre-split run-loop file.
   than editing `agent/confinement/`
 - `src/agent/claude/tools/model/tool-op.ts` — `mapToolUse`: an SDK `tool_use` block
   into the UI's op + target
+- `src/agent/claude/tools/model/check-design-tool.ts` — the SDK-shaped `check_design`
+  tool and the in-process MCP server carrying it. Lives in the VENDOR tier because
+  `createSdkMcpServer`/`tool()` are Claude Agent SDK surface and no shared folder
+  imports a vendor SDK; its body is `agent/checks`'s vendor-neutral `runDesignCheck`.
+  Its input schema is EMPTY on purpose — a tool with no path argument cannot be aimed
+  outside the workspace, which is why `ConfinementTables` grew a third
+  `pathlessAllowedTools` set rather than a widened `optionalPathTools`
 - `src/agent/claude/query/model/query-fn.ts` — `createRealQueryFn`: the production
   seam assigning the SDK's real `query` without a cast, so a future signature drift
   fails the typecheck instead of being silently absorbed
 - `src/agent/claude/query/model/query-options.ts` — `buildQueryOptions`: the
   per-attempt SDK options — workspace as cwd and only writable root, no external
-  settings sources, the `canUseTool` veto, and the spawn hook that makes the CLI ours
+  settings sources, the `canUseTool` veto, the in-process `mcpServers` entry carrying
+  `check_design`, and the spawn hook that makes the CLI ours
 - `src/agent/claude/query/model/session-options.ts` — `planToSessionOptions`: the
   vendor half of session planning, turning a `SessionPlan` into SDK `resume`/
   `forkSession` options (the prompt half lives in the shared `agent/session/model/prompt.ts`)

@@ -7,11 +7,17 @@
 // and `get()` both read `backend.capabilities()` honestly on every call — never a cached
 // or invented label — so a future capability change (a new model added to the catalog)
 // is reflected without this file needing to change.
+import type { DesignCheckerPort } from "agent/checks";
 import { createProductionClaudeBackend } from "agent/claude";
 import type { AgentBackend, AgentRegistry, AssertConforms, BackendCapabilities } from "core/ports";
 
-export function createProductionAgentRegistry(): AgentRegistry {
-  const backend = createProductionClaudeBackend();
+/**
+ * `designChecker` is threaded straight through to the one backend this registry holds (spec
+ * WP-10) — required, never defaulted: it is `gate`-backed, and only the composition root can see
+ * both `agent` and `gate`. See `agent/claude/index.ts`'s `createProductionClaudeBackend`.
+ */
+export function createProductionAgentRegistry(designChecker: DesignCheckerPort): AgentRegistry {
+  const backend = createProductionClaudeBackend(designChecker);
 
   function list(): readonly BackendCapabilities[] {
     return [backend.capabilities()];

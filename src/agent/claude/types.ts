@@ -1,5 +1,6 @@
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
+import type { DesignCheckerPort } from "agent/checks";
 import type { ProcessTreeFactory } from "infrastructure/process";
 
 /**
@@ -24,6 +25,14 @@ export interface ClaudeBackendDeps {
   readonly processTreeFactory: ProcessTreeFactory;
   /** Injectable delay for the §6.5 exit-confirmation polls; production = `(ms) => Bun.sleep(ms)`. */
   readonly wait: (ms: number) => Promise<void>;
+  /**
+   * Backs the in-process `check_design` tool every attempt registers (spec WP-10). REQUIRED,
+   * with no default anywhere in the chain — see `agent/claude/query/types.ts`'s
+   * `QueryOptionDeps.designChecker` for why a fallback here would be the exact silent failure
+   * the capability exists to prevent. Injected by the composition root, which is the only ring
+   * allowed to see both `agent` and `gate`.
+   */
+  readonly designChecker: DesignCheckerPort;
   /** Override for the CLI path in a compiled binary (Spike H compiled-binary parity). */
   readonly pathToClaudeCodeExecutable?: string;
   /** Reparse-point backstop injected on Windows (Spike F). */

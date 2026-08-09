@@ -24,7 +24,10 @@ function primaryPath(
  * `tables` is the backend's own tool vocabulary (see {@link ConfinementTables}) —
  * this function itself knows no vendor tool names, only the RULE: deny by
  * default, allow a file tool only when its resolved path stays inside
- * `stagingRoot`.
+ * `stagingRoot`, and allow a PATHLESS tool only when the tables name it
+ * (`pathlessAllowedTools`, added for the in-process `check_design` tool — see
+ * that field's own doc for why it is a third set rather than a widened
+ * `optionalPathTools`).
  *
  * Non-Reatom: this module holds no atoms and owns no Reatom lifetime — it is a
  * pure decision function called synchronously from a backend's own
@@ -43,6 +46,19 @@ export function createConfinementPolicy(
   ): PermissionResultLike => {
     if (tables.deniedTools.has(toolName)) {
       return { behavior: "deny", message: `${toolName} is not permitted in a design turn` };
+    }
+    // ORDER: denied -> pathless-allowed -> file tools -> deny. This branch sits ABOVE the file
+    // -tool test because the test below it resolves a PATH and refuses when none resolves — a
+    // pathless tool would hit that refusal on every call. It sits BELOW the denied test so a
+    // name present in both sets is still denied: deny always wins, and a future table edit
+    // cannot quietly un-deny a tool by adding it to the newer set.
+    //
+    // The input is deliberately not consulted. These tools have no path argument at all (see
+    // `ConfinementTables.pathlessAllowedTools`), so there is nothing in it that could change the
+    // answer, and reading a path-shaped field out of one anyway would invent an aiming mechanism
+    // the tool does not have.
+    if (tables.pathlessAllowedTools.has(toolName)) {
+      return { behavior: "allow" };
     }
     if (!tables.fileTools.has(toolName)) {
       return { behavior: "deny", message: `Tool ${toolName} is not on the design-turn allowlist` };

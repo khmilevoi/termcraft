@@ -71,6 +71,10 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
       const options = buildQueryOptions(task, {
         abortController,
         processTree: tree,
+        // Forwarded, never defaulted here: the tool is bound to THIS attempt's workspace inside
+        // `buildQueryOptions`, and a backend that quietly substituted a no-op checker would
+        // advertise `check_design` and answer nothing.
+        designChecker: deps.designChecker,
         pathToClaudeCodeExecutable: deps.pathToClaudeCodeExecutable,
         hasReparsePoint: deps.hasReparsePoint,
       });

@@ -4,6 +4,7 @@
 // assembles the PRODUCTION instance. NON-Reatom injected adapter — no atoms,
 // no connect-hook lifetimes; the run/process lifetime is owned explicitly
 // (hardening §3.8).
+import type { DesignCheckerPort } from "agent/checks";
 import type { AgentBackend } from "agent/types";
 import { isReparsePoint } from "infrastructure/fs-guard";
 import { createJobObjectTree } from "infrastructure/process";
@@ -40,16 +41,26 @@ function hasReparsePoint(candidatePath: string): boolean {
  * unit test for the standalone `hasReparsePoint` helper proves nothing about
  * whether the production wiring site actually wires it in.
  */
-export function createProductionClaudeBackendDeps(): ClaudeBackendDeps {
+export function createProductionClaudeBackendDeps(
+  designChecker: DesignCheckerPort,
+): ClaudeBackendDeps {
   return {
     queryFn: createRealQueryFn(),
     processTreeFactory: createJobObjectTree,
     wait: (ms) => Bun.sleep(ms),
+    designChecker,
     hasReparsePoint,
   };
 }
 
-/** Production wiring: real SDK query + real Job Object tree + real sleep + the Spike F reparse backstop. */
-export function createProductionClaudeBackend(): AgentBackend {
-  return createClaudeBackend(createProductionClaudeBackendDeps());
+/**
+ * Production wiring: real SDK query + real Job Object tree + real sleep + the Spike F reparse
+ * backstop, plus the composition root's `gate`-backed design checker (spec WP-10).
+ *
+ * `designChecker` is a REQUIRED PARAMETER rather than something this factory could build: it is
+ * backed by `gate`, and `agent` may import neither `gate` nor `core`. The only ring that can see
+ * both is the composition root, so the only honest shape is for it to hand one in.
+ */
+export function createProductionClaudeBackend(designChecker: DesignCheckerPort): AgentBackend {
+  return createClaudeBackend(createProductionClaudeBackendDeps(designChecker));
 }

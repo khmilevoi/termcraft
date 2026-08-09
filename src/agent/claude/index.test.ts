@@ -3,11 +3,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import type { DesignCheckerPort } from "agent/checks";
+
 import { CLAUDE_BACKEND_ID, claudeCapabilities } from "./backend";
 import { createProductionClaudeBackend, createProductionClaudeBackendDeps } from "./index";
 
+/** Required by the production factories (spec WP-10); this suite drives no turn, so a clean
+ *  stub is the honest stand-in. */
+const stubDesignChecker: DesignCheckerPort = {
+  check: () => Promise.resolve({ errors: [], warnings: [] }),
+};
+
 test("the production backend exposes the five port methods and static capabilities", () => {
-  const backend = createProductionClaudeBackend();
+  const backend = createProductionClaudeBackend(stubDesignChecker);
   expect(typeof backend.startTurn).toBe("function");
   expect(typeof backend.cancel).toBe("function");
   expect(typeof backend.healthCheck).toBe("function");
@@ -17,7 +25,7 @@ test("the production backend exposes the five port methods and static capabiliti
 });
 
 test("capabilities() is the real static Claude table, not a stub", () => {
-  const backend = createProductionClaudeBackend();
+  const backend = createProductionClaudeBackend(stubDesignChecker);
   expect(backend.capabilities()).toEqual(claudeCapabilities());
 });
 
@@ -29,7 +37,9 @@ describe.skipIf(!onWindows)("createProductionClaudeBackendDeps (Windows)", () =>
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "termcraft-agent-reparse-"));
 
   test("supplies a hasReparsePoint hook", () => {
-    expect(typeof createProductionClaudeBackendDeps().hasReparsePoint).toBe("function");
+    expect(typeof createProductionClaudeBackendDeps(stubDesignChecker).hasReparsePoint).toBe(
+      "function",
+    );
   });
 
   test("the supplied hook detects a real junction and passes through a plain directory", () => {
@@ -41,7 +51,7 @@ describe.skipIf(!onWindows)("createProductionClaudeBackendDeps (Windows)", () =>
     // `junction` type does not require elevation on Windows (Spike F).
     fs.symlinkSync(target, link, "junction");
 
-    const hasReparsePoint = createProductionClaudeBackendDeps().hasReparsePoint!;
+    const hasReparsePoint = createProductionClaudeBackendDeps(stubDesignChecker).hasReparsePoint!;
     expect(hasReparsePoint(link)).toBe(true);
     expect(hasReparsePoint(plain)).toBe(false);
 

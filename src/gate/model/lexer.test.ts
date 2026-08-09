@@ -362,10 +362,16 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // bring the count to 917. Merging `main`'s own independent work (chat-scroll pagination,
     // the `TextEditor` input-editing rewrite, the `ui/agent-health` extraction, and more)
     // brings it to 929. design-tree-phase-3 task 6 adds
-    // `host/supervisor/model/spare-pool.ts` and its own `spare-pool.test.ts`, taking it to 931
+    // `host/supervisor/model/spare-pool.ts` and its own `spare-pool.test.ts`, taking it to 931.
+    // The design-agent-feedback-loop repair's Tasks 1-11 add two more, taking it to 933 — this
+    // number went stale there and is CORRECTED here rather than merely bumped, since a count
+    // that is already wrong makes every later bump unverifiable. Task 12 then adds ten:
+    // `agent/checks/`'s six (`types.ts`, `index.ts`, `model/render.ts`, `model/run-check.ts` and
+    // the two tests beside them), `agent/claude/tools/model/check-design-tool.ts` with its test,
+    // and `entrypoint/model/design-checker.ts` with its test — taking it to 943
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(931);
+    expect(files.length).toBe(943);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

@@ -3,11 +3,18 @@ import path from "node:path";
 
 import type { SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 
+import type { DesignCheckerPort } from "agent/checks";
+import { CHECK_DESIGN_TOOL_NAME } from "agent/claude/tools";
 import type { AgentTask } from "agent/types";
 import type { ProcessTree } from "infrastructure/process";
 import { ProcessTreeError, createFakeProcessTree } from "infrastructure/process";
 
 import { buildQueryOptions } from "./query-options";
+
+/** A checker that reports a clean tree — enough for every option-shape assertion here. */
+const cleanChecker: DesignCheckerPort = {
+  check: () => Promise.resolve({ errors: [], warnings: [] }),
+};
 
 const staging = path.resolve("C:\\ws");
 const task: AgentTask = {
@@ -24,6 +31,7 @@ test("[15] options bind cwd to staging, isolate settings, deny the full disallow
   const opts = buildQueryOptions(task, {
     abortController: new AbortController(),
     processTree: createFakeProcessTree({ counts: [1] }),
+    designChecker: cleanChecker,
   });
   expect(opts.cwd).toBe(staging);
   expect(opts.additionalDirectories).toEqual([]);
@@ -49,6 +57,7 @@ test("canUseTool denies an out-of-staging write and allows an in-staging edit", 
   const opts = buildQueryOptions(task, {
     abortController: new AbortController(),
     processTree: createFakeProcessTree({ counts: [1] }),
+    designChecker: cleanChecker,
   });
   const deny = await opts.canUseTool!(
     "Write",
@@ -67,10 +76,61 @@ test("canUseTool denies an out-of-staging write and allows an in-staging edit", 
 test("a resume plan sets resume and forkSession:false", () => {
   const opts = buildQueryOptions(
     { ...task, session: { kind: "resume", sessionId: "s9", promptDelta: null } },
-    { abortController: new AbortController(), processTree: createFakeProcessTree({ counts: [1] }) },
+    {
+      abortController: new AbortController(),
+      processTree: createFakeProcessTree({ counts: [1] }),
+      designChecker: cleanChecker,
+    },
   );
   expect(opts.resume).toBe("s9");
   expect(opts.forkSession).toBe(false);
+});
+
+test("the in-process termcraft MCP server is registered alongside the isolated settings", () => {
+  const opts = buildQueryOptions(task, {
+    abortController: new AbortController(),
+    processTree: createFakeProcessTree({ counts: [1] }),
+    designChecker: cleanChecker,
+  });
+  // `settingSources: []` isolates the turn from the user's own settings, and MCP servers are
+  // ordinarily a settings-level concept — spike 11 Q2/Q4 confirmed an `Options.mcpServers`
+  // entry survives that isolation and reaches the model through our own CLI spawn.
+  expect(Object.keys(opts.mcpServers ?? {})).toEqual(["termcraft"]);
+  expect(opts.settingSources).toEqual([]);
+  expect(opts.disallowedTools).toContain("Bash");
+});
+
+test("[S4] the whole path works with the REAL production canUseTool in force", async () => {
+  // NOT a table-contents assertion. Spike 11 measured the model reaching the MCP tool via
+  // `ToolSearch` FIRST, with `canUseTool` never consulted about `ToolSearch` itself — so the
+  // tool worked. If a future SDK routes `ToolSearch` through the callback, deny-by-default
+  // would refuse it and `check_design` would become UNREACHABLE: advertised and never
+  // callable, which this task's own reasoning calls strictly worse than no tool. This drives
+  // the real policy so that day fails here instead of in a user's turn.
+  const opts = buildQueryOptions(task, {
+    abortController: new AbortController(),
+    processTree: createFakeProcessTree({ counts: [1] }),
+    designChecker: cleanChecker,
+  });
+  const ask = (name: string): Promise<{ behavior: string }> =>
+    opts.canUseTool!(
+      name,
+      {},
+      {
+        signal: new AbortController().signal,
+        toolUseID: `u-${name}`,
+        requestId: `r-${name}`,
+      },
+    ) as Promise<{ behavior: string }>;
+
+  expect((await ask(CHECK_DESIGN_TOOL_NAME)).behavior).toBe("allow");
+  // THE DECISION, MADE HERE RATHER THAN LEFT TO THE SDK'S BEHAVIOUR OF THE MONTH: `ToolSearch`
+  // is ALLOWED. It fetches tool schemas and does no I/O of its own, it carries no path, and it
+  // is the transport by which the model reaches `check_design` at all.
+  expect((await ask("ToolSearch")).behavior).toBe("allow");
+  // Everything else the deny-by-default rule already refused stays refused.
+  expect((await ask("Bash")).behavior).toBe("deny");
+  expect((await ask("mcp__evil__exfiltrate")).behavior).toBe("deny");
 });
 
 /**
@@ -154,6 +214,7 @@ test("spawnClaudeCodeProcess actually spawns the CLI and adopts its real pid int
   const opts = buildQueryOptions(task, {
     abortController: new AbortController(),
     processTree: tree,
+    designChecker: cleanChecker,
   });
   expect(opts.spawnClaudeCodeProcess).toBeDefined();
 
@@ -186,6 +247,7 @@ test("[11][22] spawnClaudeCodeProcess with a command that cannot spawn (no pid) 
   const opts = buildQueryOptions(task, {
     abortController: new AbortController(),
     processTree: tree,
+    designChecker: cleanChecker,
   });
 
   const child = opts.spawnClaudeCodeProcess!({
@@ -218,6 +280,7 @@ test("[11][22] spawnClaudeCodeProcess returns the child unchanged and records ad
   const opts = buildQueryOptions(task, {
     abortController: new AbortController(),
     processTree: tree,
+    designChecker: cleanChecker,
   });
 
   const child = opts.spawnClaudeCodeProcess!({
@@ -243,6 +306,7 @@ test("[11][22] spawnClaudeCodeProcess records adoption failure when the post-ado
   const opts = buildQueryOptions(task, {
     abortController: new AbortController(),
     processTree: tree,
+    designChecker: cleanChecker,
   });
 
   const child = opts.spawnClaudeCodeProcess!({
@@ -269,6 +333,7 @@ test("[11][22] spawnClaudeCodeProcess records adoption failure when the post-ado
   const opts = buildQueryOptions(task, {
     abortController: new AbortController(),
     processTree: tree,
+    designChecker: cleanChecker,
   });
 
   const child = opts.spawnClaudeCodeProcess!({

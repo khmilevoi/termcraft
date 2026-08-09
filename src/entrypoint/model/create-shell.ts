@@ -54,6 +54,7 @@ import type {
   ShellLaunchV1,
   ShellWithAgentRegistry,
 } from "../types";
+import { createGateDesignChecker } from "./design-checker";
 
 /**
  * Builds the Kernel boundary one run drives.
@@ -198,10 +199,18 @@ async function interactiveShell(
     runtimeDeclaration: EMBEDDED_RUNTIME_DECLARATION,
   });
 
+  // ONE `GateRunner`, TWO CONSUMERS, and that is deliberate (spec WP-10, Task 12). The Kernel
+  // gets it as `kernelDeps.gateRunner` for the turn's own validation; the agent gets it —
+  // wrapped as a `DesignCheckerPort` — behind its in-process `check_design` tool. Two
+  // independently built runners would mean the mid-attempt self-check and the verdict that
+  // rejects the attempt could disagree about the same tree, which is the one thing a self-check
+  // must never do. `agent` never sees `gate` at all: it declares the port, this root injects it.
+  const gateRunner = buildGateRunner(compilerPath, smokeRenderer);
+
   // Captured once so the SAME registry both feeds the Kernel's own `agentRegistry` port AND is
   // exposed on the returned shell (`ShellWithAgentRegistry.agentRegistry`) for `run-app.ts`'s
   // Task 9 Home health probe — never two independently constructed registries drifting apart.
-  const agentRegistry = createProductionAgentRegistry();
+  const agentRegistry = createProductionAgentRegistry(createGateDesignChecker(gateRunner));
 
   const kernelDeps: KernelDeps = {
     projectStore: createProjectStoreAdapter(storeAdapterDeps),
@@ -220,7 +229,7 @@ async function interactiveShell(
     renderCache: projections.render,
     sessionCheckpoint: createSessionCheckpointAdapter(storeAdapterDeps),
     recovery: createRecoveryAdapter(storeAdapterDeps),
-    gateRunner: buildGateRunner(compilerPath, smokeRenderer),
+    gateRunner,
     hostSupervisor: hostSupervisorAdapter,
     exportRender: createExportRenderAdapter({
       spawn,
