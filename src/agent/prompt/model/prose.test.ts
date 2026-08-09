@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { DESIGN_DIRNAME } from "entities/design-tree";
 import { ANSWER_STYLE, DESIGN_CODE_RULES, PAGE_FILE_LAYOUT, ROLE } from "./prose";
 
 describe("agent/prompt static prose", () => {
@@ -75,7 +76,7 @@ describe("agent/prompt static prose", () => {
    * them relative. Six wasted tool calls per turn for a fact the prompt simply never stated.
    */
   test("PAGE_FILE_LAYOUT states that paths are relative to the workspace root", () => {
-    expect(PAGE_FILE_LAYOUT).toContain("working directory IS the workspace root");
+    expect(PAGE_FILE_LAYOUT).toContain("working directory is the WORKSPACE ROOT");
     expect(PAGE_FILE_LAYOUT).toContain("relative");
     expect(PAGE_FILE_LAYOUT).toContain("leading slash");
   });
@@ -101,5 +102,29 @@ describe("agent/prompt static prose", () => {
   test("ROLE names the fenced turn workspace and the agent's own file tools", () => {
     expect(ROLE).toContain("turn workspace");
     expect(ROLE).toContain("file tools");
+  });
+
+  test("the layout prose names the design tree's real root", () => {
+    expect(PAGE_FILE_LAYOUT).toContain(`${DESIGN_DIRNAME}/pages.json`);
+    expect(PAGE_FILE_LAYOUT).toContain(`${DESIGN_DIRNAME}/pages/dashboard.tsx`);
+    // The retired claim, in the exact words the measured run acted on.
+    expect(PAGE_FILE_LAYOUT).not.toContain("it IS the design tree");
+  });
+
+  test("no example path is stated without its tree prefix", () => {
+    // Every quoted path that looks tree-relative must carry the prefix. `pages.json` appears
+    // inside prose about the manifest too, so match the QUOTED forms the agent copies.
+    for (const bare of ['"pages.json"', '"pages/dashboard.tsx"', '"lib/theme.ts"']) {
+      expect(PAGE_FILE_LAYOUT).not.toContain(bare);
+    }
+  });
+
+  test("the existing leading-slash warning survives", () => {
+    expect(PAGE_FILE_LAYOUT).toContain("A leading slash escapes the workspace and is refused.");
+  });
+
+  test("the runtime docs are stated at the workspace root, beside the tree and not inside it", () => {
+    expect(PAGE_FILE_LAYOUT).toContain("RUNTIME.md and runtime.d.ts, at the workspace root");
+    expect(PAGE_FILE_LAYOUT).not.toContain(`${DESIGN_DIRNAME}/RUNTIME.md`);
   });
 });

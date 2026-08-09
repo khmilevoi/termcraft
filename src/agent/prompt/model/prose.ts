@@ -6,6 +6,8 @@
  * (the slug mask, quoted verbatim).
  */
 
+import { DESIGN_DIRNAME } from "entities/design-tree";
+
 export const ROLE =
   "You are termcraft's page-authoring agent. You work entirely inside one fenced turn " +
   "workspace, using your own native file tools to read and edit page modules — there is no " +
@@ -40,17 +42,33 @@ Page slugs: a slug must match ^[a-z0-9][a-z0-9-]{0,31}$ and must not be a Window
 // `entry` path the agent chooses, and any other file in the tree is a shared module. The
 // prompt states the binding explicitly because nothing else can — a slug-derived path is
 // exactly what this design retires.
+//
+// SECOND OCCURRENCE (defect fix, 2026-08-09). The 2026-07-27 fix above named the anchor and the
+// layout comment below predicted the next layout change would need the prose carried forward —
+// and then it was not. The multi-file tree moved every design file under `design/`
+// (`store/sandbox/model/staging-store.ts:300` stages `design/<relPath>`, against
+// `entities/design-tree`'s `DESIGN_DIRNAME`), while line 45 went on saying the working directory
+// "IS the design tree". MEASURED cost, one run of `examples/clock` on 2026-08-09: five `Read`
+// calls returned ENOENT across three sessions, each followed by a recovery `Glob **/*`.
+//
+// THE PREVENTION IS NOT THIS COMMENT. `DESIGN_DIRNAME` is now INTERPOLATED into every path
+// below, so a rename of the tree root rewrites this prose mechanically and a third occurrence of
+// this defect is not possible by that route. What a comment still cannot cover is a change to the
+// SHAPE of the layout (a second tree, a nested namespace) — which is what happened both times.
+// If you are making one, this block is the thing to re-read first.
 export const PAGE_FILE_LAYOUT = `Design-tree layout inside this workspace:
 
-Your working directory IS the workspace root, and it IS the design tree. Every path below is relative to it — read and edit them as "pages/dashboard.tsx", never "/pages/dashboard.tsx". A leading slash escapes the workspace and is refused.
+Your working directory is the WORKSPACE ROOT. The design tree is the "${DESIGN_DIRNAME}/" directory inside it — that is where every page and every shared module lives. The runtime docs sit BESIDE the tree at the workspace root, not inside it. Every path below is relative to the workspace root — read and edit them as "${DESIGN_DIRNAME}/pages/dashboard.tsx", never with a leading slash (like /${DESIGN_DIRNAME}/pages/dashboard.tsx), and never bare without the tree directory name. A leading slash escapes the workspace and is refused.
 
-- pages.json — the manifest, and the ONLY thing that decides which pages exist, in what order, and which file each one lives in. Every entry is { "slug": "...", "entry": "<a path in this tree>" }. Add a page by writing its file AND adding its entry here; remove one by deleting its entry; reorder pages by reordering the array. A file this manifest does not name is a shared module, not a page.
-- <any path you choose> — a page's entry file can live anywhere in the tree. "pages/<slug>.tsx" is a good convention and nothing more; the manifest's "entry" value is what makes a file a page.
-- shared modules — any other file. Put reusable components, tokens and helpers in "lib/" or "components/" and import them with a relative specifier. This is the point of the tree: several pages importing one "lib/theme.ts" is the intended shape, not a workaround.
+- ${DESIGN_DIRNAME}/pages.json — the manifest, and the ONLY thing that decides which pages exist, in what order, and which file each one lives in. Every entry is { "slug": "...", "entry": "<a path RELATIVE TO ${DESIGN_DIRNAME}/>" } — so a page at "${DESIGN_DIRNAME}/pages/dashboard.tsx" is entered as pages/dashboard.tsx (the manifest stores tree-relative paths, not workspace-relative). Add a page by writing its file AND adding its entry here; remove one by deleting its entry; reorder pages by reordering the array. A file this manifest does not name is a shared module, not a page.
+- ${DESIGN_DIRNAME}/<any path you choose> — a page's entry file can live anywhere in the tree. "pages/<slug>.tsx" is a good convention and nothing more; the manifest's "entry" value is what makes a file a page.
+- shared modules — any other file in the tree. Put reusable components, tokens and helpers in "${DESIGN_DIRNAME}/lib/" or "${DESIGN_DIRNAME}/components/" and import them with a relative specifier. This is the point of the tree: several pages importing one "${DESIGN_DIRNAME}/lib/theme.ts" is the intended shape, not a workaround.
 - RUNTIME.md and runtime.d.ts, at the workspace root — the runtime API reference for "@termcraft/runtime". Read them before writing or editing anything.
 - REATOM.md, alongside them — how state works in this runtime. It is Reatom v1001, which is NOT the Reatom most code you have seen uses: there is no "ctx" parameter and no ".spy". Read it before writing any atom, computed, action, or reatomComponent, and do not fall back on remembered Reatom idioms instead.
 
-A page's display title lives in its own entry file, as meta.title — retitle a page by editing that field, never pages.json.`;
+TWO PATH VOCABULARIES, AND WHICH ONE EACH SIDE SPEAKS. Your tools take WORKSPACE-relative paths ("${DESIGN_DIRNAME}/pages/dashboard.tsx"). "${DESIGN_DIRNAME}/pages.json"'s own "entry" values are TREE-relative (pages/dashboard.tsx, without the "${DESIGN_DIRNAME}/" prefix) — that is the manifest's format, not a mistake. Prefix a manifest entry with "${DESIGN_DIRNAME}/" before you read or edit the file it names.
+
+A page's display title lives in its own entry file, as meta.title — retitle a page by editing that field, never ${DESIGN_DIRNAME}/pages.json.`;
 
 export const ANSWER_STYLE =
   "Keep your final message short. The chat renders only a markdown-lite subset of your " +
