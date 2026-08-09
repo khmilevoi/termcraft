@@ -874,11 +874,13 @@ const turnGateWarningV1Schema = z.strictObject({
   line: positiveIntSchema.nullable(),
   column: positiveIntSchema.nullable(),
   /**
-   * The file `import-cycle`/`dead-module` are ABOUT (`gate/types.ts`'s `GateWarning.file`,
-   * `core/ports/gate-runner.ts`'s `GateWarningV1.file`) — `null` for every other warning kind,
-   * none of which is produced against a single tree-relative path. `.nullable()`, never
-   * `.optional()`, matching this file's own binding rule: a widened echo of an optional port
-   * field stays present-or-explicitly-absent on the wire, never merely omitted (see
+   * The source this warning was produced against (`gate/types.ts`'s `GateWarning.file`,
+   * `core/ports/gate-runner.ts`'s `GateWarningV1.file`) — every per-page lint stamps it at its
+   * one call site in `gate/model/gate.ts` (defect fix, 2026-08-09), same as the whole-tree
+   * pass already did for `import-cycle`/`dead-module`. `null` means the warning is about the
+   * TREE, not a file — the rare case, not the default. `.nullable()`, never `.optional()`,
+   * matching this file's own binding rule: a widened echo of an optional port field stays
+   * present-or-explicitly-absent on the wire, never merely omitted (see
    * `turnGateErrorV1Schema`'s identical `file` field just above).
    */
   file: z.string().min(1).nullable(),

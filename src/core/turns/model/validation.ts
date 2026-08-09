@@ -243,8 +243,9 @@ function toGateWarningDto(warning: GateWarningV1): TurnGateDiagnosticsV1["warnin
     line: warning.line ?? null,
     column: warning.column ?? null,
     // `?? null` follows this file's own `undefined -> null` convention (see `toGateErrorDto`
-    // just above) — set for `import-cycle`/`dead-module` (design-tree phase 2 Task 4), absent
-    // for every other warning kind.
+    // just above). Every per-page lint stamps `file` at its one call site in
+    // `gate/model/gate.ts` (defect fix, 2026-08-09); `import-cycle`/`dead-module` are no
+    // longer the exception, just one more producer of the same field.
     file: warning.file ?? null,
   };
 }
