@@ -72,8 +72,14 @@ export {
   StaleGateDiagnosticsError,
   appendPromptFold,
   foldGateDiagnosticsIntoPrompt,
+  foldSurvivingWarnings,
 } from "./model/prompt";
-export type { TurnGateDiagnosticsV1, TurnGateFoldInputV1 } from "./model/prompt";
+export type {
+  SurvivingWarningV1,
+  TurnGateDiagnosticsV1,
+  TurnGateFoldInputV1,
+  TurnSurvivingWarningsFoldInputV1,
+} from "./model/prompt";
 
 export { ReadSetTranslationError, toFinalizeReadSet } from "./model/read-set";
 

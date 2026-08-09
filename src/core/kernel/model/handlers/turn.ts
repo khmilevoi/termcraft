@@ -37,10 +37,12 @@ import {
   type RunTurnValidationMaterialV1,
   type TurnCandidateV1,
   advanceSessionCheckpoint,
+  appendPromptFold,
   candidateTreeInventory,
   createTurnDeadlines,
   evaluateSessionPlan,
   foldGateDiagnosticsIntoPrompt,
+  foldSurvivingWarnings,
   readSetTreeInventory,
   runTurn,
   selectChangedPages,
@@ -934,6 +936,68 @@ function abortEarlyAdmission(
  * Best-effort by construction: a chat naming is cosmetic next to running the turn, so a failed
  * read is logged and skipped (errore rule 21), never propagated into the turn's own outcome.
  */
+/**
+ * The surviving-warnings fold for `turn.start`'s prompt (design-agent-feedback-loop repair,
+ * Task 10, 2026-08-09) — see `core/turns/model/prompt.ts`'s `foldSurvivingWarnings` for the
+ * renderer and the header wording. THIS function is what enforces the fold's freshness rule —
+ * `foldSurvivingWarnings` itself is pure and cannot (see its own doc for why).
+ *
+ * WHY THIS READ, NOT `selectSeed`: the obvious-looking hook — `evaluateSessionPlan`'s
+ * `SessionPlan.fresh.seed` (`store/adapters/session-checkpoint.ts`'s `selectSeed`) — cannot
+ * carry `warnings`. `selectSeed` narrows every seed record to `{role, text}`
+ * (`core/ports/agent-backend.ts`'s `SeedRecord`, a closed two-field type) before this handler
+ * ever sees it — the persisted `ChatAgentRecord.warnings` (`entities/chat/types.ts`) is
+ * dropped at that narrowing, structurally, not by omission. Reaching it means reading the
+ * chat's own records directly instead: `chatReader` is already a `KernelDeps` field, already
+ * read a second time in this very file for an unrelated purpose (`resolvePendingChatNaming`
+ * just below) — its `loadTail()` returns full `ChatRecord[]`, `warnings` intact, with no port
+ * contract change required.
+ *
+ * MEASURED: run 2 was ACCEPTED with all four `unguarded-timer` (now `nondeterministic-time`)
+ * warnings still present, and run 4 with two. Nothing carried them forward, so the next turn
+ * started blind to a determinism defect the previous turn had been told about and reported
+ * fixed — this function is what closes that gap.
+ *
+ * ORDERING: MUST run before `runTurn` appends this turn's own user record — the identical
+ * ordering constraint `resolvePendingChatNaming`'s own header documents, for the identical
+ * reason. Called from `runTurnStart` before `baseTask` is built, well before `runTurn` (and
+ * the admission inside it) ever runs, so the tail's last record here is genuinely the
+ * PREVIOUS turn's terminal record, never this turn's own not-yet-admitted message.
+ *
+ * FRESHNESS, ENFORCED HERE, NOT IN THE RENDERER: "the most recent accepted turn's own
+ * warnings, and nothing older" — the whole rule is that only the tail's LAST record is ever
+ * consulted, and only when it is a `ChatAgentRecord` (`kind === "agent"`) at all. A
+ * `system:error`/`system:cancelled` terminal, or an empty chat, means there is no "most
+ * recent accepted turn" to speak of — `foldSurvivingWarnings` is not even called; `""` is
+ * returned directly.
+ *
+ * Best-effort, exactly like `resolvePendingChatNaming` just below: a failed read is logged
+ * and skipped (errore rule 21) — this is a prompt enhancement, never a reason to refuse the
+ * turn admission itself is not implicated by.
+ */
+async function resolveSurvivingWarningsFold(
+  context: HandlerContext,
+  chatId: string,
+): Promise<string> {
+  const handle = await wrap(context.deps.chatReader.open(chatId));
+  if ("code" in handle) {
+    console.warn(
+      `core/kernel/handlers/turn: could not open chat "${chatId}" to check for warnings surviving from the previous turn: ${handle.safeMessage}`,
+    );
+    return "";
+  }
+  const tail = await wrap(handle.loadTail());
+  if ("code" in tail) {
+    console.warn(
+      `core/kernel/handlers/turn: could not read chat "${chatId}"'s tail to check for warnings surviving from the previous turn: ${tail.safeMessage}`,
+    );
+    return "";
+  }
+  const lastRecord = tail.records.at(-1);
+  if (lastRecord === undefined || lastRecord.kind !== "agent") return "";
+  return foldSurvivingWarnings({ warnings: lastRecord.warnings });
+}
+
 async function resolvePendingChatNaming(
   context: HandlerContext,
   chatId: string,
@@ -1303,6 +1367,18 @@ async function runTurnStart(
   const sessionPlan: SessionPlan =
     "code" in sessionPlanResult ? { kind: "fresh", seed: [] } : sessionPlanResult;
 
+  // SURVIVING WARNINGS (design-agent-feedback-loop repair, Task 10, 2026-08-09) — see
+  // `resolveSurvivingWarningsFold`'s own header for the full account of why this reads
+  // `chatReader` a second time rather than reusing `sessionPlan`/`selectSeed` just above:
+  // `SessionPlan.fresh.seed` cannot carry `warnings`, structurally. MUST run here, before
+  // `runTurn` (below) ever appends this turn's own user record, so the chat tail's last
+  // record read here is genuinely the PREVIOUS turn's terminal record.
+  const survivingWarningsFold = await wrap(resolveSurvivingWarningsFold(context, activeChatId));
+  trace("kernel.turnStart", {
+    step: "resolveSurvivingWarningsFold done",
+    folded: survivingWarningsFold.length > 0,
+  });
+
   const admission: AdmissionInputV1 = {
     turnId,
     targetChatId: activeChatId,
@@ -1339,7 +1415,11 @@ async function runTurnStart(
     // NOW REAL (phase-8 WP-3) — see this file's header, "`baseTask.systemPrompt`," for the
     // full citation.
     systemPrompt: context.deps.agentPromptSource.systemPrompt(promptContext),
-    userMessage: text,
+    // Task 10: any determinism warnings that survived the previous ACCEPTED turn are folded
+    // in here, under their own header — never confused with a same-turn Gate rejection retry
+    // (`resolveSurvivingWarningsFold`'s own header). An empty fold leaves `text` untouched
+    // (`appendPromptFold`'s own contract).
+    userMessage: appendPromptFold(text, survivingWarningsFold),
     model: resolvedAgent.model,
     effort: resolvedAgent.effort,
     session: sessionPlan,

@@ -242,3 +242,87 @@ export function appendPromptFold(baseUserMessage: string, fold: string): string 
   if (fold.length === 0) return baseUserMessage;
   return `${baseUserMessage}\n\n${fold}`;
 }
+
+/**
+ * A SECOND FOLD ENTRY POINT, NOT A SECOND RENDERER (design-agent-feedback-loop repair, Task
+ * 10, 2026-08-09).
+ *
+ * MEASURED: run 2 was ACCEPTED with all four `unguarded-timer` (now `nondeterministic-time`,
+ * Task 4) warnings still present, and run 4 with two. Nothing carried them forward — the next
+ * turn started blind to a determinism defect the previous turn had been told about and
+ * reported fixed. {@link foldGateDiagnosticsIntoPrompt} cannot be reused for this: it folds a
+ * REJECTED attempt's diagnostics into the RETRY attempt of the SAME turn, gated by the
+ * freshness barrier below. A surviving warning is a different fact entirely — Gate ACCEPTED
+ * the turn anyway (a warning, unlike an error, does not block commit), and the warning is
+ * being re-raised at the START of the NEXT turn, not inside a retry loop.
+ *
+ * THE FRESHNESS RULE THIS FOLD OBEYS — DELIBERATELY NOT {@link foldGateDiagnosticsIntoPrompt}'s
+ * BARRIER. That barrier answers an ATTEMPT-scoped question: "is `nextAttempt` the one
+ * immediately after the attempt Gate just rejected?", enforced by comparing two attempt
+ * numbers and refusing with {@link StaleGateDiagnosticsError} when they disagree. A surviving
+ * warning crosses TURNS, not attempts — a different and looser validity question with no
+ * attempt numbers to compare in the first place. This function therefore takes none, and can
+ * never raise `StaleGateDiagnosticsError`. Its own freshness rule is: **the most recent
+ * accepted turn's own warnings, and nothing older.** This function does not enforce that rule
+ * itself (there is nothing in `TurnSurvivingWarningsFoldInputV1` to check it against) — the
+ * CALLER enforces it structurally, by construction, never handing this function anything but
+ * the chat's last record's own warnings (`core/kernel/model/handlers/turn.ts`'s
+ * `resolveSurvivingWarningsFold`, which reads the chat tail and looks at exactly one record:
+ * the last one, and only if it is a `ChatAgentRecord`).
+ *
+ * A SURVIVOR IS NOT A REJECTION — a rejection says "fix before anything else"; a survivor says
+ * "your last change did not clear this." The previous turn WAS accepted; telling the agent it
+ * was rejected would be a NEW lie, not a fix for the old one that dropped the warning
+ * entirely. {@link SURVIVING_WARNINGS_HEADER} is worded to make that distinction impossible to
+ * miss.
+ *
+ * REUSES, NEVER DUPLICATES: {@link formatGateWarning} and {@link isDeterminismWarning} are the
+ * SAME functions {@link foldGateDiagnosticsIntoPrompt} already uses — one rendering of a Gate
+ * warning, one determinism-kind filter, two entry points into the prompt. The only new piece
+ * is {@link toSurvivingWarningDto}, a pure adapter from what the chat actually persisted
+ * (`entities/chat/types.ts`'s `ChatWarningSnapshot` — `kind`/`message` only; `file`/`line`/
+ * `column`/`blockedPages` were never written there, see that type's own doc) into the shape
+ * `formatGateWarning`/`isDeterminismWarning` already expect. `file`/`line`/`column`/
+ * `blockedPages` land as `null` for a warning that never carried them — genuinely absent, not
+ * fabricated, the exact convention `formatGateWarning`'s own doc already establishes for a
+ * file-less warning.
+ */
+export interface SurvivingWarningV1 {
+  readonly kind: string;
+  readonly message: string;
+  readonly file?: string | null;
+  readonly line?: number | null;
+  readonly column?: number | null;
+  readonly blockedPages?: readonly PageSlug[] | null;
+}
+
+export interface TurnSurvivingWarningsFoldInputV1 {
+  readonly warnings: readonly SurvivingWarningV1[];
+}
+
+const SURVIVING_WARNINGS_HEADER =
+  "These non-determinism warnings were present when your PREVIOUS turn was accepted and are " +
+  "still present now — the last change did not clear them. A sealed render has no wall clock " +
+  'and no tick; see RUNTIME.md\'s "Time and the sealed render":';
+
+function toSurvivingWarningDto(warning: SurvivingWarningV1): TurnGateWarningDtoV1 {
+  return {
+    kind: warning.kind as GateWarningKindV1,
+    message: warning.message,
+    file: warning.file ?? null,
+    line: warning.line ?? null,
+    column: warning.column ?? null,
+    blockedPages: warning.blockedPages ?? null,
+  };
+}
+
+/**
+ * Renders `input.warnings` into prompt text for the NEXT turn, or `""` when nothing survived
+ * (or nothing that survived is a determinism kind) — see this section's header for the fold
+ * this is, the freshness rule it obeys, and why it is not `foldGateDiagnosticsIntoPrompt`.
+ */
+export function foldSurvivingWarnings(input: TurnSurvivingWarningsFoldInputV1): string {
+  const determinismWarnings = input.warnings.map(toSurvivingWarningDto).filter(isDeterminismWarning);
+  if (determinismWarnings.length === 0) return "";
+  return [SURVIVING_WARNINGS_HEADER, ...determinismWarnings.map(formatGateWarning)].join("\n");
+}

@@ -2309,6 +2309,213 @@ describe('turnHandlers["turn.start"]', () => {
   });
 });
 
+describe("turn.start — surviving determinism warnings fold into the next turn's prompt (design-agent-feedback-loop repair, Task 10)", () => {
+  // MEASURED: run 2 was ACCEPTED with all four `unguarded-timer` (now `nondeterministic-time`)
+  // warnings still present, and run 4 with two. Nothing carried them forward, so the next turn
+  // started blind to a determinism defect the previous turn had been told about and reported
+  // fixed. These tests prove `runTurnStart` now reads the previous turn's own
+  // `ChatAgentRecord.warnings` (via `chatReader`, NOT `selectSeed` — see
+  // `resolveSurvivingWarningsFold`'s own header for why `selectSeed` cannot carry this) and
+  // folds them into `AgentTask.userMessage` under `core/turns/model/prompt.ts`'s
+  // `foldSurvivingWarnings`.
+
+  const HOME = "home" as PageSlug;
+
+  function testDeps(chatStore: FakeChatStore, chatId: string) {
+    return {
+      chatReader: chatStore,
+      chatMutations: chatStore,
+      turnTransactions: withHonestChatAppendBase(createFakeTurnTransactionService(), chatStore),
+      projectStore: createFakeProjectStore({
+        root: "/test-root",
+        workspaceState: {
+          backend: "claude",
+          model: FAKE_BACKEND_CAPABILITIES.models[0]?.model ?? "sonnet",
+          effort: "medium",
+          activeChatId: chatId,
+          activePageSlug: HOME,
+        },
+      }),
+      gateRunner: createFakeGateRunner(),
+    };
+  }
+
+  test("determinism warnings surviving the previous ACCEPTED turn fold into this turn's userMessage, workspace-relative, under the SURVIVING header — not the rejection header", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    // The previous turn's own terminal record — ACCEPTED (a `ChatAgentRecord` IS the
+    // successful terminal record of a turn, `entities/chat/types.ts`'s own doc), with a
+    // determinism warning it reported "fixed" but did not actually clear, plus one of the
+    // four excluded kinds that must never reach this fold either way.
+    chatStore.seedRecords(chatHeader.chatId, [
+      {
+        kind: "user",
+        recordId: "u1",
+        turnId: "t1",
+        text: "add a stopwatch",
+        ts: "2024-01-01T00:00:00.000Z",
+      },
+      {
+        kind: "agent",
+        recordId: "a1",
+        turnId: "t1",
+        text: "done — fixed the timer",
+        changedPages: [],
+        warnings: [
+          { kind: "nondeterministic-time", message: "`Date.now()` reads wall-clock time" },
+          { kind: "dropped-id", message: "irrelevant to this fold" },
+        ],
+        ts: "2024-01-01T00:00:05.000Z",
+      },
+    ]);
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      ...testDeps(chatStore, chatHeader.chatId),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+    });
+
+    turnHandlers["turn.start"]({ text: "now add a stop button" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200 && !agentBackend.calls.some((c) => c.method === "startTurn"); i++) {
+      await wrap(Bun.sleep(0));
+    }
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+
+    // The turn's own new text is still there — the fold APPENDS, never replaces.
+    expect(startCall.task.userMessage).toContain("now add a stop button");
+    // The surviving determinism warning, workspace-relative (no `file` was persisted on the
+    // `ChatWarningSnapshot`, so no location clause — never a fabricated one).
+    expect(startCall.task.userMessage).toContain("`Date.now()` reads wall-clock time");
+    // The header's whole point: NOT a rejection ("fix before anything else"), a survivor
+    // ("your last change did not clear this"). Telling the agent it was rejected when it was
+    // accepted would be a NEW lie, not a fix for the old one.
+    expect(startCall.task.userMessage).toContain("PREVIOUS turn was accepted");
+    expect(startCall.task.userMessage).toContain("did not clear them");
+    expect(startCall.task.userMessage).not.toContain("Gate rejected the previous attempt");
+    expect(startCall.task.userMessage).not.toContain("Gate also flagged non-deterministic code");
+    // The four excluded kinds (same set the rejection fold excludes) never reach the prompt.
+    expect(startCall.task.userMessage).not.toContain("irrelevant to this fold");
+
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    await runPromise;
+  });
+
+  test("a chat's first turn (no previous agent record) folds nothing — userMessage is exactly the sent text", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+    // No seedRecords call — genuinely empty chat, the honest "no most-recent-accepted-turn" case.
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      ...testDeps(chatStore, chatHeader.chatId),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+    });
+
+    turnHandlers["turn.start"]({ text: "build me a clock" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200 && !agentBackend.calls.some((c) => c.method === "startTurn"); i++) {
+      await wrap(Bun.sleep(0));
+    }
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    expect(startCall.task.userMessage).toBe("build me a clock");
+
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    await runPromise;
+  });
+
+  test("the previous turn ending in system:error (never accepted) folds nothing — there is no 'most recent accepted turn'", async () => {
+    const chatStore = createFakeChatStore();
+    const chatHeader = await chatStore.create();
+    if ("code" in chatHeader) throw new Error("unexpected chat-create failure");
+
+    // The chat's LAST record is a failure, not a `ChatAgentRecord` — the freshness rule this
+    // fold obeys ("the most recent accepted turn's own warnings, and nothing older") means
+    // nothing folds here, even though an OLDER accepted turn earlier in the chat had warnings.
+    chatStore.seedRecords(chatHeader.chatId, [
+      {
+        kind: "user",
+        recordId: "u1",
+        turnId: "t1",
+        text: "add a stopwatch",
+        ts: "2024-01-01T00:00:00.000Z",
+      },
+      {
+        kind: "agent",
+        recordId: "a1",
+        turnId: "t1",
+        text: "done",
+        changedPages: [],
+        warnings: [{ kind: "nondeterministic-time", message: "an OLDER surviving warning" }],
+        ts: "2024-01-01T00:00:05.000Z",
+      },
+      {
+        kind: "user",
+        recordId: "u2",
+        turnId: "t2",
+        text: "now break it",
+        ts: "2024-01-01T00:01:00.000Z",
+      },
+      {
+        kind: "system:error",
+        recordId: "e1",
+        turnId: "t2",
+        outcome: "error",
+        text: "the turn failed",
+        ts: "2024-01-01T00:01:05.000Z",
+      },
+    ]);
+
+    const agentBackend = createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES });
+    const { handlerContext, getLaunchedOperations } = buildTestContext({
+      ...testDeps(chatStore, chatHeader.chatId),
+      agentRegistry: createFakeAgentRegistry([agentBackend]),
+    });
+
+    turnHandlers["turn.start"]({ text: "try again" }, handlerContext);
+    const [operation] = getLaunchedOperations();
+    if (operation === undefined) throw new Error("expected exactly one launched operation");
+    const runPromise = operation.run();
+
+    for (let i = 0; i < 200 && !agentBackend.calls.some((c) => c.method === "startTurn"); i++) {
+      await wrap(Bun.sleep(0));
+    }
+    const startCall = agentBackend.calls.find((c) => c.method === "startTurn");
+    if (startCall?.method !== "startTurn") throw new Error("expected a startTurn call");
+    expect(startCall.task.userMessage).toBe("try again");
+    expect(startCall.task.userMessage).not.toContain("an OLDER surviving warning");
+
+    agentBackend.completeRun(startCall.fence, {
+      kind: "completed",
+      finalText: "done",
+      usage: null,
+      sessionId: "s1",
+    });
+    await runPromise;
+  });
+});
+
 describe("turn.start — a rejected admission (Gap F)", () => {
   // Task 4's own brief, Step 1 — a `staging.createTurnWorkspace` failure blocks
   // `runAdmission` at phase `"workspace"` (`admission.ts`'s own `if ("code" in workspace)

@@ -9,6 +9,7 @@ import {
   type TurnGateFoldInputV1,
   appendPromptFold,
   foldGateDiagnosticsIntoPrompt,
+  foldSurvivingWarnings,
 } from "./prompt";
 
 /**
@@ -423,6 +424,119 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
     expect(result).toContain("boom");
     // No blank second section, no stray determinism header with nothing under it.
     expect(result.split("\n\n").length).toBe(1);
+  });
+});
+
+describe("foldSurvivingWarnings — warnings that survived an ACCEPTED turn (Task 10)", () => {
+  /**
+   * `foldSurvivingWarnings` is pure, like `foldGateDiagnosticsIntoPrompt` — no ports, no
+   * Reatom. Its input shape is deliberately looser than `TurnGateWarningDtoV1`
+   * (`file`/`line`/`column`/`blockedPages` are all optional): the real caller
+   * (`core/kernel/model/handlers/turn.ts`'s `resolveSurvivingWarningsFold`) only ever has
+   * `entities/chat/types.ts`'s `ChatWarningSnapshot` to hand it — `kind`/`message` only, since
+   * that is all the chat record ever persisted.
+   */
+
+  test("determinism warnings that survived an accepted turn fold into the next turn's prompt", () => {
+    const fold = foldSurvivingWarnings({
+      warnings: [
+        {
+          kind: "nondeterministic-time",
+          message: "`Date.now()` reads wall-clock time",
+          file: "pages/stopwatch.tsx",
+          line: 55,
+        },
+      ],
+    });
+    expect(fold).toContain(`${DESIGN_DIRNAME}/pages/stopwatch.tsx`);
+    expect(fold).toContain("still"); // the header must say these were NOT introduced now
+  });
+
+  test("the four excluded kinds are still excluded — same set as the rejection fold", () => {
+    for (const kind of [
+      "dropped-id",
+      "unpointed-element",
+      "unlisted-navigation",
+      "silencing-any",
+    ]) {
+      const fold = foldSurvivingWarnings({
+        warnings: [{ kind, message: "irrelevant to this fold", file: "pages/a.tsx" }],
+      });
+      expect(fold).toBe("");
+    }
+  });
+
+  test("an empty warning list folds to nothing", () => {
+    expect(foldSurvivingWarnings({ warnings: [] })).toBe("");
+  });
+
+  test("a warning missing file/line (the real shape a ChatWarningSnapshot persists) still folds, with no location clause", () => {
+    // `entities/chat/types.ts`'s `ChatWarningSnapshot` carries only `kind`/`message` — this is
+    // the ACTUAL shape `resolveSurvivingWarningsFold` hands this function in production, not
+    // just a convenience for the richer test above.
+    const fold = foldSurvivingWarnings({
+      warnings: [{ kind: "nondeterministic-randomness", message: "`Math.random()` is non-deterministic" }],
+    });
+    expect(fold).toContain("`Math.random()` is non-deterministic");
+    expect(fold).not.toContain(" in ");
+  });
+
+  test("the surviving fold is not confused with a rejection fold", () => {
+    const warnings = [{ kind: "nondeterministic-time", message: "uses Date.now()" }];
+    const survivingFold = foldSurvivingWarnings({ warnings });
+
+    const rejectionFold = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "nondeterministic-time",
+              message: "uses Date.now()",
+              line: null,
+              column: null,
+              file: null,
+              blockedPages: null,
+            },
+          ],
+        }),
+      }),
+    );
+    if (rejectionFold instanceof Error) throw rejectionFold;
+
+    // Different header, different implication: a rejection says "fix before anything else"; a
+    // survivor says "your last change did not clear this." Telling the agent it was rejected
+    // when it was accepted is a NEW lie, not a fix for the old one.
+    expect(survivingFold).not.toBe(rejectionFold);
+    expect(survivingFold).toContain("PREVIOUS turn was accepted");
+    expect(survivingFold).toContain("did not clear them");
+    expect(survivingFold).not.toContain("Gate also flagged non-deterministic code");
+    expect(survivingFold).not.toContain("Gate rejected the previous attempt");
+    expect(rejectionFold).not.toContain("PREVIOUS turn was accepted");
+    expect(rejectionFold).not.toContain("did not clear them");
+  });
+
+  test("the freshness barrier still governs the rejection fold and does not govern this one", () => {
+    // `foldGateDiagnosticsIntoPrompt`'s barrier is ATTEMPT-scoped: a `nextAttempt` that is not
+    // exactly `rejectedAttempt + 1` refuses with StaleGateDiagnosticsError.
+    const staleRejection = foldGateDiagnosticsIntoPrompt(
+      foldInput({ rejectedAttempt: 1 as TurnAttempt, nextAttempt: 4 as TurnAttempt }),
+    );
+    expect(staleRejection).toBeInstanceOf(StaleGateDiagnosticsError);
+
+    // `foldSurvivingWarnings` crosses TURNS, not attempts, and takes no attempt numbers at all
+    // — there is nothing here for that barrier to check, so it can never raise
+    // StaleGateDiagnosticsError. ITS freshness rule ("the most recent accepted turn's own
+    // warnings, and nothing older") is enforced by the CALLER only ever handing it the chat
+    // tail's last record's warnings (`core/kernel/model/handlers/turn.ts`'s
+    // `resolveSurvivingWarningsFold`) — not by this pure function, which has no way to tell
+    // an old warning from a fresh one on its own. Calling it repeatedly with the same input is
+    // idempotent, unlike a call against a stale attempt pair.
+    const warnings = [{ kind: "nondeterministic-time", message: "uses Date.now()" }];
+    const first = foldSurvivingWarnings({ warnings });
+    const second = foldSurvivingWarnings({ warnings });
+    expect(first).not.toBeInstanceOf(Error);
+    expect(second).not.toBeInstanceOf(Error);
+    expect(first).toBe(second);
   });
 });
 
