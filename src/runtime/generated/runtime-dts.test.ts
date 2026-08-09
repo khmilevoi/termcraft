@@ -135,4 +135,37 @@ describe("the gate copy declares nothing this repository authored by hand", () =
     expect(body).toEqual(expected);
     expect(block[1 + expected.length]).toBe("}");
   });
+
+  // Review finding, 2026-08-09. The generator's inlinability guard originally tested
+  // `/^import\s/` against each RAW line, which missed the package's one real top-level import
+  // because its bundler glues the statement onto the tail of the preceding JSDoc close
+  // (`*/import { StandardSchemaV1 } from "@standard-schema/spec";`). The guard now strips
+  // comments before testing. These two assertions pin the OUTCOME rather than the generator's
+  // internals — a relative import inside the block is the shape that would silently bind names
+  // to nothing, and it is what the guard exists to refuse.
+  test("the inlined block imports only bare specifiers, never a relative one", () => {
+    const start = RUNTIME_DTS.indexOf(REATOM_BLOCK_OPENER);
+    const end = RUNTIME_DTS.indexOf("\n}", start);
+    const block = RUNTIME_DTS.slice(start, end);
+
+    // `(?:^|\*\/)` and not `^` alone — that anchoring is exactly the bug being pinned. It still
+    // excludes the package's many JSDoc `@example` import lines, which are prefixed by ` * ` and
+    // carry no comment close.
+    const importSpecifiers = [
+      ...block.matchAll(/(?:^|\*\/)\s*import\s[^\n]*?from\s*["']([^"']+)["']/gm),
+    ].map((match) => match[1]);
+    expect(importSpecifiers.length).toBeGreaterThan(0);
+    expect(importSpecifiers.filter((s) => s?.startsWith("."))).toEqual([]);
+  });
+
+  test("the one bare specifier it does import is @standard-schema/spec, and nothing reachable needs it", () => {
+    // Kept rather than stripped: twelve declarations in the package reference `StandardSchemaV1`,
+    // so removing the import would leave them naming a vanished type, and editing the package's
+    // text is authoring. It is free because the facade re-exports no persistence/form/routing
+    // surface — which is asserted here against the PROMPT copy, the facade's own emitted text.
+    const start = RUNTIME_DTS.indexOf(REATOM_BLOCK_OPENER);
+    const end = RUNTIME_DTS.indexOf("\n}", start);
+    expect(RUNTIME_DTS.slice(start, end)).toContain('from "@standard-schema/spec"');
+    expect(fs.readFileSync(PROMPT_COPY, "utf8")).not.toContain("StandardSchemaV1");
+  });
 });

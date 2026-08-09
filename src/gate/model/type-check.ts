@@ -91,6 +91,16 @@ function norm(p: string): string {
  *    (`<box>`, `<text>`) — the escape hatch the agent prompt actively teaches, and the one
  *    `lints.ts`'s `lintUnpointedElements` presumes is legal — is a fatal `TS7026`. Pinned as a
  *    failing-behaviour fixture in `type-check.test.ts`; the fix is a declaration decision.
+ *  - `@standard-schema/spec` — unresolved, and it is here only because the `@reatom/core` inline
+ *    brought it: the package's own declaration imports `StandardSchemaV1` from it, so that import
+ *    rides into the ambient block (kept rather than stripped — `gen-runtime-dts.ts`'s
+ *    `buildReatomCoreBlock` states why). Its practical cost today is NIL, and that is checked
+ *    rather than assumed: `StandardSchemaV1` is reachable only through Reatom's persistence, form
+ *    and routing types, and the facade re-exports none of those — only
+ *    `atom`/`computed`/`action`/`wrap`/`with*` and `Atom`/`Action`/`Computed`/`AtomLike`/`Ext`
+ *    (`src/runtime/model/reatom.ts`). Nothing a design page can name reaches it. If the facade
+ *    ever re-exports `withPersist`, `reatomField`/`reatomForm` or the routing surface, this line
+ *    stops being free and the specifier has to be dealt with.
  *
  * A page's own PROP types are unaffected by all of this: every `*Props` interface is declared
  * inside the ambient block and is checked for real.

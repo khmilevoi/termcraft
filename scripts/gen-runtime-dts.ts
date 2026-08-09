@@ -499,6 +499,132 @@ function resolveReatomCoreDts(): string | RuntimeDtsEmitError {
 }
 
 /**
+ * Each line's text with block and line comments removed, tracking `/* … *\/` across lines.
+ *
+ * WHY A STRIPPER AND NOT AN ANCHORED REGEX (review finding, 2026-08-09). The first version of
+ * {@link checkInlinability} tested `/^import\s/` against the raw line, and MISSED the one real
+ * top-level import the installed package has, because its bundler glued the statement onto the
+ * tail of the JSDoc block that precedes it:
+ *
+ *     *\/import { StandardSchemaV1 } from "@standard-schema/spec";
+ *
+ * A guard that only sees column 0 would keep missing that shape — including for a RELATIVE
+ * import, which is the case the guard exists to catch. Column position is not the property being
+ * tested; "is this line's CODE an import statement" is.
+ *
+ * String literals are deliberately not tracked. The result is used only to ask whether a line's
+ * code STARTS with an import/export statement, and an unclosed-quote misread can only truncate a
+ * line early — i.e. it can make the guard miss, never fire spuriously — and a leading statement
+ * cannot sit after a string on its own line anyway. `/// <reference>` is tested against the RAW
+ * line by its caller, since this function correctly erases it as the comment it is.
+ */
+function stripComments(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  let inBlock = false;
+  for (const line of lines) {
+    let code = "";
+    let i = 0;
+    while (i < line.length) {
+      if (inBlock) {
+        const end = line.indexOf("*/", i);
+        if (end === -1) break;
+        inBlock = false;
+        i = end + 2;
+        continue;
+      }
+      const block = line.indexOf("/*", i);
+      const lineComment = line.indexOf("//", i);
+      if (lineComment !== -1 && (block === -1 || lineComment < block)) {
+        code += line.slice(i, lineComment);
+        i = line.length;
+        break;
+      }
+      if (block === -1) {
+        code += line.slice(i);
+        break;
+      }
+      code += line.slice(i, block);
+      inBlock = true;
+      i = block + 2;
+    }
+    out.push(code);
+  }
+  return out;
+}
+
+/** The module specifier a single import/export statement names, if it names one. */
+function specifierOf(statement: string): string | null {
+  return /(?:from\s*|^\s*import\s*)["']([^"']+)["']/.exec(statement)?.[1] ?? null;
+}
+
+/**
+ * Decide whether a package's own declaration can be wrapped in an ambient module block without
+ * lying about the runtime, and return the bare specifiers it will still import unresolved.
+ *
+ * THE POINT IS TO FAIL AT GENERATION TIME, because the Gate cannot fail later: the block is
+ * served as a `.d.ts` under `skipLibCheck: true`, so anything wrong inside it raises NO
+ * diagnostic and simply degrades to `any`. Three shapes are refused, and each for a stated
+ * reason rather than by analogy:
+ *
+ *  - A RELATIVE import or re-export. TypeScript rejects it outright inside an ambient module
+ *    declaration (TS2439), and even where it did not, the path is relative to a `node_modules`
+ *    layout the Gate never sees — so every name it binds would silently become `any`.
+ *  - `export *`. The flattening replays a curated export list; a star re-export out of an
+ *    unresolved module contributes nothing and silently drops whatever it was meant to add.
+ *  - `/// <reference …>`. Only honoured at the top of a FILE, before any statement. Wrapped
+ *    inside a block it degrades to an ordinary comment, so the dependency it declares vanishes
+ *    without a word.
+ *
+ * A NON-RELATIVE import is NOT refused, and that is a decision rather than an oversight. It is
+ * legal inside an ambient module declaration, and its names degrade to `any` in exactly the way
+ * the facade's own hoisted specifiers already do — the bounded, documented status quo this file's
+ * header describes, not a new failure mode. Refusing it would mean refusing to inline the package
+ * that is installed today. The caller reports the list instead, so the degradation stays visible.
+ */
+function checkInlinability(
+  dtsPath: string,
+  lines: readonly string[],
+): string[] | RuntimeDtsEmitError {
+  const code = stripComments(lines);
+  const specifiers = new Set<string>();
+
+  for (const [index, line] of code.entries()) {
+    // A triple-slash directive IS a comment, so `stripComments` erased it — test the raw line.
+    if (/^\s*\/\/\/\s*<reference/.test(lines[index] ?? ""))
+      return new RuntimeDtsEmitError({
+        reason: `${dtsPath}:${String(index + 1)} is a /// <reference>, which is only honoured at the top of a file and silently becomes a plain comment once wrapped in an ambient module declaration: ${(lines[index] ?? "").trim()}`,
+      });
+
+    if (/^\s*export\s+\*/.test(line))
+      return new RuntimeDtsEmitError({
+        reason: `${dtsPath}:${String(index + 1)} is an "export *", which re-exports nothing once the module it names is unresolved: ${line.trim()}`,
+      });
+
+    // `import\s` and not `import\b`: `import("…")` is a TYPE QUERY, legal inside an ambient
+    // block, and must not be mistaken for an import statement. The export arm requires `from`
+    // to sit immediately before a QUOTE, so the package's own 350-name `export { … };` surface
+    // line — which can legitimately contain an exported binding called `from` — is not read as
+    // a re-export.
+    if (!/^\s*(?:import\s|export\b[^;]*\bfrom\s*["'])/.test(line)) continue;
+
+    const specifier = specifierOf(line);
+    if (specifier === null)
+      return new RuntimeDtsEmitError({
+        reason: `${dtsPath}:${String(index + 1)} is an import/export statement whose module specifier could not be read, so whether it survives the inline cannot be decided: ${line.trim()}`,
+      });
+
+    if (isRelative(specifier))
+      return new RuntimeDtsEmitError({
+        reason: `${dtsPath}:${String(index + 1)} imports the RELATIVE "${specifier}", which is invalid inside an ambient module declaration (TS2439) and unresolvable from the Gate's synthetic cwd either way: ${line.trim()}`,
+      });
+
+    specifiers.add(specifier);
+  }
+
+  return [...specifiers].sort();
+}
+
+/**
  * Inline the REAL `@reatom/core` declarations into the GATE copy (defect fix, 2026-08-09,
  * spec WP-4). Verified end-to-end before it was written: `docs/spikes/10-reatom-dts-inline`.
  *
@@ -537,6 +663,22 @@ function resolveReatomCoreDts(): string | RuntimeDtsEmitError {
  * this transformation from the package and asserts the committed block line-for-line, which is
  * what keeps "emitted, never written" checkable instead of merely claimed.
  *
+ * THE BLOCK CARRIES ONE IMPORT OF ITS OWN, AND IT IS KEPT RATHER THAN STRIPPED (review finding,
+ * 2026-08-09). The package's declaration opens with `import { StandardSchemaV1 } from
+ * "@standard-schema/spec"` — glued to the tail of the preceding JSDoc close by its bundler, which
+ * is how the first version of {@link checkInlinability} failed to see it. It rides into the
+ * ambient block, where it is legal, and where nothing resolves it — so `StandardSchemaV1` is
+ * `any` there. Keeping it is the honest option on both counts: TWELVE declarations in the package
+ * REFERENCE that binding (`WithPersistOptions.schema`, the field/form validation types, the
+ * routing `params`/`search` codecs), so deleting the import would leave them naming a vanished
+ * type; and deleting it would be an edit to the package's own text — authoring, the one thing
+ * this block is constructed to avoid. The cost is nil in practice, and that is CHECKED rather
+ * than asserted: the facade re-exports only `atom`/`computed`/`action`/`wrap`/`with*` and the
+ * types `Atom`/`Action`/`Computed`/`AtomLike`/`Ext` (`src/runtime/model/reatom.ts`) — no
+ * persistence, forms or routing — and the PROMPT copy, which is the facade's own emitted text,
+ * contains ZERO occurrences of `StandardSchemaV1`. `src/gate/model/type-check.ts`'s
+ * per-specifier note carries the same fact from the Gate's side.
+ *
  * It is COMMITTED, so nothing at install or run time depends on a `node_modules` layout — which
  * is precisely the binding point 3 refused, and this does not reintroduce it.
  *
@@ -555,22 +697,21 @@ function buildReatomCoreBlock(): string | RuntimeDtsEmitError {
   });
   if (raw instanceof Error) return raw;
 
-  // An ambient module declaration may not name a relative module, and a `/// <reference>` inside
-  // one is not honoured — so a package whose declaration grew either would be inlined WRONG and
-  // silently. Refuse rather than emit a declaration that lies about the runtime.
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
-  // `^import\s` and not `^import\b`: a line-leading `import("…")` TYPE QUERY is legal inside an
-  // ambient block and must not be mistaken for an import statement.
-  const offender = lines.findIndex((line) =>
-    /^(import\s|export\s+\*|\/\/\/\s*<reference)/.test(line),
-  );
-  if (offender !== -1)
-    return new RuntimeDtsEmitError({
-      reason:
-        `${dtsPath}:${String(offender + 1)} is "${lines[offender] ?? ""}" — a top-level import, ` +
-        "star re-export or triple-slash reference, none of which survive being wrapped in an " +
-        "ambient module declaration. The flattening only handles a self-contained declaration.",
-    });
+  const survivable = checkInlinability(dtsPath, lines);
+  if (survivable instanceof Error) return survivable;
+
+  // Every bare specifier the inlined block still imports, on stderr (never stdout, which carries
+  // the artifact under `--stdout`) on every run. These degrade to `any` exactly like the facade's
+  // own hoisted specifiers, which is bounded and documented — but it is bounded only as long as
+  // somebody can SEE the list, so the generator prints it rather than leaving a reader to grep.
+  if (survivable.length > 0)
+    console.warn(
+      `gen-runtime-dts: the inlined ${REATOM_CORE_SPECIFIER} block imports ` +
+        `${survivable.join(", ")} by specifier; nothing resolves those under the Gate's hermetic ` +
+        "check, so their names are `any` there. See src/gate/model/type-check.ts's per-specifier " +
+        "note, and widen it if this list changes.",
+    );
 
   const body = lines.map(stripDeclareModifier).join("\n");
   return `declare module "${REATOM_CORE_SPECIFIER}" {\n${indent(body)}\n}\n`;
