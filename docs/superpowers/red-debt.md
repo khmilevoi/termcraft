@@ -1333,3 +1333,359 @@ NO OWNER. Whoever picks this up must design the screen(s) first (per CLAUDE.md's
 updates before code follows it, exactly as `docs/superpowers/red-debt.md`'s "UI: the repair
 prompt names a path that cannot exist" row above was eventually closed), then wire it — never the
 reverse.
+
+## Debt accumulated by the design-agent feedback-loop repair, recorded here by its own Task 13
+
+Plan `docs/superpowers/plans/2026-08-09-design-agent-feedback-loop.md`, spec
+`docs/superpowers/specs/2026-08-09-design-agent-feedback-loop-design.md`, tasks 1-13, base
+`4612cea`. Full per-task evidence — every reviewer verdict, every fix round, every deferred minor —
+is in `.superpowers/sdd/2026-08-09-design-agent-feedback-loop/progress.md` and the twelve
+`task-N-report.md` files beside it. The plan's four spikes are
+`docs/spikes/{10-reatom-dts-inline,11-sdk-mcp-tool,12-resume-rejection,13-determinism-blast-radius}/SPIKE.md`,
+all four RUN, all four carrying a real verdict.
+
+**The WP-9 row immediately above belongs to this plan too** — Task 11 wrote it directly rather than
+deferring it to this closeout, so it is not repeated below. Everything else this plan opened is
+here.
+
+Same rule this file has followed since the phase-1 closeout: closing a debt row must not create a
+fresh, untracked one. This plan closed none and opened the rows below.
+
+### The Gate's declaration copy grew 11× and one whole-tree type check costs ~17 ms more — MEASURED, accepted, with the follow-up named
+
+Task 7 inlined `@reatom/core`'s ambient module into the Gate's copy of the generated runtime
+declaration, so an `atom<readonly T[]>` read finally types instead of degrading to `any`. What it
+cost, both figures measured on this machine (win32-x64, Bun 1.3.14) and both an exact match for
+spike 10's own prediction:
+
+| | before | after |
+| --- | --- | --- |
+| Gate copy of `RUNTIME_DTS` | 30,480 chars | **346,435 chars** |
+| one `runTree` type check, five-page tree with a shared module (median of five) | 46 ms | **63 ms** |
+
+The prompt copy is untouched at 30,480 chars / 30,744 bytes — verified by independent regeneration
+twice, once per review round, zero changed lines. Spike 10 measured the same size pair and
+48 → 61 ms; Task 7 measured 46 → 63 ms. **+17 ms against the spike's +13 ms is NOT filed as a
+regression** and must not be retold as one: the two runs bracket each other (Task 7's baseline was
+2 ms faster than the spike's, its inlined 2 ms slower), the min/max spreads overlap heavily on both
+sides (44-67 vs 53-68), and the parsed text is the same 316 KB. The diagnostics count moved the
+right way at the same time: 5 manufactured `TS7006`s → 0.
+
+The named follow-up, if this ever does regress materially: `gate/model/type-check.ts:340` constructs
+a fresh compiler API per check (`new API(...)`), so the 316 KB is re-parsed every whole-tree pass.
+Reusing that snapshot across Gate runs is a caching decision with its own invalidation story — named
+in the plan's own "deliberately left undone" table, deliberately NOT taken here, and it is the first
+thing to reach for rather than trimming the inline. No owner, because nothing today triggers it.
+
+### `@reatom/core`'s DOM references degrade to the error type inside the `.d.ts` — bounded, and widening `lib` to `dom` is explicitly NOT the answer
+
+C4, and spike 10 measured the prediction rather than assuming it: the inline introduced **ZERO**
+DOM-global diagnostics. `skipLibCheck: true` silences them entirely; each unresolved reference
+degrades to the error type INSIDE the declaration and never reaches an authored page's diagnostics.
+Counted in the inlined declaration: `AbortController` ×16, `AbortSignal` ×11, `EventTarget` ×5,
+`Element` ×6, `document` ×7, `localStorage` ×8.
+
+**Do not "fix" this by widening `lib`.** `SYNTHESIZED_COMPILER_OPTIONS` pins `lib: ["esnext"]` and
+`types: []` (`src/gate/model/type-check.ts:73-83`), and the pin is load-bearing — its own comment
+says `document` must not exist in a TUI. Making `document` visible to authored pages so that
+Reatom's own internals type would trade a real guarantee for a cosmetic one. The degradation does
+not touch the failure this task existed to fix: `atom<readonly T[]>(…)` → `Atom<readonly T[]>` →
+call → `readonly T[]` → `.map` has real signatures throughout.
+
+Recorded as a bounded, documented degradation, not as an open gap. No owner, and none is wanted.
+
+### S1: every lowercase raw JSX element is a fatal `TS7026` — a DEFECT, not a limitation, and NO OWNER
+
+`TS7026: JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements'
+exists.` — two per element, on **every fixture, in every variant, baseline included**. Found
+incidentally by spike 10 while probing something else. **Task 7's inline neither caused it nor
+fixed it**: it is present at baseline, before the inline, and structural —
+`JSX.IntrinsicElements` lives in the JSX namespace of `@opentui/react/jsx-runtime`, which the
+generated declaration re-exports BY SPECIFIER and which does not resolve hermetically (see the C5
+row below for why those types cannot be supplied).
+
+**Why this is a defect and not a documented limitation, which is the whole point of this row.** The
+system prompt actively TEACHES the escape hatch — `agent/prompt/model/prose.ts`'s
+`DESIGN_CODE_RULES` describes lowercase tags as "a low-level/raw OpenTUI primitive (the runtime's
+escape hatch, e.g. `<box>`/`<text>`)" — and `gate/model/lints.ts`'s `lintUnpointedElements` exists
+specifically to WARN about a lowercase tag carrying no `id`, which presumes such tags are legal and
+expected. A page that follows this project's own documented guidance is rejected by this project's
+own Gate, naming an interface its author has never heard of and cannot supply. Per this
+repository's standing rule, that is a defect recorded where it will be acted on, never a
+"limitation" waved through.
+
+**Why nobody noticed, verified three ways** (all three re-checked by Task 7, not inherited):
+
+1. `src/gate/model/type-check.test.ts:20-22`'s stand-in declaration says so out loud: it covers
+   "exactly what those fixtures use — **no JSX**, so no jsx-runtime resolution is dragged in."
+2. The real-declaration suite at `type-check.test.ts:183` DOES use JSX, but every fixture uses only
+   **capitalized** Kit components (`<Panel>`, `<Text>`), which are declared inside the ambient
+   module and therefore resolve. Lowercase intrinsics appear in no fixture in that file.
+3. The real, **Gate-ACCEPTED** pages in `examples/clock/.termcraft/design/pages/` contain **zero**
+   lowercase JSX tags — `grep -oE "<[a-z][a-zA-Z]*"` returns five hits and all five are generic type
+   arguments (`atom<number>`, `atom<readonly …>`). The authoring agent happened to use Kit
+   components throughout.
+
+**Pinned, not fixed.** Task 7 added the fixture the Gate's own suite was missing:
+`src/gate/model/type-check.test.ts:396-435`, `describe("PINNED DEFECT: lowercase raw JSX elements
+are rejected (spike 10, S1)")` → "a page using the documented `<box>` escape hatch comes back with
+TS7026". It asserts the code with `.some()` rather than pinning the diagnostic list, because the
+compiler emits it twice per element and a count assertion would rot on an unrelated change. The
+fixture asserts the CURRENT BROKEN behaviour deliberately; whoever fixes the defect must flip it.
+
+**Two candidate fixes, and choosing between them is a declaration decision, which is why this has
+NO OWNER:** either the generated declaration supplies a `JSX.IntrinsicElements` sourced from
+`@opentui/react`'s own `jsx-namespace.d.ts`, or lowercase tags stop being advertised as an escape
+hatch at all (prompt prose and `lintUnpointedElements` both follow). Both change what the runtime
+promises page authors; neither belonged inside this plan.
+
+### `@reatom/react`, `@opentui/react` and unqualified `React.ReactNode` stay UNCHECKED — NO OWNER, and it cannot be closed until React types exist in this project
+
+C5. Task 7 inlined `@reatom/core` and stopped there, on evidence rather than on the spec's size
+argument. `@reatom/react`'s declaration is only 2,748 bytes, so size was never the obstacle — its
+first three lines are `import { … } from "@reatom/core"`, `import React, { ChangeEvent } from
+"react"` and `import { JSX } from "react/jsx-runtime"`, and it closes with a nested
+`declare module '@reatom/core' { interface RouteChild extends JSX.Element {} }` augmentation.
+**`@types/react` is not installed and `react@19` ships none.** Inlining it would mean INVENTING
+React's declarations, which this repository's honest-values rule forbids outright.
+
+The practical consequence, stated plainly so it is not rediscovered: a page's use of
+`@reatom/react`, `@opentui/react` or an unqualified `React.ReactNode` is not type-checked by the
+Gate. `type-check.ts`'s per-specifier header records which specifiers stay unresolved, including
+`@standard-schema/spec`, which Task 7's fix round documented as an explicit kept-not-stripped
+decision with nil practical cost (nothing a design page can name reaches `StandardSchemaV1` — no
+persistence, no forms, no routing).
+
+NO OWNER. This is not deferred work someone can pick up: it is blocked on React types existing in
+this project at all.
+
+### The turn-durability §6.3 rebinding probe is NO LONGER unwritten — spike 12's observation D IS that probe, and it now takes evidence to change the value BACK
+
+`docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md:600-620` (§6.3) expected a
+rebindable session and required a probe to establish it. That probe was carried as unwritten debt
+for months. **It has now been run** — deliberately, against the real SDK, as spike 12's observation
+D (`docs/spikes/12-resume-rejection/SPIKE.md`, SDK `0.3.212`):
+
+- **B** — run a real one-turn session in cwd X, note its session id → succeeded, yielded an id.
+- **C** — resume B's real id from **the SAME cwd** → **succeeded**, with positive proof it really
+  resumed (the cache figures, not merely a non-error).
+- **D** — resume B's real id from a **DIFFERENT** temp cwd → **REJECTED**, with the identical shape
+  a fabricated id produces (observation A): a `result` message with
+  `subtype: "error_during_execution"`, `num_turns: 0`, `total_cost_usd: 0`, `duration_api_ms: 0`,
+  `modelUsage: {}`, a dedicated `errors: string[]` field, and then a throw.
+
+RC6 confirmed: **the SDK indexes sessions by cwd.** That is why
+`agent/claude/backend/model/capabilities.ts:31` advertises `sessionWorkspaceBinding: "fixed"`, and
+the value is now set from an experiment rather than from an assumption — the comment at `:28-30`
+says exactly that.
+
+**What a future probe would have to show to change it back to `"rebindable"`:** a session id created
+in cwd X and successfully resumed from a DIFFERENT cwd, with positive proof it really resumed (the
+cache-creation-token comparison observation C used, not merely the absence of an error), against the
+SDK version actually installed at that time. Anything weaker — a non-throwing call, a resume in the
+same cwd, an SDK changelog line — does not clear the bar this probe already met in the other
+direction. The row exists so nobody reopens the question on prose.
+
+### S4: `canUseTool` is NOT consulted for every tool the CLI runs — this measurably contradicts a standing, load-bearing claim. NO OWNER
+
+`docs/spikes/08-agent-confinement/FINDINGS.md:18` records, as the verdict it went on to accept,
+that "the SDK's per-call permission callback gives termcraft an **in-process veto on every tool
+use**, platform-independent" — and its own question 2 asked whether that holds for **every** tool
+use. Spike 11 tier 2 (one live, paid turn, `$0.2098`, with `canUseTool` instrumented to log every
+call) measured that it does not.
+
+**What was measured.** The model emitted **two** `tool_use` blocks — `ToolSearch` first, then
+`mcp__termcraft__check_design` — while `canUseTool` was asked about **only the second**. The MCP
+tool was surfaced as a DEFERRED tool the model had to search for first, and the search itself ran
+without passing through the in-process veto.
+
+**The caveats, stated honestly, because they bound the finding without dissolving it:**
+
+- `ToolSearch` is a schema-fetching meta-tool. It loads tool definitions and does **no I/O of its
+  own**, so nothing escaped confinement in this probe.
+- The probe set no `disallowedTools` entry for `ToolSearch`, so what it demonstrates is that the
+  **callback was skipped**, not that a deny would have been overridden.
+- Other CLI-internal tools were not probed. The finding is "at least one tool runs unvetoed", not a
+  census of which ones.
+
+**This is not a limitation row.** The claim it contradicts is load-bearing for the whole confinement
+story: the Claude backend's confinement rests on `canUseTool` being the enforcement point, and
+`docs/spikes/08-agent-confinement/FINDINGS.md` is what the rest of the project cites for that. A
+future SDK that DOES route `ToolSearch` through `canUseTool` would flip the risk to the opposite
+face — deny-by-default would refuse the search and `check_design` would become unreachable — which
+is why spike 11's own consequence list asks that the deferred-tool path be exercised against the
+real production `canUseTool` rather than asserted from the table's contents.
+
+NO OWNER. Closing it means either re-establishing the "every tool use" claim against the installed
+SDK (and correcting `FINDINGS.md` where it does not hold), or moving the enforcement point somewhere
+the SDK cannot route around — neither of which is a follow-up to this plan.
+
+### `sessionWorkspaceBinding` still has no production reader — C6, re-confirmed after Task 9
+
+Task 9 made the advertised VALUE honest (see the §6.3 row above); it did not make it consumed.
+Re-measured at this closeout, `grep -rn sessionWorkspaceBinding src/` finds: the type
+(`agent/types.ts:139`), the lifted port field (`core/ports/agent-backend.ts:167`), the one
+production WRITE (`agent/claude/backend/model/capabilities.ts:31`), one assertion
+(`capabilities.test.ts:12`) and ten test fixtures. **Zero production reads.** In particular
+`evaluateSessionPlan` (`core/turns/model/session-plan.ts`) — the comparison that decides whether a
+resume is proposed — never consults it, which is exactly what C6 predicted and why flipping the flag
+changed no behaviour.
+
+**Whether anything SHOULD read it is the open question, and it is a real one, not a cleanup.** Two
+honest resolutions, and the row is deliberately neutral between them:
+
+1. **Make it load-bearing** — `evaluateSessionPlan` refuses to propose a cross-workspace resume when
+   the backend advertises `"fixed"`, instead of proposing one and degrading after the SDK rejects it
+   (which is what Task 9 shipped). That moves the decision earlier and saves a wasted attempt, but it
+   puts a backend capability check inside `core/turns`, which is a layering decision about where the
+   resume decision belongs.
+2. **Say it is documentation** — mark the field explicitly as advertised-for-humans and stop implying
+   a consumer exists. Cheaper, honest, and it closes this row without pretending to close the
+   question.
+
+NO OWNER for either. Named as deliberately-undone in the plan's own closing table.
+
+### After a session fallback fires, a Gate rejection has only 2 real retries left, not 3 — DISCLOSED and deliberately not reconciled
+
+Task 9's own disclosed gap, and the most likely of this plan's rows to be misread as a bug report.
+Two independent counters exist and were never reconciled:
+
+- `TurnFence.beginAttempt()` (`core/turns/model/fence.ts`) increments its own hard
+  `MAX_TURN_ATTEMPTS = 4` ceiling on EVERY attempt, including the session fallback's fresh attempt,
+  which does not spend a Gate-retry slot.
+- `run-turn.ts`'s local `attempt` counter tracks only Gate retries and does not count the fallback.
+
+Walk the sequence: one rejected resume (fence use #1) → the fallback's fresh attempt (fence use #2,
+local counter still "1") → three Gate rejections (fence uses #3 and #4, local counter climbing) —
+the local `canRetryAfterGate(3)` still says "you have budget" for what would be the fence's 5th
+`beginAttempt()`, which the fence refuses. **So a turn that fell back gets 2 real Gate retries, not
+3.**
+
+**What Task 9 DID fix:** the error code is now honest. That exhaustion terminalizes as
+`GATE_RETRY_EXHAUSTED`, not the generic `PERSISTENCE_FAILED` it produced before — a user-visible lie
+about the cause, fixed in fix round 1. Both sites that used to claim the budget survives intact (the
+call site's comment and the test's own name) were corrected in fix round 2 to state plainly that 2
+real retries remain, so the tradeoff lives in the code and not only in a report.
+
+**Why the counters were NOT reconciled, which is the part this row exists to preserve.** Reconciling
+them means changing `fence.ts`'s semantics — either the fence stops charging an attempt that is not
+a Gate retry, or the driver learns the fence's count — and `fence.ts` was outside Task 9's
+authorized scope. The fence's hard ceiling is an existing structural property, unrelated to and
+unchanged by this task, and relaxing it is a materially larger change than making one error code
+honest. The accepted minimum bar for Task 9 explicitly allowed deferring the reconciliation IF it
+was documented; it is, at the call site and here.
+
+Owner: whichever task next touches `core/turns/model/fence.ts`'s attempt accounting.
+
+### `selectSeed` bypasses `buildSeed`'s current-user-record exclusion, and Task 9 made it reachable mid-turn — NO OWNER, needs a port-signature change
+
+Pre-existing and latent; Task 9 is the first production caller to expose it, found by the reviewer
+and recorded rather than fixed on explicit instruction.
+
+`src/store/adapters/session-checkpoint.ts:88-107`'s `selectSeed(chatId)` calls
+`selectSeedRecords(doc.records)` DIRECTLY (line 98) — never
+`buildSeed(records, currentUserRecordId)` (`src/store/jsonl/model/checkpoint.ts:173-180`), which is
+the function that exists to exclude the CURRENT turn's own user record from the seed. Harmless for
+as long as `selectSeed` was only ever called BEFORE `runAdmission` had durably committed the turn's
+own user record: there was nothing to exclude yet.
+
+**Task 9's `fallbackToFreshSession` calls it mid-turn, POST-admission.** At that point the chat
+document already contains the current user message, so `selectSeedRecords` includes it in the
+fallback's own seed — and the fresh session then also receives the same message as its prompt. The
+agent can see the current user message twice.
+
+**Why it was not fixed here.** `selectSeed(chatId: string)`'s PORT SIGNATURE takes no
+`currentUserRecordId`, so an honest fix widens the port and every implementation and fake of it —
+outside Task 9's `Files:` scope, and a change to a contract several rings consume. Note also that
+`buildSeed` itself is called (`checkpoint.ts:212`, inside `evaluateSessionResume`) but its result is
+not used by any current production caller, so the two are separate channels and fixing one does not
+fix the other.
+
+NO OWNER.
+
+### An unresolvable compiler path's async spawn error can escape `type-check.ts`'s try/catch — pre-existing `gate` hazard, first tracked here
+
+Disclosed by Task 12 and, until this row, tracked nowhere but that task's report and one test
+comment. Making the real `typescript/unstable/sync` API fail to spawn (a bogus compiler path) raises
+an **asynchronous** `error` event that escapes `gate/model/type-check.ts`'s own try/catch and fails
+the run for an unrelated reason. Task 12 hit it while trying to provoke a `TYPE_CHECK_UNAVAILABLE`
+result honestly, discarded that approach, and used a scripted `GateRunner` instead — which is the
+right call for that test, and is why the hazard would otherwise have gone unrecorded.
+
+**Verified unreachable in production TODAY:** `entrypoint/model/create-shell.ts` resolves and
+validates the compiler path (`existsSync`) before any project I/O, and aborts the whole shell if it
+cannot, so no runner is ever built against an unresolvable path.
+
+**The "unreachable" claim is slightly stronger than what was proven, and that is the reason for the
+row.** Startup validation covers a path that is wrong when the app launches. It does NOT cover the
+binary being deleted, moved, or made unreadable (EACCES) mid-session, after validation has already
+passed — at which point the escaping async error is the failure mode, and it presents as an
+unrelated run failure rather than a `TYPE_CHECK_UNAVAILABLE`.
+
+NO OWNER. The fix is small in principle (attach an `error` handler to the spawn, map it to the
+existing `TYPE_CHECK_UNAVAILABLE` path) but it is new behaviour on the Gate's failure surface, which
+is not something a closeout commit gets to add.
+
+### Deferred minors from this plan's own twelve reviews — each with its evidence, none blocking
+
+Every Minor a reviewer flagged as "deferred, not blocking" across tasks 1-12, listed so the set is
+closed rather than scattered across twelve reports. None is a defect; each is named at its own site.
+
+- **Task 1** — `PAGES_MANIFEST_RELPATH` ("pages.json") stays a hardcoded literal in
+  `PAGE_FILE_LAYOUT`. Out of the brief's scope (C1 scoped Task 1 to `DESIGN_DIRNAME` only), but a
+  future manifest-filename rename would leave that prose stale by exactly the mechanism this task
+  just fixed for the tree root. Owner: whoever renames the manifest, if anyone ever does.
+- **Task 3** — the file-header paragraph and `toWorkspacePath`'s own doc comment restate overlapping
+  context about the two path vocabularies. Both were explicitly requested by the brief; redundant
+  prose, not a defect. No action wanted.
+- **Task 4** — `docs/architecture/*` still cited the OLD `unguarded-timer`/`unguarded-randomness`
+  kind names after the rename to `nondeterministic-time`/`nondeterministic-randomness`. **CLOSED by
+  this closeout's own Step 3** (`docs/architecture/flows/export.md`,
+  `flows/generation-turn.md`, `flows/interactive-prototype.md`, `modules.md`). The plan, the spec and
+  this ledger's own historical rows still carry the old names ON PURPOSE — they are dated records of
+  what was measured, not live claims.
+- **Task 6** — `examples/clock`'s `stopwatch.tsx`/`timer.tsx` carry `tick` action bindings that are
+  currently unused (a future interactive driver's hook). Inert by design, and not currently
+  type-checked at all, since `examples/` sits outside the root tsconfig's `include`. Would need
+  addressing if that scope ever changes.
+- **Task 7**, four from the re-review: (a) `scripts/gen-runtime-dts.ts`'s doc comment and Task 7's
+  report both say "twelve" references to the orphaned-if-stripped declarations; the verified count is
+  **nine** — a wording fix, ironic given that round's own subject was verification accuracy;
+  (b) `checkInlinability`'s `/// <reference>` branch tests the RAW string while the import/export
+  branches test the COMMENT-STRIPPED string, so a `*//// <reference …>` form would slip both — the
+  same blind spot as the finding that round fixed, compressed to a triple slash; no such form exists
+  in the real file today; (c) `checkInlinability` has no direct unit test (`main()` runs on import
+  and the function cannot easily be extracted) — only the emitted block's shape is pinned, and the
+  re-reviewer verified the logic by hand instead; (d) Task 7's report says "9 tests" where there are
+  11, including its two new ones.
+- **Task 9**, three from the round-2 re-review: a documented, consciously-accepted third variant of
+  the promptDelta conflation, gated behind the already-flagged type-impossible defensive branch; a
+  slightly under-inclusive doc list; and one test-strength nit. All three are recorded in
+  `.superpowers/sdd/2026-08-09-design-agent-feedback-loop/progress.md`'s Task 9 entry.
+- **Task 10** — `SurvivingWarningV1`'s `file`/`line`/`column`/`blockedPages` fields are speculative
+  flexibility, unexercised by the only real caller (`ChatWarningSnapshot` only ever supplies
+  `kind`/`message`). Defensible because `TurnGateWarningDtoV1` is module-private; recorded so a
+  reader does not mistake the wider shape for a populated one.
+- **Task 11**, two: a test-comment discoverability nit and cosmetic spacing in the ledger entry it
+  wrote. Neither blocking.
+- **Task 12**, two from round 2: an orphaned doc-comment ordering in `gate/model/type-check.ts`, and
+  the report's own "every surviving line" table missing one dated-but-accurate historical doc line.
+  Neither blocking.
+
+### Considered and homed elsewhere — deliberately NOT given a row here
+
+- **Task 5's residual duplication** (a warning `runPage` and `runTree` both produced for an entry
+  rendering TWICE in the retry fold) was **FIXED under a human ruling**, not deferred —
+  `dedupeWarnings` in `core/turns/model/validation.ts`, scoped to the three overlap-capable kinds,
+  keeping the `blockedPages`-attributed copy, with a genuine RED→GREEN regression test
+  (`9c44663..819a6b7`). `gate/adapters/gate-runner.ts`'s "WHAT THIS DOES NOT CLAIM" section says
+  fixed, not still-open.
+- **Task 8's defensive-path asymmetry** (the `userMessage` sub-path does not accumulate across
+  repeated defensive fires, unlike the `promptDelta` sub-path) — pre-existing, unchanged by the fix
+  that surfaced it, and documented-unreachable either way.
+- **Task 12's `check_design` freeze** — measured (~0.1-0.2 s, zero event-loop ticks during the call),
+  disclosed in five places, and mitigated by a content-keyed memo. Homed at its own sites, not a
+  ledger row.
+- **Task 12's `silencing-any` asymmetry** (`check_design` renders warnings the actual retry fold
+  excludes) — a correct, disclosed asymmetry that closes an `: any`-exploit path against the fatal
+  `TS7006`, kept under its own non-fatal header. Upheld by the reviewer; documented at the site.

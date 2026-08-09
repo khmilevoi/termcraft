@@ -191,14 +191,21 @@ locally-fixable diagnostic costs ~2.5 min and a complete re-read.
 - Update the `// THE PATHS LINE IS LORE` comment to record *this* regression as
   the second occurrence, so the next layout change has a third warning.
 
-`src/agent/prompt/model/prose.test.ts`: a drift test asserting the prose's stated
-root equals the shipped constant. `prose.ts` must not import
-`store/safe-fs`'s `DESIGN_DIRNAME` (domain-free ring); the test imports both and
-compares, which is the same pairing discipline `limits.ts:106-110` already
-documents.
+> **CORRECTED 2026-08-10 (C1), by Task 1 of the plan — the paragraph below was
+> retracted, not silently rewritten.** It read: "`src/agent/prompt/model/prose.test.ts`:
+> a drift test asserting the prose's stated root equals the shipped constant.
+> `prose.ts` must not import `store/safe-fs`'s `DESIGN_DIRNAME` (domain-free ring);
+> the test imports both and compares, which is the same pairing discipline
+> `limits.ts:106-110` already documents." That reasoning applies to `limits.ts`'s
+> LOCAL COPY only — whose own comment says so. The CANONICAL constant lives in
+> `src/entities/design-tree/types.ts` and is exported from that module's index, and
+> `agent/` imports `entities/` freely today. So `prose.ts` **imports and
+> interpolates** the constant, which makes the drift impossible rather than merely
+> detected — strictly better than the test this paragraph proposed. No drift test
+> was written. Full text: the plan's "Corrections to the spec" section, C1.
 
-**Done when** the prose names `design/` as the tree root and the drift test fails
-if either side changes alone.
+**Done when** the prose names `design/` as the tree root and the stated root is
+interpolated from the canonical constant, so the two cannot diverge.
 
 ### WP-2 — One path vocabulary in the folded diagnostics
 
@@ -209,9 +216,14 @@ if either side changes alone.
 - Introduce a single `toWorkspacePath(file: string)` helper that prefixes the
   design-tree directory, and route both `formatGateError`'s `location` and
   `formatGateWarning`'s `location` through it.
-- The prefix is a module constant paired with `DESIGN_DIRNAME` the same way
+- ~~The prefix is a module constant paired with `DESIGN_DIRNAME` the same way
   WP-1 pairs the prose — `core/` may not import `store/`, so the pairing is
-  asserted by test, not by import.
+  asserted by test, not by import.~~ **CORRECTED 2026-08-10 (C1), by Task 3.**
+  Same error as WP-1's, and with a stronger fact against it: `core/turns`
+  **already holds** exactly the constant this bullet asks for —
+  `DESIGN_TREE_FILE_PREFIX = \`${DESIGN_DIRNAME}/\`` in
+  `src/core/turns/model/candidate.ts`, built from the canonical
+  `entities/design-tree` export. `toWorkspacePath` reuses it. No pairing test.
 - Document in the header that the Gate's own DTO stays tree-relative and the
   translation happens exactly here, at the boundary where the text becomes
   something the agent will type into a tool call.
@@ -293,10 +305,16 @@ annotated. It is a mitigation, not a fix, and it is deleted by WP-4.
   alternative, and is deliberately **not** chosen: it would need scope analysis
   a token scanner cannot do honestly.
 - The kind rename ripples through `gate/types.ts`, `core/ports/gate-runner.ts`,
-  `core/protocol/model/event-payload.ts`, `core/turns/model/prompt.ts`'s
-  `DETERMINISM_WARNING_KINDS`, and `entities/chat`'s decoder. All are in Lane 3's
-  or Lane 2's owned set; sequence WP-5a after WP-2 lands if both touch
-  `prompt.ts`.
+  `core/protocol/model/event-payload.ts` (plus its own "eight fixed warning kinds"
+  assertion in `event-payload.test.ts`), and `core/turns/model/prompt.ts`'s
+  `DETERMINISM_WARNING_KINDS`. All are in Lane 3's or Lane 2's owned set; sequence
+  WP-5a after WP-2 lands if both touch `prompt.ts`.
+  **CORRECTED 2026-08-10 (C14), by Task 4.** This bullet also listed
+  ~~`entities/chat`'s decoder~~. It does not ripple there:
+  `chatWarningSnapshotSchema` is `{ kind: z.string().min(1), message:
+  z.string().min(1) }` — no kind enumeration, so there is nothing to rename. The
+  `event-payload.test.ts` assertion, which this bullet omitted, is the real
+  additional site. Full text: the plan's C14.
 
 **WP-5b — lint the whole closure, not only entries.**
 `src/gate/adapters/gate-runner.ts`: run the determinism and `silencing-any` lints
@@ -357,11 +375,19 @@ Two parts, in order:
 
 1. **Correct the capability.** `src/agent/claude/backend/model/capabilities.ts:19`
    advertises `rebindable`; the measured behaviour is `fixed` for the shipped
-   per-turn workspace layout. Either flip it to `"fixed"` and let the checkpoint
-   comparison stop proposing impossible resumes, or land the turn-durability §6.3
-   probe that was supposed to prove rebinding and let evidence set the value.
-   Recommended: flip it now, add the probe as follow-on — an advertised capability
-   contradicted by a production failure is the worse of the two states.
+   per-turn workspace layout. Flip it to `"fixed"`.
+   **CORRECTED 2026-08-10 (C6), by Task 9.** The retracted half of this item read
+   "…and let the checkpoint comparison **stop proposing impossible resumes**".
+   Flipping the flag achieves no such thing: `sessionWorkspaceBinding` has **no
+   production consumer at all** — `evaluateSessionPlan`
+   (`src/core/turns/model/session-plan.ts`), the comparison that decides whether a
+   resume is proposed, never reads it. Flipping it is an **HONESTY fix and nothing
+   more**; every behavioural gain in this WP comes from part 2. Also corrected: the
+   probe is no longer a "follow-on" — spike 12's observation D IS that probe, run
+   deliberately (a real session id, resumed from a different cwd, rejected), so the
+   value is now set from an experiment. Both the missing consumer and what a future
+   probe would have to show are ledgered in `docs/superpowers/red-debt.md`. Full
+   text: the plan's C6.
 2. **Wire the fallback.** Call
    `fallbackToFreshSession` (`src/core/turns/model/session-plan.ts:69`) when an
    attempt fails with a resume rejection, before terminalizing. Detection lives at
@@ -379,9 +405,25 @@ advertised binding says is impossible.
 
 Confirm whether a turn that terminalizes `BACKEND_FAILED` already offers a re-send
 affordance. The measured run suggests it does not — the user created two new chats
-within 20 s and retyped. If confirmed absent, add one: the failed turn's user text
-is already persisted in the chat record, so the change is a UI affordance over
-existing state, not new storage.
+within 20 s and retyped. ~~If confirmed absent, add one: the failed turn's user
+text is already persisted in the chat record, so the change is a UI affordance over
+existing state, not new storage.~~
+
+> **CORRECTED 2026-08-10 (C11), by Task 11 — "add one" was not a decision this
+> spec was entitled to make.** WP-9 is **UNDESIGNED**.
+> `design/12-errors-edge-states.dc.html` carries ten error screens (`err-agent-80`,
+> `lock-80`, `term-small-80`, `ws-broken-source-120`, `ws-cancelled-120`,
+> `ws-err-retry-120`, `ws-host-crash-120`, `ws-host-crash-noretry-120`,
+> `ws-host-unavailable-120`, `ws-host-unavailable-noretry-120`) and **not one is a
+> backend failure or a re-send**. The design's own answer to a failed generation is
+> the OPPOSITE of a re-send affordance: `wsErrRetry`'s system line
+> `⟲ generation failed after 3 tries — current design unchanged`. CLAUDE.md's
+> "Design is a source of truth — never invent it" forbids drawing the missing
+> screen, so Task 11 shipped only the half that adds **no new visual language**:
+> on `turn.failed` (never `turn.cancelled`) the failed turn's own text is restored
+> into the EXISTING composer draft, append-never-overwrite. The affordance itself
+> is ledgered with NO OWNER and needs a design decision first. Full text: the
+> plan's C11, and the WP-9 row in `docs/superpowers/red-debt.md`.
 
 **Done when** a terminal turn failure leaves the user one keystroke from retrying
 the same message.
@@ -401,7 +443,16 @@ returns its diagnostics in the same vocabulary the retry fold uses.
   `GateRunner` port — not `gate/` directly, so the agent ring keeps its existing
   dependency direction.
 - `src/agent/claude/tools/model/vocabulary.ts`: the new tool joins the allowed
-  set; `can-use-tool.ts` confines it to the turn workspace like every file tool.
+  set. ~~`can-use-tool.ts` confines it to the turn workspace like every file
+  tool.~~ **CORRECTED 2026-08-10 (C9), by Task 12 — it structurally cannot.**
+  `createConfinementPolicy` (`src/agent/confinement/model/policy.ts`) denies by
+  default anything not in `fileTools`, then resolves a path out of `PATH_FIELDS`
+  and denies when none resolves. `check_design` is **pathless** — it takes no
+  arguments at all — so it would hit that second denial. `ConfinementTables`
+  therefore gained a **THIRD SET**: allowed, with no path to resolve. The tool's
+  confinement comes from its IMPLEMENTATION (it reads the turn workspace the
+  adapter already holds), not from an argument the policy can check. Full text:
+  the plan's C9.
 - `Bash` stays denied. This is a scoped check, not a shell.
 
 **Done when** an agent that writes a page with an implicit-any callback and a
@@ -604,3 +655,84 @@ being the feedback mechanism at all.
   `fallbackToFreshSession` is unwired.
 - `docs/superpowers/specs/2026-07-16-turn-durability-staging-design.md:600-620` —
   §6.3's rebindable-session expectation and the probe it requires.
+  **This anchor has MOVED**: the probe is no longer required — spike 12's
+  observation D ran it. See
+  `docs/spikes/12-resume-rejection/SPIKE.md` and the §6.3 row in
+  `docs/superpowers/red-debt.md`.
+
+---
+
+## Status
+
+**LANDED.** Implemented in full as
+`docs/superpowers/plans/2026-08-09-design-agent-feedback-loop.md`, thirteen tasks,
+each independently reviewed by a separate reviewer subagent (several through one or
+two fix rounds).
+
+- **Base:** `4612cea`.
+- **Tasks 1-12:** `4612cea..dc9f599`, twelve task commits plus their fix-round
+  commits.
+- **Task 13 (this closeout):** one commit on top of `dc9f599` — the ledger, this
+  Status section, the in-place corrections above, and the architecture-doc sweep.
+- **Plan:** `docs/superpowers/plans/2026-08-09-design-agent-feedback-loop.md`.
+- **Controller ledger** (every finding, every verdict, every fix round, written
+  contemporaneously as each task closed):
+  `.superpowers/sdd/2026-08-09-design-agent-feedback-loop/progress.md`, with a
+  `task-N-report.md` per task beside it.
+- **Debt this plan opened**, with owners or an explicit "NO OWNER, and here is the
+  evidence": `docs/superpowers/red-debt.md`, section "Debt accumulated by the
+  design-agent feedback-loop repair" plus the WP-9 row immediately above it.
+
+### Spikes
+
+Four were written for this plan and **all four were RUN**; none shipped on an
+assumption. They keep the filename `SPIKE.md` rather than the `FINDINGS.md` that
+spikes 01-09 use, because fifteen citations across five shipped source files and
+three documents already name `SPIKE.md`; renaming for consistency alone would churn
+all of them in a closeout commit. The four are consistent with each other.
+
+| spike | verdict |
+| --- | --- |
+| `docs/spikes/10-reatom-dts-inline/SPIKE.md` | YES — and the probe found a SECOND, pre-existing defect the plan did not know about (S1, ledgered) |
+| `docs/spikes/11-sdk-mcp-tool/SPIKE.md` | YES — all four questions answered; Task 12's mechanism is sound. Two unlooked-for findings: S3 (the SDK does not validate schemas at the handler boundary) and S4 (a tool ran without `canUseTool`, contradicting a standing claim — ledgered) |
+| `docs/spikes/12-resume-rejection/SPIKE.md` | YES — every diagnosis confirmed, and Q2 has a STRUCTURAL discriminator, not just prose. Observation D IS turn-durability §6.3's long-outstanding rebinding probe |
+| `docs/spikes/13-determinism-blast-radius/SPIKE.md` | YES — the radius is small (2 → 6 warnings on a 5-page tree) and every prediction held |
+
+### What the design got wrong or left implicit about the code — C1-C15
+
+The diagnosis in **Problem** and **Root causes** survives intact. Every correction
+below is about a proposed REMEDY, and each was read against real code at `2f816d7`
+on branch `design-tree` before any task started, rather than discovered mid-task.
+They are recorded here so the next reader does not re-derive them. **The full text
+of each is in the plan's "Corrections to the spec, made here rather than discovered
+mid-task" section** — the summaries below are pointers, not replacements.
+
+*(Erratum: that section's own opening sentence says "Fourteen claims"; it lists
+fifteen, C1 through C15.)*
+
+| # | what the spec got wrong or left implicit | outcome |
+| --- | --- | --- |
+| **C1** | WP-1 and WP-2's drift test: `prose.ts`/`prompt.ts` were said to be unable to import `DESIGN_DIRNAME`. That holds for `limits.ts`'s LOCAL COPY only; the canonical constant is exported from `entities/design-tree`, and `core/turns` already holds `DESIGN_TREE_FILE_PREFIX` built from it. | Both packages IMPORT and INTERPOLATE. Drift is impossible, not merely detected. No drift test. **Corrected in place above.** |
+| **C2** | WP-4 implied a second virtual file. The Gate's VFS serves exactly one `.d.ts`. | The inline is a `declare module "@reatom/core" { … }` block appended INSIDE the `RUNTIME_DTS` text. No VFS hook, no `type-check.ts` logic change. |
+| **C3** | Whether `@reatom/core`'s declaration is mechanically inlinable was assumed. Measured: 302,787 bytes / 7,439 lines, no top-level `import`, no `/// <reference>`, no `export *`, one `export { … }`. | Inlinable. One structural hazard probed rather than assumed — a `declare global` block, which spike 10 proved legal in that position. |
+| **C4** | The inline drags in DOM globals the Gate's `lib: ["esnext"]` pin does not supply. | Acceptable and MEASURED at zero diagnostics: `skipLibCheck` silences them; the degradation is bounded and documented. Widening `lib` to `dom` is explicitly NOT the answer. Ledgered. |
+| **C5** | WP-4's size argument for leaving `@reatom/react` by reference. Its declaration is only 2,748 bytes, so size was never the reason. | The real reason: it imports `react`, `@types/react` is not installed and `react@19` ships none — inlining would mean inventing React's types. Conclusion holds, reason replaced. Ledgered with NO OWNER. |
+| **C6** | WP-8's "let the checkpoint comparison stop proposing impossible resumes". `sessionWorkspaceBinding` has no production consumer; `evaluateSessionPlan` never reads it. | Flipping the flag is an HONESTY fix; the behavioural half is entirely part 2. **Corrected in place above.** Ledgered. |
+| **C7** | WP-8 part 2 needs an `AgentRunOutcome` widening the spec did not mention — and `docs/mvp-remaining-work.md:844` already said so. | The classification lives in the Claude adapter, the one layer that knows the SDK's error shape. String-matching the SDK's English message must not ship, and did not (spike 12 supplied a structural discriminator). |
+| **C8** | WP-5b asks warnings to be attributed to "the pages whose closure reaches it" — a field `GateWarningV1` does not have. | `GateErrorV1`'s `blockedPages` pattern reused, and the inversion `createClosureIndex` already builds reused rather than re-walked. |
+| **C9** | WP-10's "`can-use-tool.ts` confines it to the turn workspace like every file tool". A pathless tool hits `createConfinementPolicy`'s second denial. | `ConfinementTables` gained a THIRD set — allowed, no path to resolve. Confinement comes from the implementation, not from an argument. **Corrected in place above.** |
+| **C10** | Whether the installed SDK exports what WP-10 needs was left open. Verified at `@anthropic-ai/claude-agent-sdk@0.3.212`: `createSdkMcpServer`, `tool`, `McpSdkServerConfigWithInstance`, `Options.mcpServers`. | It does. The one genuine unknown — the SDK's `AnyZodRawShape` against this repo's `zod@4` — was PROBED (spike 11 Q1) rather than assumed. |
+| **C11** | WP-9's "add one [re-send affordance]". The design has ten error screens and none is a backend failure or a re-send; its answer to a failed generation is the opposite of one. | Only the half needing no new visual language shipped (draft restore). The affordance is UNDESIGNED and ledgered with NO OWNER. **Corrected in place above.** |
+| **C12** | WP-11a as written repeats the very failure it fixes: `ChatWarningSnapshot` is `{kind, message}` with no location, so rendering it gives a warning the user cannot locate. | The snapshot was widened with optional `file`/`line`; `.optional()` keeps every already-persisted record decodable. |
+| **C13** | WP-11a needed a visual vocabulary the spec did not name. | The design already has one: `wsCancelled`'s red system line naming a file inside the chat sequence (`design/termcraft-engine.js:807` — the plan's own citation said `:806`; Task 11 caught and corrected that off-by-one). A citation, not an invention. |
+| **C14** | WP-5a listed `entities/chat`'s decoder in the kind-rename ripple set. Its schema has no kind enumeration. | It does not ripple there. The real additional site the spec omitted is `event-payload.test.ts`'s "eight fixed warning kinds" assertion. **Corrected in place above.** |
+| **C15** | The worktree could not run anything: `node_modules` was a real, EMPTY directory. | `bun install` became Task 0. |
+
+Five further uncertainties the plan resolved by READING rather than deferring
+(R1-R5 in the same plan section): `promptDelta` is wired and Task 8's
+"appears exactly once" assertion is load-bearing; `SK.NewKeyword` exists, so Task 4
+needed no lexer change; two map sites in `handlers/turn.ts` drop the warning
+location and BOTH had to be fixed or the widened schema would ship unpopulated;
+turn-start does not read the previous turn's warnings, so Task 10's real content is
+making them reachable; and Task 11's draft restore has an exact precedent whose
+append-never-overwrite rule it had to obey.
