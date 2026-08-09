@@ -687,9 +687,18 @@ two fix rounds).
 
 Four were written for this plan and **all four were RUN**; none shipped on an
 assumption. They keep the filename `SPIKE.md` rather than the `FINDINGS.md` that
-spikes 01-09 use, because fifteen citations across five shipped source files and
-three documents already name `SPIKE.md`; renaming for consistency alone would churn
-all of them in a closeout commit. The four are consistent with each other.
+spikes 01-09 use, because — counted fresh at this closeout — **twenty-six citations
+across ten files** already name `SPIKE.md`: six shipped source files
+(`agent/claude/run/model/classify-backend-error.ts` and its test,
+`agent/claude/run/model/drive-stream.ts` and its test,
+`agent/claude/tools/model/check-design-tool.ts`, `gate/model/type-check.test.ts`) and
+four documents (this spec, the plan, `docs/superpowers/red-debt.md`, and
+`docs/architecture/flows/generation-turn.md`). Renaming for consistency alone would
+churn all of them in a closeout commit. One of those citations is why the count is
+worth stating rather than estimating: `drive-stream.test.ts:317` names the bare
+filename `` `SPIKE.md` `` with no directory, so a path-anchored grep misses it — a
+rename sweep would silently leave it pointing at nothing. The four are consistent with
+each other.
 
 | spike | verdict |
 | --- | --- |

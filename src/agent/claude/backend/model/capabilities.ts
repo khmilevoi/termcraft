@@ -21,13 +21,27 @@ export function claudeCapabilities(): BackendCapabilities {
     //
     // THIS FLAG HAS NO PRODUCTION READER TODAY, and flipping it therefore changes NO behaviour.
     // Every reference is this value, its type (`agent/types.ts`), the lifted port
-    // (`core/ports/agent-backend.ts`), one assertion and eight test fixtures. The behavioural
-    // half of this correction is the classified resume rejection and the fallback below — not
-    // this line. Do not read the flip as the fix.
+    // (`core/ports/agent-backend.ts`), one assertion, the shared fake's own default
+    // (`core/ports/fakes/agent-backend.ts`) and ten test fixtures (recounted at the plan's
+    // closeout; this line said "eight" and was already stale by then). The behavioural half of
+    // this correction is the classified resume rejection and the fallback below — not this
+    // line. Do not read the flip as the fix.
     //
-    // The turn-durability §6.3 probe that was supposed to establish this value empirically is
+    // CORRECTED 2026-08-10, design-agent-feedback-loop closeout (Task 13). This paragraph read:
+    // "The turn-durability §6.3 probe that was supposed to establish this value empirically is
     // still unwritten; it is ledgered, and it would now have to prove the value WRONG to change
-    // it back.
+    // it back." The first clause was FALSE when it was written. §6.3 asks a backend to "prove
+    // that the resumed run uses the new cwd and writable root"; spike 12
+    // (`docs/spikes/12-resume-rejection/SPIKE.md`) ran exactly that experiment, deliberately and
+    // with a positive control — observation B minted a real session id in cwd X, C resumed it
+    // from X and SUCCEEDED (proving the id itself was live and resumable), D resumed the same id
+    // from a DIFFERENT cwd and was REJECTED. The rejection is therefore attributable to the cwd
+    // and not to a stale id, which is the whole thing a probe has to establish. So the probe is
+    // RUN and this value is set from an experiment, not from an assumption. What survives from
+    // the old wording is its second half: a future probe would now have to prove the value WRONG
+    // to change it back, and `docs/superpowers/red-debt.md` records the exact bar it must clear
+    // (a session resumed from a different cwd, with positive proof it really resumed, against
+    // the SDK version installed at that time).
     sessionWorkspaceBinding: "fixed",
     // MVP has no `/model` picker, so the Kernel falls back to this when a turn
     // starts with no stored (backend, model, effort) triple (see turn.ts).

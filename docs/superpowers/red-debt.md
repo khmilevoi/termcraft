@@ -1371,7 +1371,7 @@ regression** and must not be retold as one: the two runs bracket each other (Tas
 sides (44-67 vs 53-68), and the parsed text is the same 316 KB. The diagnostics count moved the
 right way at the same time: 5 manufactured `TS7006`s → 0.
 
-The named follow-up, if this ever does regress materially: `gate/model/type-check.ts:340` constructs
+The named follow-up, if this ever does regress materially: `gate/model/type-check.ts:389` constructs
 a fresh compiler API per check (`new API(...)`), so the 316 KB is re-parsed every whole-tree pass.
 Reusing that snapshot across Gate runs is a caching decision with its own invalidation story — named
 in the plan's own "deliberately left undone" table, deliberately NOT taken here, and it is the first
@@ -1475,9 +1475,18 @@ D (`docs/spikes/12-resume-rejection/SPIKE.md`, SDK `0.3.212`):
   `modelUsage: {}`, a dedicated `errors: string[]` field, and then a throw.
 
 RC6 confirmed: **the SDK indexes sessions by cwd.** That is why
-`agent/claude/backend/model/capabilities.ts:31` advertises `sessionWorkspaceBinding: "fixed"`, and
-the value is now set from an experiment rather than from an assumption — the comment at `:28-30`
-says exactly that.
+`agent/claude/backend/model/capabilities.ts` advertises `sessionWorkspaceBinding: "fixed"`, and the
+value is now set from an experiment rather than from an assumption.
+
+*The code comment did not say that until this closeout, and the discrepancy is worth recording
+rather than quietly fixing.* Task 9 wrote the flip (`af71378`) with a paragraph claiming "the
+turn-durability §6.3 probe that was supposed to establish this value empirically is **still
+unwritten**" — false when written, since spike 12 had already run and was the very evidence the
+flip rested on. Task 13 corrected the comment in place with a dated retraction that quotes the old
+text (`capabilities.ts`, the `CORRECTED 2026-08-10` note above `sessionWorkspaceBinding`), rather
+than weakening this row to describe a stale comment as if it were the ledger's problem. The
+correction is cited without a line range on purpose: the previous version of this row pinned
+`:28-30` and the numbers moved the moment the comment was edited.
 
 **What a future probe would have to show to change it back to `"rebindable"`:** a session id created
 in cwd X and successfully resumed from a DIFFERENT cwd, with positive proof it really resumed (the
@@ -1523,10 +1532,15 @@ the SDK cannot route around — neither of which is a follow-up to this plan.
 ### `sessionWorkspaceBinding` still has no production reader — C6, re-confirmed after Task 9
 
 Task 9 made the advertised VALUE honest (see the §6.3 row above); it did not make it consumed.
-Re-measured at this closeout, `grep -rn sessionWorkspaceBinding src/` finds: the type
-(`agent/types.ts:139`), the lifted port field (`core/ports/agent-backend.ts:167`), the one
-production WRITE (`agent/claude/backend/model/capabilities.ts:31`), one assertion
-(`capabilities.test.ts:12`) and ten test fixtures. **Zero production reads.** In particular
+Re-measured at this closeout, `grep -rn sessionWorkspaceBinding src/` finds **fifteen** sites and
+not one of them reads the value in production: the type (`agent/types.ts:139`), the lifted port
+field (`core/ports/agent-backend.ts:167`), the one production WRITE
+(`agent/claude/backend/model/capabilities.ts`), one assertion (`capabilities.test.ts:12`), the
+shared fake's own default (`core/ports/fakes/agent-backend.ts:84`), and ten fixture sites. *Counting
+convention, since it is ambiguous:* "fixture" means a site inside a `*.test.ts` file, which is why
+`core/ports/fakes/agent-backend.ts:84` is listed separately — it lives in a non-test file and is the
+default every test that does not override it inherits. 1 + 2 + 1 + 1 + 10 = 15. **Zero production
+reads.** In particular
 `evaluateSessionPlan` (`core/turns/model/session-plan.ts`) — the comparison that decides whether a
 resume is proposed — never consults it, which is exactly what C6 predicted and why flipping the flag
 changed no behaviour.
@@ -1671,6 +1685,56 @@ closed rather than scattered across twelve reports. None is a defect; each is na
 - **Task 12**, two from round 2: an orphaned doc-comment ordering in `gate/model/type-check.ts`, and
   the report's own "every surviving line" table missing one dated-but-accurate historical doc line.
   Neither blocking.
+
+### `bun run fmt:check` is RED on nine files, and SEVEN of them are this plan's own — NOT the "three pre-existing" the plan's Task 0 recorded
+
+Opened at Task 13, and the row exists because the number in this plan's own controller ledger is
+wrong in BOTH directions. Task 0 recorded "fmt:check RED on 3 pre-existing files
+(`create-shell.test.ts`, `chat-index.test.ts`, `scrollbox-probe.test.tsx`) — left alone per plan
+instruction, not folded into any task commit." Re-measured at the closeout:
+
+**At base `4612cea`, exactly TWO files were unformatted** — measured in a detached worktree checked
+out at `4612cea` so the base's own `.oxfmtrc.jsonc` governed, not the current one (a first attempt
+that copied the files to a scratch directory was discarded: it resolved no config and cannot be
+trusted for this question):
+
+```
+src/store/jsonl/model/chat-index.test.ts
+src/ui/workspace/ui/scrollbox-probe.test.tsx
+```
+
+`src/entrypoint/model/create-shell.test.ts` was **clean at base**. Task 0's list of three was wrong
+about that file; there were two.
+
+**At the closeout, NINE are unformatted.** The two above survive — correctly, they are genuinely
+pre-existing and outside this plan's scope, and leaving them was the right call. The other seven are
+new, and every one of them was clean at `4612cea`:
+
+| file | commits in `4612cea..dc9f599` that touched it |
+| --- | --- |
+| `src/agent/claude/run/model/classify-backend-error.test.ts` | `af71378` |
+| `src/agent/claude/run/model/drive-stream.test.ts` | `af71378`, `ba84a47` |
+| `src/core/protocol/model/chat-record.test.ts` | `53bccfe` |
+| `src/core/turns/model/prompt.ts` | `a5a6f50`, `0c8cc4c`, `e53b7ad`, `9c44663`, `faae622`, `53bccfe` |
+| `src/core/turns/model/prompt.test.ts` | same six |
+| `src/core/turns/model/run-turn.test.ts` | `15fe926`, `e878f20`, `af71378`, `ba84a47`, `958f445` |
+| `src/ui/app/model/deps.test.ts` | `53bccfe` |
+
+The commit lists are "touched by", not "broken by" — pinning the exact breaking commit per file
+would need a bisect this row did not run.
+
+**Why this went unnoticed for twelve tasks, which is the part worth carrying forward.** Every task
+verified with `bun run test`, `bun x tsc --noEmit` and `oxlint`, and several reported all three
+clean; `fmt:check` was not in that set, and Task 0's "fmt:check is already red, leave it" note made
+a red result look expected. A known-red check stops being a check.
+
+**NOT FIXED HERE, deliberately.** `bun run fmt` would fix all nine mechanically, but it would put
+formatter churn across seven files owned by six different tasks into a commit whose subject is
+closing the ledger, ahead of a final whole-branch review that reads those diffs. That is exactly the
+kind of unreviewed source change a closeout must not smuggle in. Owner: the operator, as a single
+`bun run fmt` sweep on its own commit — and whoever takes it should decide at the same time whether
+`fmt:check` joins the per-task verification set, since a formatter that nothing runs will simply
+drift again.
 
 ### Considered and homed elsewhere — deliberately NOT given a row here
 
