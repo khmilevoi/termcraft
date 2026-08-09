@@ -354,6 +354,30 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
   let attempt: TurnAttempt = 1;
   let userMessage = input.baseTask.userMessage;
   /**
+   * The session plan THIS attempt runs under. Attempt 1 uses the turn's plan (resolved once,
+   * upstream of this driver — `input.baseTask.session`); a Gate retry replaces it with a
+   * RESUME of the attempt it is correcting (design-agent-feedback-loop repair, Task 8).
+   *
+   * WHY A RESUME IS VALID HERE WHILE CROSS-TURN RESUME IS NOT. The SDK indexes sessions by
+   * cwd, and every TURN gets a fresh workspace (`store/sandbox/model/staging-store.ts`) —
+   * which is why a session id from a PREVIOUS turn is unresolvable and produced the measured
+   * `No conversation found with session ID: …`. Within ONE turn the workspace is IDENTICAL
+   * across attempts, so the session the rejected attempt created is still addressable from the
+   * same cwd. Measured (spike 12, observation C): resuming from the same cwd succeeded and read
+   * back exactly the context the rejected attempt had already written —
+   * `cache_read_input_tokens: 17739` against the earlier attempt's own
+   * `cache_creation_input_tokens: 17739` — at roughly a tenth of the cost ($0.0104 vs $0.1065),
+   * because that context was served from cache instead of re-sent.
+   *
+   * WHY THIS MATTERS MORE THAN IT LOOKS. A fresh retry session re-reads RUNTIME.md, REATOM.md,
+   * runtime.d.ts and every page file to apply what were, in the measured production run, four
+   * one-token type annotations — and re-hits the same path errors on the way. The diagnostics
+   * ride as `promptDelta` (see the retry branch below) rather than as a new first message
+   * precisely so the resumed session reads them as the next turn of a conversation it already
+   * remembers, not as a cold start.
+   */
+  let session = input.baseTask.session;
+  /**
    * The most recently frozen candidate's own root, across every attempt this turn has run so
    * far — hoisted above the retry loop (review finding #4) instead of being declared fresh
    * inside it, precisely so a retry's own abandonment (see `terminalize`'s own doc just
@@ -397,6 +421,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       ...input.baseTask,
       workspacePath: context.workspace.root,
       userMessage,
+      session,
     };
     const started = startTurnAttempt(attemptDeps, {
       turnId: context.turnId,
@@ -549,7 +574,30 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         nextAttempt: validation.nextAttempt,
         foldedAddition: folded,
       });
-      userMessage = appendPromptFold(input.baseTask.userMessage, folded);
+
+      // `outcome` is the `completed` variant here (narrowed above at the top of this
+      // iteration), so `sessionId` is a non-optional `string` — the retry RESUMES the
+      // rejected attempt's own session rather than starting fresh (see this file's `session`
+      // doc comment above for the full rationale and the measured spike-12 evidence). The
+      // fold rides as `promptDelta`, not as a fresh first message.
+      //
+      // `agent/session/model/prompt.ts:13` reads `task.session.promptDelta ?? task.userMessage`
+      // — on a resume the delta IS what is sent and `userMessage` is not sent at all, so the
+      // two channels are mutually exclusive by construction. Exactly one of the two branches
+      // below carries the fold: the primary branch puts it in `promptDelta` and reverts
+      // `userMessage` to the user's own original text; the `else` fallback is DEFENSIVE, not
+      // expected to fire today (a real `completed` outcome's `sessionId` cannot be empty) — if
+      // the outcome type ever widens to admit a completed attempt without a session id, the
+      // retry degrades to the turn's original session plan (never constructing a resume of
+      // nothing) and puts the fold back on `userMessage`, since a non-resume plan has no
+      // `promptDelta` slot to carry it in.
+      if (outcome.sessionId) {
+        session = { kind: "resume", sessionId: outcome.sessionId, promptDelta: folded };
+        userMessage = input.baseTask.userMessage;
+      } else {
+        session = input.baseTask.session;
+        userMessage = appendPromptFold(input.baseTask.userMessage, folded);
+      }
       attempt = validation.nextAttempt;
       continue;
     }

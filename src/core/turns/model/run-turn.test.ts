@@ -398,12 +398,20 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
         },
       ]);
 
-      // The folded diagnostics actually reached the second attempt's own task.
+      // The folded diagnostics reach the second attempt as a RESUME of the first attempt's
+      // own session (task 8) — `userMessage` reverts to the user's own original text, and the
+      // fold rides `session.promptDelta` instead. Never both, never neither: see run-turn.ts's
+      // `session` doc comment and the dedicated "Gate retry resumes..." describe block below
+      // for the invariant pinned across every branch.
       expect(h.startedTasks.length).toBe(2);
       expect(h.startedTasks[0]?.userMessage).toBe("please add a page");
-      expect(h.startedTasks[1]?.userMessage).toContain("please add a page");
-      expect(h.startedTasks[1]?.userMessage).toContain("Gate rejected the previous attempt");
-      expect(h.startedTasks[1]?.userMessage).toContain("TS2322");
+      expect(h.startedTasks[0]?.session).toEqual({ kind: "fresh", seed: [] });
+      expect(h.startedTasks[1]?.userMessage).toBe("please add a page");
+      const secondSession = h.startedTasks[1]?.session;
+      if (secondSession?.kind !== "resume") throw new Error("expected a resume session plan");
+      expect(secondSession.sessionId).toBe("s1");
+      expect(secondSession.promptDelta).toContain("Gate rejected the previous attempt");
+      expect(secondSession.promptDelta).toContain("TS2322");
 
       // Two FULL validation passes: manifest slice + whole-tree import scan + one page,
       // twice. The import scan is per-ATTEMPT, not per-turn: a retry restages and refreezes,
@@ -814,6 +822,199 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
         "finalize",
         "terminalize",
       ]);
+    });
+  });
+});
+
+describe("runTurn — a Gate retry resumes the attempt it is correcting (design-agent-feedback-loop repair, task 8)", () => {
+  // Within one turn the workspace is identical across every attempt (the SDK indexes sessions
+  // by cwd, and a turn's workspace never changes across its own attempts) — so a retry can
+  // RESUME the rejected attempt's own session rather than starting a fresh one that re-reads
+  // every doc and page from scratch. The fold rides as `session.promptDelta`, never as a fresh
+  // first message: `agent/session/model/prompt.ts:13` reads
+  // `task.session.promptDelta ?? task.userMessage`, so on a resume the delta IS the prompt and
+  // `userMessage` is not sent at all. The two channels are mutually exclusive by construction —
+  // every test below pins that the fold appears EXACTLY ONCE, never in both, never in neither.
+
+  // `file` is TREE-relative in Gate's own vocabulary (`pages/alarm.tsx`, no `design/` prefix) —
+  // `prompt.ts`'s `toWorkspacePath` translates it to `design/pages/alarm.tsx` for the agent
+  // (Task 3's own path-translation fix). Present here so the "fold travels as promptDelta"
+  // test below can pin that translation survives end to end into a RESUMED retry's delta.
+  const FAILING_PAGE_RESULT_1: GateRunResultV1 = {
+    ok: false,
+    errors: [{ kind: "type", code: "TS1111", message: "first rejection", file: "pages/alarm.tsx" }],
+    warnings: [],
+    descriptor: null,
+  };
+  const FAILING_PAGE_RESULT_2: GateRunResultV1 = {
+    ok: false,
+    errors: [{ kind: "type", code: "TS2222", message: "second rejection" }],
+    warnings: [],
+    descriptor: null,
+  };
+
+  function resumeSession(
+    task: (Omit<AgentTask, "fence"> & { readonly fence: unknown }) | undefined,
+  ) {
+    const session = task?.session;
+    if (session?.kind !== "resume") throw new Error("expected a resume session plan");
+    return session;
+  }
+
+  test("attempt 2 of a rejected turn resumes attempt 1's session", async () => {
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_1);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1)); // sessionId "s1"
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+
+      const secondSession = resumeSession(h.startedTasks[1]);
+      expect(secondSession).toEqual({
+        kind: "resume",
+        sessionId: "s1",
+        promptDelta: expect.stringContaining("Gate rejected"),
+      });
+    });
+  });
+
+  test("the fold travels as promptDelta, not as a fresh first message", async () => {
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_1);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const input = baseRunTurnInput();
+      const runPromise = wrap(runTurn(h.deps, input));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+
+      // The retry's userMessage stays the ORIGINAL message; the diagnostics ride the delta.
+      expect(h.startedTasks[1]?.userMessage).toBe(input.baseTask.userMessage);
+      const secondSession = resumeSession(h.startedTasks[1]);
+      // Task 3's own path-translation vocabulary survives end to end into a resumed retry's
+      // delta: Gate's tree-relative `pages/alarm.tsx` becomes the workspace-relative path the
+      // agent must type into its own tools.
+      expect(secondSession.promptDelta).toContain("design/pages/alarm.tsx");
+    });
+  });
+
+  test("a rejected attempt with no session id falls back to the turn's original plan, and the fold rides userMessage instead (the defensive branch)", async () => {
+    // Cannot happen for a `completed` outcome (`sessionId` is a non-optional `string` there —
+    // `TurnAttemptOutcomeV1`'s own `completed` variant) — this pins the DEFENSIVE branch: if
+    // the type ever widens to admit a completed attempt without a session id, the retry
+    // degrades to the turn's original session plan rather than constructing a resume of
+    // nothing, and the fold moves back onto `userMessage` since a non-resume plan has no
+    // `promptDelta` slot to carry it in.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_1);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const input = baseRunTurnInput();
+      const runPromise = wrap(runTurn(h.deps, input));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, {
+        kind: "completed",
+        finalText: "done-1",
+        usage: null,
+        sessionId: "", // stands in for "no session id" — see the header above
+      });
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+
+      // `session` falls back to the turn's original plan — no promptDelta slot exists on it.
+      expect(h.startedTasks[1]?.session).toEqual(input.baseTask.session);
+      // So the fold must ride userMessage instead (fold appears exactly once, never neither).
+      expect(h.startedTasks[1]?.userMessage).toContain(input.baseTask.userMessage);
+      expect(h.startedTasks[1]?.userMessage).toContain("Gate rejected the previous attempt");
+      expect(h.startedTasks[1]?.userMessage).toContain("TS1111");
+    });
+  });
+
+  test("attempt 3 resumes attempt 2, not attempt 1", async () => {
+    // The session id must advance every attempt. Resuming attempt 1 from attempt 3 would
+    // replay a session that never saw attempt 2's own edits.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_1);
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_2);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1)); // sessionId "s1"
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2)); // sessionId "s2"
+
+      await waitForStartCount(h, 3);
+      completeAttempt(h, 3, completedOutcome(3));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+
+      expect(h.startedTasks.length).toBe(3);
+      expect(h.startedTasks[0]?.session).toEqual({ kind: "fresh", seed: [] });
+      expect(resumeSession(h.startedTasks[1]).sessionId).toBe("s1");
+      // The critical assertion: attempt 3 resumes attempt 2's session (the one that just ran
+      // and was rejected) — never attempt 1's stale session.
+      expect(resumeSession(h.startedTasks[2]).sessionId).toBe("s2");
+    });
+  });
+
+  test("the fold is never accumulated across two retries (prompt.ts's freshness barrier, unchanged)", async () => {
+    // attempt 3's delta carries attempt 2's diagnostics only — never attempt 1's, folded in on
+    // top.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_1);
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_2);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const runPromise = wrap(runTurn(h.deps, baseRunTurnInput()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1));
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      await waitForStartCount(h, 3);
+      completeAttempt(h, 3, completedOutcome(3));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+
+      const secondDelta = resumeSession(h.startedTasks[1]).promptDelta ?? "";
+      expect(secondDelta).toContain("TS1111");
+      expect(secondDelta).not.toContain("TS2222");
+
+      const thirdDelta = resumeSession(h.startedTasks[2]).promptDelta ?? "";
+      expect(thirdDelta).toContain("TS2222");
+      expect(thirdDelta).not.toContain("TS1111");
     });
   });
 });
