@@ -342,7 +342,10 @@ describe("createClaudeDriver", () => {
       sessionKind: "resume",
     });
     await driver(sink);
-    expect(completions[0]?.outcome).toMatchObject({ kind: "backend-error", cause: "resume-rejected" });
+    expect(completions[0]?.outcome).toMatchObject({
+      kind: "backend-error",
+      cause: "resume-rejected",
+    });
   });
 
   test("the SAME result shape on a fresh-session run never classifies — condition 1 is checked first", async () => {

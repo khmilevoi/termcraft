@@ -478,7 +478,9 @@ describe("foldSurvivingWarnings — warnings that survived an ACCEPTED turn (Tas
     // the ACTUAL shape `resolveSurvivingWarningsFold` hands this function in production, not
     // just a convenience for the richer test above.
     const fold = foldSurvivingWarnings({
-      warnings: [{ kind: "nondeterministic-randomness", message: "`Math.random()` is non-deterministic" }],
+      warnings: [
+        { kind: "nondeterministic-randomness", message: "`Math.random()` is non-deterministic" },
+      ],
     });
     expect(fold).toContain("`Math.random()` is non-deterministic");
     expect(fold).not.toContain(" in ");

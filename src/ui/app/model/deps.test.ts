@@ -260,7 +260,12 @@ describe("createUiDeps runtime", () => {
         outcome: "failed",
         changedPages: [],
         warnings: [],
-        failure: { code: "BACKEND_FAILED", retryable: true, safeMessage: "backend crashed", details: {} },
+        failure: {
+          code: "BACKEND_FAILED",
+          retryable: true,
+          safeMessage: "backend crashed",
+          details: {},
+        },
       }),
     );
     await tick();

@@ -150,7 +150,9 @@ describe("chatRecordDtoV1Schema", () => {
 
       const explicitNulls = {
         ...validAgent,
-        warnings: [{ kind: "gate:orphan-import", message: "unused import", file: null, line: null }],
+        warnings: [
+          { kind: "gate:orphan-import", message: "unused import", file: null, line: null },
+        ],
       };
       expect(chatRecordDtoV1Schema.safeParse(explicitNulls).success).toBe(true);
     });

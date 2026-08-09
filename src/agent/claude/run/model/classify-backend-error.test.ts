@@ -67,8 +67,6 @@ describe("classifyBackendErrorCause", () => {
   test("a malformed/missing errors[] is treated as no match rather than throwing", () => {
     const msg = sdkErrorFor("unused") as unknown as Record<string, unknown>;
     delete msg.errors;
-    expect(
-      classifyBackendErrorCause("resume", msg as unknown as SDKResultError),
-    ).toBeNull();
+    expect(classifyBackendErrorCause("resume", msg as unknown as SDKResultError)).toBeNull();
   });
 });

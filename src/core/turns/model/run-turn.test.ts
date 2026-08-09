@@ -1665,8 +1665,7 @@ describe("runTurn — session fallback on a rejected resume (design-agent-feedba
     await context.start(async () => {
       const h = harness();
       const base = baseRunTurnInput();
-      const transcriptDelta =
-        "User: what about the header color?\n\nAgent: I changed it to blue.";
+      const transcriptDelta = "User: what about the header color?\n\nAgent: I changed it to blue.";
       const input: RunTurnInputV1 = {
         ...base,
         baseTask: {

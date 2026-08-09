@@ -325,7 +325,9 @@ function toSurvivingWarningDto(warning: SurvivingWarningV1): TurnGateWarningDtoV
  * this is, the freshness rule it obeys, and why it is not `foldGateDiagnosticsIntoPrompt`.
  */
 export function foldSurvivingWarnings(input: TurnSurvivingWarningsFoldInputV1): string {
-  const determinismWarnings = input.warnings.map(toSurvivingWarningDto).filter(isDeterminismWarning);
+  const determinismWarnings = input.warnings
+    .map(toSurvivingWarningDto)
+    .filter(isDeterminismWarning);
   if (determinismWarnings.length === 0) return "";
   return [SURVIVING_WARNINGS_HEADER, ...determinismWarnings.map(formatGateWarning)].join("\n");
 }
