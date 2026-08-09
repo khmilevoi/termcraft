@@ -861,6 +861,21 @@ describe("runTurn — a Gate retry resumes the attempt it is correcting (design-
     return session;
   }
 
+  /**
+   * Mirrors `agent/session/model/prompt.ts:13`'s channel-selection rule for a `resume` plan
+   * exactly (`task.session.promptDelta ?? task.userMessage`) — reproduced rather than imported
+   * because `core` test files do not import `agent` (module-boundary rule, `CLAUDE.md`
+   * "Imports"). Used by the round-1-review regression test below so the assertion pins the
+   * REAL invariant — what the agent will actually read — not a hand-checked approximation.
+   */
+  function effectivePromptFor(
+    task: (Omit<AgentTask, "fence"> & { readonly fence: unknown }) | undefined,
+  ): string {
+    if (task === undefined) throw new Error("expected a started task");
+    if (task.session.kind === "resume") return task.session.promptDelta ?? task.userMessage;
+    return task.userMessage;
+  }
+
   test("attempt 2 of a rejected turn resumes attempt 1's session", async () => {
     await context.start(async () => {
       const h = harness();
@@ -950,6 +965,60 @@ describe("runTurn — a Gate retry resumes the attempt it is correcting (design-
       expect(h.startedTasks[1]?.userMessage).toContain(input.baseTask.userMessage);
       expect(h.startedTasks[1]?.userMessage).toContain("Gate rejected the previous attempt");
       expect(h.startedTasks[1]?.userMessage).toContain("TS1111");
+    });
+  });
+
+  test("a rejected attempt with no session id, when the turn's OWN plan is already a same-process resume with a non-null promptDelta, folds onto that promptDelta rather than a dead userMessage channel (round-1 review fix)", async () => {
+    // Round-1 review finding: `input.baseTask.session` is NOT always a "fresh" plan with no
+    // `promptDelta` slot. WP-7's same-process chat resume
+    // (`store/adapters/session-checkpoint.ts`'s `renderPromptDelta`,
+    // `core/turns/model/session-plan.ts:49-50`'s `evaluateSessionPlan`) can hand this driver a
+    // "resume" plan whose `promptDelta` is already a real, non-null transcript. Appending the
+    // fold to `userMessage` in that case — the defensive branch's OLD behavior — reaches a
+    // channel `agent/session/model/prompt.ts:13`'s `promptDelta ?? userMessage` never even
+    // looks at once `promptDelta` is non-null: the fold would silently vanish, reaching
+    // neither channel the agent actually reads.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT_1);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const base = baseRunTurnInput();
+      const input: RunTurnInputV1 = {
+        ...base,
+        baseTask: {
+          ...base.baseTask,
+          session: { kind: "resume", sessionId: "s0", promptDelta: "original resume text" },
+        },
+      };
+      const runPromise = wrap(runTurn(h.deps, input));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, {
+        kind: "completed",
+        finalText: "done-1",
+        usage: null,
+        sessionId: "", // forces the defensive branch on this turn's very first retry
+      });
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+
+      const retrySession = h.startedTasks[1]?.session;
+      if (retrySession?.kind !== "resume") throw new Error("expected a resume session plan");
+      // Still resuming the SAME underlying session the turn was already resuming — never a
+      // fresh conversation, and never a different session id than the one already established.
+      expect(retrySession.sessionId).toBe("s0");
+
+      // Read through the EXACT SAME channel-selection rule prompt.ts uses, so this pins the
+      // real invariant — what the agent actually reads — not an approximation of it.
+      const effectivePrompt = effectivePromptFor(h.startedTasks[1]);
+      expect(effectivePrompt).toContain("original resume text");
+      expect(effectivePrompt).toContain("Gate rejected the previous attempt");
+      expect(effectivePrompt).toContain("TS1111");
     });
   });
 

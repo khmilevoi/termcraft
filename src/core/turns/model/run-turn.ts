@@ -583,19 +583,47 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       //
       // `agent/session/model/prompt.ts:13` reads `task.session.promptDelta ?? task.userMessage`
       // — on a resume the delta IS what is sent and `userMessage` is not sent at all, so the
-      // two channels are mutually exclusive by construction. Exactly one of the two branches
-      // below carries the fold: the primary branch puts it in `promptDelta` and reverts
-      // `userMessage` to the user's own original text; the `else` fallback is DEFENSIVE, not
-      // expected to fire today (a real `completed` outcome's `sessionId` cannot be empty) — if
-      // the outcome type ever widens to admit a completed attempt without a session id, the
-      // retry degrades to the turn's original session plan (never constructing a resume of
-      // nothing) and puts the fold back on `userMessage`, since a non-resume plan has no
-      // `promptDelta` slot to carry it in.
+      // two channels are mutually exclusive by construction, and exactly one of the two
+      // branches below carries the fold.
       if (outcome.sessionId) {
         session = { kind: "resume", sessionId: outcome.sessionId, promptDelta: folded };
         userMessage = input.baseTask.userMessage;
+        attempt = validation.nextAttempt;
+        continue;
+      }
+
+      // DEFENSIVE, not expected to fire today: a real `completed` outcome's `sessionId` is a
+      // non-optional `string`, never empty in practice. If the outcome type ever widens to
+      // admit a completed attempt without a usable session id, `session` is left UNCHANGED
+      // here rather than reverting to `input.baseTask.session` — that reversion would discard
+      // an already-established resume chain on any retry past the very first one (on the
+      // FIRST retry the two are identical, since `session` has not been reassigned yet, but
+      // they diverge on a later one). Leaving it unchanged means the next attempt keeps
+      // resuming whatever this driver was already resuming.
+      //
+      // WHICH CHANNEL prompt.ts:13's rule will read for that (unchanged) `session` depends on
+      // ITS OWN kind and delta — round-1 review finding: `input.baseTask.session` is NOT
+      // always a "fresh" plan with no `promptDelta` slot. WP-7's same-process chat resume
+      // (`store/adapters/session-checkpoint.ts`'s `renderPromptDelta`,
+      // `core/turns/model/session-plan.ts`'s `evaluateSessionPlan`) can hand this driver a
+      // "resume" plan whose `promptDelta` is already a real, non-null transcript — and so can
+      // an earlier iteration of the primary branch just above, on a SECOND defensive fallback
+      // within the same turn. Either way `userMessage` is then a DEAD channel `prompt.ts`
+      // never reads, so appending the fold there would reach neither channel the agent
+      // actually reads — exactly the silent-loss failure mode this whole task exists to
+      // prevent. The fold rides whichever channel the rule will actually pick: appended onto
+      // an existing non-null `promptDelta` (never clobbering the original text — the same
+      // append-only convention `appendPromptFold` and `ui/app/model/intent.ts`'s draft-append
+      // rule both already use), or onto `userMessage` only when `session` has no `promptDelta`
+      // to carry it (a "fresh" plan, or a "resume" with a null delta — precisely the case
+      // `?? task.userMessage` itself falls through to).
+      //
+      // DO NOT simplify this back to an unconditional `userMessage = appendPromptFold(...)`
+      // without re-checking `agent/session/model/prompt.ts:13`'s channel-selection rule first.
+      if (session.kind === "resume" && session.promptDelta !== null) {
+        session = { ...session, promptDelta: appendPromptFold(session.promptDelta, folded) };
+        userMessage = input.baseTask.userMessage;
       } else {
-        session = input.baseTask.session;
         userMessage = appendPromptFold(input.baseTask.userMessage, folded);
       }
       attempt = validation.nextAttempt;
