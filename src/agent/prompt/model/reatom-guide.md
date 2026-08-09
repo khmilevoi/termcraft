@@ -138,8 +138,10 @@ Anything with a lifetime — a subscription, a listener — belongs to a connect
       }),
     )
 
-Remember the page rules: no `setTimeout`/`setInterval`/`Math.random` outside animation
-guarded by the export flag, and the first frame must be deterministic.
+A page renders once per commit. There is no tick, no animation frame, no interval, no
+clock. Nothing in the runtime calls your component again on its own. Any value that would
+change with time lives in an atom and advances only from an action. See RUNTIME.md's "Time
+and the sealed render" for the complete list of what the Gate flags.
 
 ## Checklist before you finish
 

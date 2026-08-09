@@ -4,7 +4,6 @@ import {
   atom,
   action,
   wrap,
-  isExport,
   Panel,
   Column,
   Row,
@@ -15,7 +14,7 @@ import {
   Gauge,
 } from "@termcraft/runtime"
 import { pad2 } from "../lib/time"
-import { makeElapsedMsReader } from "../lib/elapsed"
+import { makeTick } from "../lib/elapsed"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -49,22 +48,21 @@ const DURATION_PRESETS: readonly DurationPreset[] = [
 ]
 
 // ── state ──
-// Same static-render contract as the stopwatch page: the first, un-clicked render must
-// be correct on its own — stopped, full duration remaining. Wall-clock reads
-// (`Date.now()`) only happen inside actions, i.e. in response to a real interaction once
-// the interactive path lands; there is no setInterval/setTimeout anywhere.
+// Same sealed-render contract as the stopwatch page: the first, un-clicked render must be
+// correct on its own — stopped, full duration remaining. `elapsedMsAtom` only ever changes
+// from an action, never from a wall-clock read; see RUNTIME.md's "Time and the sealed
+// render". `tick` (below) is the model-level hook a future interactive driver calls to
+// advance it, matching this MVP's other `onPress` handlers staying inert until the
+// interactive path lands.
 
 const durationMsAtom = atom(DURATION_PRESETS[1].ms, "durationMsAtom")
 const elapsedMsAtom = atom(0, "elapsedMsAtom")
 const runningAtom = atom(false, "runningAtom")
-const startedAtAtom = atom<number | null>(null, "startedAtAtom")
 
-/** Elapsed time since the timer was (re)started, frozen while stopped. */
-const currentElapsedMs = makeElapsedMsReader(runningAtom, startedAtAtom, elapsedMsAtom)
+const tick = makeTick(elapsedMsAtom, "tick")
 
 const selectDuration = action((ms: number) => {
   runningAtom.set(false)
-  startedAtAtom.set(null)
   elapsedMsAtom.set(0)
   durationMsAtom.set(ms)
 }, "selectDuration")
@@ -73,19 +71,15 @@ const start = action(() => {
   if (runningAtom()) return
   if (elapsedMsAtom() >= durationMsAtom()) return
   runningAtom.set(true)
-  startedAtAtom.set(isExport() ? null : Date.now())
 }, "start")
 
 const pause = action(() => {
   if (!runningAtom()) return
-  elapsedMsAtom.set(Math.min(currentElapsedMs(), durationMsAtom()))
   runningAtom.set(false)
-  startedAtAtom.set(null)
 }, "pause")
 
 const reset = action(() => {
   runningAtom.set(false)
-  startedAtAtom.set(null)
   elapsedMsAtom.set(0)
 }, "reset")
 
@@ -94,7 +88,7 @@ const reset = action(() => {
 export default reatomComponent(function Page() {
   const running = runningAtom()
   const duration = durationMsAtom()
-  const elapsed = Math.min(currentElapsedMs(), duration)
+  const elapsed = Math.min(elapsedMsAtom(), duration)
   const remaining = Math.max(0, duration - elapsed)
   const finished = remaining <= 0
   const fraction = duration > 0 ? elapsed / duration : 0

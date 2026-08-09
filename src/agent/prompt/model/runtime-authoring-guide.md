@@ -57,8 +57,32 @@ status hues; `foregroundMuted`/`foregroundFaint` are the de-emphasis steps. The 
 single theme (`dark-default`), so a page cannot offer a real theme switch — it can only
 choose which of these tokens it uses.
 
+## Time and the sealed render
+
+A page renders once per commit. There is no tick, no animation frame, no interval, no
+clock. Nothing in the runtime calls your component again on its own. Any value that would
+change with time lives in an atom and advances only from an action.
+
+The Gate flags: `Date.now()`, `performance.now()`, `new Date()` with no arguments,
+`Math.random()`, `setTimeout`, `setInterval`, `setImmediate`, `requestAnimationFrame`.
+
+A seeded `new Date(ms)` or `new Date(year, month, day)` is left alone — it reads no clock, so
+flagging it would only teach you to avoid dates instead of avoiding the clock.
+
+A worked stopwatch, because it is the canonical case that trips this rule:
+
+    // elapsedMsAtom advances only from start/stop/lap. No wall-clock delta anywhere: there is no
+    // clock to read and no tick to read it on.
+    const elapsedMsAtom = atom(0, "elapsedMsAtom")
+    const lapsAtom = atom<readonly number[]>([], "lapsAtom")
+    const tick = action((ms: number) => elapsedMsAtom.set(elapsedMsAtom() + ms), "tick")
+    const lap = action(() => lapsAtom.set([...lapsAtom(), elapsedMsAtom()]), "lap")
+
+A stopwatch in a design preview advances when something advances it, and a page cannot
+advance itself. That is the runtime's shape, not a missing feature.
+
 ## What not to do
 
-No timers or randomness outside animation guarded by the export flag — the first frame must
-be deterministic. No imports beyond `@termcraft/runtime` — see `runtime.d.ts` and this
-turn's system prompt for the exact allowlist.
+See "Time and the sealed render" above for the determinism rule. No imports beyond
+`@termcraft/runtime` — see `runtime.d.ts` and this turn's system prompt for the exact
+allowlist.

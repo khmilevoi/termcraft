@@ -4,7 +4,6 @@ import {
   atom,
   action,
   wrap,
-  isExport,
   Panel,
   Column,
   Row,
@@ -14,7 +13,7 @@ import {
   Separator,
 } from "@termcraft/runtime"
 import { pad2 } from "../lib/time"
-import { makeElapsedMsReader } from "../lib/elapsed"
+import { makeTick } from "../lib/elapsed"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -35,51 +34,45 @@ function formatStopwatch(ms: number): string {
 }
 
 // ── state ──
-// The MVP's static render has no interval driving re-renders and onPress stays inert
-// until the interactive path lands, so this page must read correctly on its first,
-// un-clicked render: stopped at zero, no laps. `startedAtAtom` records a wall-clock
-// timestamp taken inside an action — i.e. in response to a real user gesture once
-// interaction lands — never a free-running setInterval/setTimeout, so the
-// deterministic-first-frame rule still holds.
+// A page renders once per commit — no tick, no animation frame, no interval, no clock — so
+// `elapsedMsAtom` only ever changes from an action, never from a wall-clock read; see
+// RUNTIME.md's "Time and the sealed render". `tick` (below) is the model-level hook a future
+// interactive driver calls to advance it; nothing calls it yet, matching this MVP's other
+// `onPress` handlers staying inert until the interactive path lands. This page must still
+// read correctly on its first, un-clicked render: stopped at zero, no laps.
 
 const runningAtom = atom(false, "runningAtom")
 const elapsedMsAtom = atom(0, "elapsedMsAtom")
-const startedAtAtom = atom<number | null>(null, "startedAtAtom")
 const lapsAtom = atom<readonly number[]>([], "lapsAtom")
 
-/** Elapsed time, including the running span since `startedAtAtom` if still going. */
-const currentElapsedMs = makeElapsedMsReader(runningAtom, startedAtAtom, elapsedMsAtom)
+const tick = makeTick(elapsedMsAtom, "tick")
 
 const start = action(() => {
   if (runningAtom()) return
   runningAtom.set(true)
-  startedAtAtom.set(isExport() ? null : Date.now())
 }, "start")
 
 const stop = action(() => {
   if (!runningAtom()) return
-  elapsedMsAtom.set(currentElapsedMs())
   runningAtom.set(false)
-  startedAtAtom.set(null)
 }, "stop")
 
 const reset = action(() => {
   runningAtom.set(false)
-  startedAtAtom.set(null)
   elapsedMsAtom.set(0)
   lapsAtom.set([])
 }, "reset")
 
 const recordLap = action(() => {
   if (!runningAtom()) return
-  lapsAtom.set([currentElapsedMs(), ...lapsAtom()])
+  lapsAtom.set([elapsedMsAtom(), ...lapsAtom()])
 }, "recordLap")
 
 // ── component ──
 
 export default reatomComponent(function Page() {
   const running = runningAtom()
-  const elapsed = currentElapsedMs()
+  const elapsed = elapsedMsAtom()
   const laps = lapsAtom()
 
   return (

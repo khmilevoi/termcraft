@@ -12,7 +12,7 @@ import {
   Button,
   Separator,
 } from "@termcraft/runtime"
-import { pad2 } from "../lib/time"
+import { pad2, SEEDED_NOW } from "../lib/time"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -105,11 +105,12 @@ const resetToToday = action(() => {
 }, "resetToToday")
 
 // ── component ──
-// `now` is read once per render (no timer driving re-renders), matching the dashboard
-// page's clock: a static/export render is sealed at whatever instant it was invoked.
+// `now` is a fixed, seeded instant (`SEEDED_NOW`, `lib/time.ts`) — a page renders once per
+// commit and there is no wall clock to read `new Date()` against; see RUNTIME.md's "Time and
+// the sealed render".
 
 export default reatomComponent(function Page() {
-  const now = new Date()
+  const now = SEEDED_NOW
   const today = { year: now.getFullYear(), month: now.getMonth(), day: now.getDate() }
 
   const offset = monthOffsetAtom()

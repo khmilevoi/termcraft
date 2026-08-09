@@ -11,7 +11,7 @@ import {
   Separator,
   Tabs,
 } from "@termcraft/runtime"
-import { pad2, WEEKDAYS_RU, fullTime } from "../lib/time"
+import { pad2, WEEKDAYS_RU, fullTime, SEEDED_NOW } from "../lib/time"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -129,12 +129,12 @@ function buildAnalogClockFace(d: Date): string {
 }
 
 // ── component ──
-// The clock reads `new Date()` once per render. There is no timer driving re-renders,
-// so a static/export render is sealed at whatever instant it was invoked — fully
-// deterministic, no setInterval/setTimeout/randomness involved.
+// `now` is a fixed, seeded instant (`SEEDED_NOW`, `lib/time.ts`), not a live wall-clock read:
+// a page renders once per commit, and a raw `new Date()` is flagged by the Gate regardless of
+// how "safe" the surrounding code looks — see RUNTIME.md's "Time and the sealed render".
 
 export default reatomComponent(function Page() {
-  const now = new Date()
+  const now = SEEDED_NOW
   const analogFace = buildAnalogClockFace(now)
 
   const paletteId = paletteIdAtom()

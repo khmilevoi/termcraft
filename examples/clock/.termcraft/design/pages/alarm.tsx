@@ -13,7 +13,7 @@ import {
   Input,
   Separator,
 } from "@termcraft/runtime"
-import { pad2, WEEKDAYS_RU, fullTime } from "../lib/time"
+import { pad2, WEEKDAYS_RU, fullTime, SEEDED_NOW } from "../lib/time"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -88,13 +88,13 @@ const removeAlarm = action((id: string) => {
 }, "removeAlarm")
 
 // ── component ──
-// `now` is read once per render, matching the dashboard clock's contract: a static/export
-// render is sealed at whatever instant it was invoked — no timer drives it. All the
-// interactive controls below stay correct on this first, un-clicked render: the seed
-// alarms already sorted and displayed, the draft picker at a sane default.
+// `now` is a fixed, seeded instant (`SEEDED_NOW`, `lib/time.ts`), not a live wall-clock read —
+// a page renders once per commit; see RUNTIME.md's "Time and the sealed render". All the
+// interactive controls below stay correct on this first, un-clicked render: the seed alarms
+// already sorted and displayed, the draft picker at a sane default.
 
 export default reatomComponent(function Page() {
-  const now = new Date()
+  const now = SEEDED_NOW
   const nowMinutes = minutesOfDay(now.getHours(), now.getMinutes())
 
   const alarms = [...alarmsAtom()].sort(
