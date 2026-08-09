@@ -302,6 +302,24 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         if (ks.current !== current) return;
         ks.mounting = false;
         if (result instanceof Error) {
+          // A REFUSAL THE INCARNATION SURVIVED IS NOT AN INCARNATION FAILURE (whole-branch
+          // review, design-tree phase 3 Task 9). `current.phase` is still "ready" for a
+          // PAGE-specific refusal `session.ts`'s own `mount()` never touched teardown for —
+          // `checkKitApiVersion`'s client-side pre-check, or the child's typed `error` reply,
+          // both returned WITHOUT calling `onPumpFatal`. Routing either into
+          // `onIncarnationFatal` would kill a live process still correctly serving every
+          // OTHER page sharing this incarnation, over one page's own static incompatibility —
+          // exactly the blast-radius regression a revision-keyed incarnation must not have.
+          // A genuinely fatal mount failure (MOUNT_TIMEOUT, a broken pipe) already moved
+          // `phase` to "failed" inside `session.ts` before this promise settled, so that case
+          // still falls through below unchanged.
+          if (current.phase === "ready") {
+            console.warn(
+              `host-supervisor: mount(${requested}) refused, incarnation still alive:`,
+              result.message,
+            );
+            return;
+          }
           console.warn(`host-supervisor: mount(${requested}) failed:`, result.message);
           onIncarnationFatal(ks, result);
           return;
@@ -534,6 +552,21 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     await ks.pumpTask;
     ks.relay.close();
     ks.state = "stopped";
+    // A closed key is never reused: `preview()`'s own `!existing.closed` check already falls
+    // through to a fresh KeyState for this same key, so nothing after this point ever reads
+    // `keys.get(key)` expecting to find THIS entry. Deleting it is what stops the map growing
+    // one dead entry per key ever used (design-tree phase 3 Task 9 review) — keyed on
+    // `treeRevision` alone since Task 5, that would otherwise be one entry per commit for the
+    // life of the process. Every `SupervisedPreviewSession` a caller still holds keeps working:
+    // its closures reference `ks` directly, never through this map.
+    //
+    // THE IDENTITY CHECK IS LOAD-BEARING. `close()` awaits across several suspension points
+    // above; a `preview()` call for the SAME key during one of those gaps already sees
+    // `ks.closed === true` (set synchronously at the top of this function) and creates a FRESH
+    // KeyState at this same map slot. Deleting unconditionally would evict that newer, live
+    // entry instead of this stale one, making it unreachable by key — the next `preview()` for
+    // the same key would spawn a duplicate incarnation the map no longer remembers to close.
+    if (keys.get(ks.key) === ks) keys.delete(ks.key);
     emit({
       type: "stopped",
       key: ks.key,

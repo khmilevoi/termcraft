@@ -93,13 +93,17 @@ function sizeLabel(size: { readonly w: number; readonly h: number }): string {
 }
 
 /**
- * Which pages reach each non-entry closure member, tree-relative path → sorted page slugs
+ * Which pages reach each shared closure member, tree-relative path → sorted page slugs
  * (design §11, phase 3 Task 7).
  *
- * A page's OWN entry is excluded: it is already named on that page's `## Pages` block, and
- * calling the file a page lives in a "module the page reaches" would send an implementer
- * looking for shared code where there is none. Everything else in a closure IS a module, and
- * the ones reached by two or more pages are the decomposition §11 wants carried into the
+ * A page's OWN entry, reached by NO OTHER page, is excluded: it is already named on that
+ * page's `## Pages` block, and calling the file a page lives in a "module the page reaches"
+ * would send an implementer looking for shared code where there is none. But an entry is not
+ * always private — design §4/§7's own "two slugs may share one `entry`" is legal (phase 1
+ * Task 10), and so is one page importing ANOTHER page's entry as a plain module dependency —
+ * so a path is dropped only when the SOLE page reaching it is the one whose entry it is, never
+ * merely because it happens to be *an* entry. Everything else in a closure IS a module, and the
+ * ones reached by two or more pages are the decomposition §11 wants carried into the
  * implementation. Everything here falls out of `input.closures` with no new port, no new read,
  * and no guess — a page whose closure is absent from `input.closures` contributes nothing,
  * exactly as it is absent from its own `## Pages` closure line.
@@ -108,10 +112,15 @@ function readersByModule(closures: readonly ExportClosureV1[]): Map<string, read
   const readers = new Map<string, Set<string>>();
   for (const closure of closures) {
     for (const relPath of closure.files) {
-      if (relPath === closure.entry) continue;
       const seen = readers.get(relPath) ?? new Set<string>();
       seen.add(closure.pageSlug);
       readers.set(relPath, seen);
+    }
+  }
+  for (const closure of closures) {
+    const readersOfEntry = readers.get(closure.entry);
+    if (readersOfEntry?.size === 1 && readersOfEntry.has(closure.pageSlug)) {
+      readers.delete(closure.entry);
     }
   }
   return new Map([...readers].map(([relPath, slugs]) => [relPath, [...slugs].sort()]));
@@ -143,9 +152,11 @@ function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
         : `- closure: closures/${page.pageSlug}.json (${closure.files.length} file(s))`,
     );
     if (closure !== undefined) {
+      // No entry exclusion here: `readers` (built above) has already dropped a path that is
+      // solely one page's own entry, so every path still present — this page's own entry
+      // included, when another page also reaches it — genuinely is shared.
       const sharedWith = new Set<string>();
       for (const relPath of closure.files) {
-        if (relPath === closure.entry) continue;
         for (const otherSlug of readers.get(relPath) ?? []) {
           if (otherSlug !== closure.pageSlug) sharedWith.add(otherSlug);
         }
@@ -184,7 +195,13 @@ function buildDesignPrompt(input: AssembleExportPackageInputV1): string {
   const shared = [...readers]
     .filter(([, slugs]) => slugs.length > 1)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  if (shared.length === 0) {
+  if (input.closures.length === 0) {
+    // "No module is shared" is a claim ABOUT the closures, provable only from closures this
+    // pass actually resolved (whole-branch review, design-tree phase 3 Task 9). Zero resolved
+    // closures means nothing was checked, never that nothing was found — the same
+    // honest-absence rule the per-page `closure: unavailable` line already follows.
+    lines.push("No page's closure could be resolved, so shared modules cannot be listed.");
+  } else if (shared.length === 0) {
     lines.push(
       "No module is reached by more than one page: every page in this design is self-contained.",
     );

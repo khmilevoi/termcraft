@@ -843,6 +843,16 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       return body;
     }
     const result = await sendRequestWithId(requestId, "mount", body, MOUNT_TIMEOUT_MS);
+    // DEFENSIVE, NOT REDUNDANT (whole-branch review, design-tree phase 3 Task 9). The pump's
+    // inline hook clears `pendingMount` only when a REPLY actually correlates to it — an early
+    // `sendRequestWithId` rejection that never reaches the wire (`TOO_MANY_REQUESTS`, a full
+    // outbound queue) or a genuine `QUERY_TIMEOUT` leaves nothing to correlate, ever. Without
+    // this, `pendingMount` stays permanently set and `mount()`'s own top-of-function guard
+    // would refuse every FUTURE mount on this incarnation as "already in flight" — a stuck
+    // slot outliving the request it was for. The identity check guards against a pathological
+    // reorder where a LATER mount() call's own `pendingMount` is already in place by the time
+    // this awaited call resolves; only this call's own slot is ever cleared here.
+    if (pendingMount !== null && pendingMount.requestId === requestId) pendingMount = null;
     // design §9.4's mount deadline: the request table's own timer above already bounds "no
     // ready within budget", but its QUERY_TIMEOUT is the table's generic per-request diagnosis
     // — it names neither the page nor treats the incarnation as dead. A mount the child accepted
@@ -857,6 +867,16 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       onPumpFatal(timeoutError);
       return timeoutError;
     }
+    // THE CHILD'S TYPED REFUSAL IS NOT A SUCCESS (whole-branch review, design-tree phase 3 Task
+    // 9). The pump's inline `pendingMount` hook (above) only COMMITS the switch on `kind ===
+    // "ready"`, clearing `pendingMount` without re-seeding on anything else — but the generic
+    // `responseTo` routing resolves the request table with the RAW envelope regardless of its
+    // `kind`, so an uncaught `kind === "error"` reply would reach the caller looking exactly
+    // like a `ControlEnvelope` success (`reconcileMount`'s `result instanceof Error` check would
+    // pass it straight through as a mounted page). `mapHostError` is the same conversion
+    // `awaitReady`'s own `kind === "error"` branch (`:528`) already applies to the FIRST mount;
+    // a repeated mount needs it too, not a second, divergent reading of the same wire shape.
+    if (!(result instanceof Error) && result.kind === "error") return mapHostError(result);
     return result;
   }
 

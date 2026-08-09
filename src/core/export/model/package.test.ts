@@ -457,4 +457,28 @@ describe("design-prompt.md — shared modules section (design §11, phase 3 Task
     // must not be mistaken for a shared module just because it is a "files" member.
     expect(promptFor(SHARED_CLOSURES)).not.toContain("pages/home.tsx — reached by");
   });
+
+  test("a page importing ANOTHER page's entry as a module is visible as shared, from both sides (whole-branch review)", () => {
+    // "about" reaches "home"'s own entry file — legal (design §4/§7: two slugs may share one
+    // entry, and nothing stops a page from importing another page's entry as a plain module).
+    const prompt = promptFor([
+      { pageSlug: slug("home"), entry: "pages/home.tsx", files: ["pages/home.tsx"] },
+      {
+        pageSlug: slug("about"),
+        entry: "pages/about.tsx",
+        files: ["pages/home.tsx", "pages/about.tsx"],
+      },
+    ]);
+    expect(prompt).toContain("- design/pages/home.tsx — reached by: about, home");
+    expect(prompt).toContain("- shared with: about"); // home's own block
+    expect(prompt).toContain("- shared with: home"); // about's own block
+  });
+
+  test("zero resolved closures says shared modules could not be checked, never that none exist", () => {
+    const prompt = promptFor([]);
+    expect(prompt).toContain(
+      "No page's closure could be resolved, so shared modules cannot be listed.",
+    );
+    expect(prompt).not.toContain("every page in this design is self-contained");
+  });
 });

@@ -710,6 +710,22 @@ function fullTableDeps(base: HostSessionDeps): HostSessionDeps {
   };
 }
 
+/** Like {@link fullTableDeps}, but `full` can be toggled mid-test instead of staying full for the session's whole life. */
+function toggleableFullTableDeps(base: HostSessionDeps): {
+  deps: HostSessionDeps;
+  setFull: (full: boolean) => void;
+} {
+  let full = false;
+  const deps: HostSessionDeps = {
+    ...base,
+    createRequestTable: (clock, opts) => {
+      const real = createRequestTable(clock, opts);
+      return { ...real, size: () => (full ? REQUEST_TABLE_CAPACITY : real.size()) };
+    },
+  };
+  return { deps, setFull: (value) => (full = value) };
+}
+
 /** Decode a single written frame's control envelope `kind`, or null if not decodable. */
 async function decodeWrittenKind(bytes: Uint8Array): Promise<string | null> {
   const carrier = createScriptedChild();
@@ -749,6 +765,31 @@ describe("createHostSession request-table capacity guard (2D-2 adversarial revie
     expect(result).toBeInstanceOf(SupervisorError);
     if (result instanceof SupervisorError) expect(result.code).toBe("TOO_MANY_REQUESTS");
     expect(child.written.length).toBe(writtenAtReady); // no envelope written for the rejected ping
+    await session.stop();
+  });
+
+  // Whole-branch review (design-tree phase 3 Task 9): the pump's `pendingMount` slot is only
+  // ever cleared by a REPLY correlating to it. A `mount()` refused before it ever reaches the
+  // wire (this guard) has no reply coming, so without a defensive clear the slot would stay
+  // stuck forever, and every LATER mount() would be wrongly refused as "already in flight".
+  test("a mount() refused by the pre-send TOO_MANY_REQUESTS guard does not leave a later mount() stuck as 'already in flight'", async () => {
+    const child = switchableChild();
+    const { deps: base } = deps(child);
+    const { deps: sessionDeps, setFull } = toggleableFullTableDeps(base);
+    const session = createHostSession(specWithB, sessionDeps);
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+
+    setFull(true);
+    const refused = await session.mount(pageB);
+    expect(refused).toBeInstanceOf(SupervisorError);
+    if (refused instanceof SupervisorError) expect(refused.code).toBe("TOO_MANY_REQUESTS");
+
+    setFull(false);
+    const result = await session.mount(pageB);
+    // Must be the real outcome of a real mount, never the stuck-slot's "already in flight".
+    expect(result).not.toBeInstanceOf(SupervisorError);
+
     await session.stop();
   });
 
@@ -1117,6 +1158,29 @@ function emitReadyFor(child: ScriptedChild, id: CapturedIdentity, requestId: str
   child.emit(framed);
 }
 
+/** A typed `kind: "error"` reply correlated to `requestId` — the child's refusal shape. */
+function emitErrorFor(
+  child: ScriptedChild,
+  id: CapturedIdentity,
+  requestId: string,
+  code: string,
+): void {
+  const messageId = emittedReadyMessageId.toString();
+  emittedReadyMessageId += 1n;
+  const error: ControlEnvelope = {
+    protocolVersion: 1,
+    kind: "error",
+    sessionId: id.sessionId,
+    nonce: id.nonce,
+    messageId,
+    responseTo: requestId,
+    body: { code, reason: "mount refused" },
+  };
+  const framed = frameControl(error);
+  if (framed instanceof ProtocolError) throw framed;
+  child.emit(framed);
+}
+
 /**
  * One recorded call into a spying `FrameBroker` (below) — order-of-calls evidence recording
  * that `broker.expect(newHash)` lands, in call order, between the old page's last accepted
@@ -1230,6 +1294,30 @@ describe("createHostSession.mount() — switch pages inside a live incarnation (
     emitReadyFor(child, id, child.mountRequestIds[1] as string);
     const firstResult = await firstMountPromise;
     expect(firstResult).not.toBeInstanceOf(Error);
+
+    await session.stop();
+  });
+
+  // Whole-branch review (design-tree phase 3 Task 9): the pump's inline `pendingMount` hook
+  // only COMMITS a switch on `kind === "ready"`, but the generic `responseTo` routing resolves
+  // the request table with the RAW envelope regardless of `kind` — so an uncaught `kind ===
+  // "error"` reply used to reach the caller looking exactly like a `ControlEnvelope` success.
+  test("a repeated mount() the child refuses with a typed error resolves to that typed error, never a ControlEnvelope success", async () => {
+    const child = switchableChild({ autoReplyMounts: false });
+    const { deps: sessionDeps } = deps(child);
+    const session = createHostSession(specWithB, sessionDeps);
+    const started = await session.start();
+    if (started instanceof Error) throw started;
+
+    const mountPromise = session.mount(pageB);
+    await waitUntil(() => child.mountRequestIds.length === 2, "second mount written");
+    const id = child.identity();
+    if (id === null) throw new Error("client.hello identity was never captured");
+    emitErrorFor(child, id, child.mountRequestIds[1] as string, "SOURCE_HASH_MISMATCH");
+
+    const result = await mountPromise;
+    expect(result).toBeInstanceOf(ProtocolError);
+    if (result instanceof ProtocolError) expect(result.code).toBe("SOURCE_HASH_MISMATCH");
 
     await session.stop();
   });

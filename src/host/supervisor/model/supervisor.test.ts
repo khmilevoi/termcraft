@@ -76,8 +76,20 @@ interface FakeIncarnation {
   readonly queryCalls: { frameIdentity: FrameIdentity; query: GeometryQuery }[];
   /** Every `mount()` this incarnation received (design-tree phase 3 Task 5). */
   readonly mountCalls: MountPageV1[];
-  /** Single-shot override: the next `mount()` call resolves to this instead of `ready`. */
+  /**
+   * Single-shot override: the next `mount()` call resolves to this instead of `ready`, AND the
+   * fake's `phase` moves to `"failed"` first — modelling a refusal the real child does not
+   * survive (e.g. `PAGE_RENDER_FAILED` from a render throw during a repeated mount, which
+   * `host-state-machine.test.tsx`'s own Task 1 coverage pins as `requestExit(1)`).
+   */
   nextMountResult: ProtocolError | SupervisorError | null;
+  /**
+   * Single-shot override, same shape as {@link nextMountResult} but `phase` stays `"ready"` —
+   * modelling a PAGE-specific refusal the real child survives untouched: `session.ts`'s own
+   * `checkKitApiVersion`/`buildMountBody` pre-flight checks return before ever writing to the
+   * wire (whole-branch review, design-tree phase 3 Task 9).
+   */
+  nextMountResultSurvivable: ProtocolError | SupervisorError | null;
   /**
    * When true, `mount()` parks instead of resolving — proving `reconcileMount` never issues a
    * SECOND concurrent `mount()` while one is in flight (design-tree phase 3 Task 5;
@@ -147,6 +159,7 @@ function fakeFactory(opts?: {
       queryCalls: [],
       mountCalls: [],
       nextMountResult: null,
+      nextMountResultSurvivable: null,
       get deferMounts() {
         return deferMounts;
       },
@@ -214,9 +227,15 @@ function fakeFactory(opts?: {
           if (deferMounts) {
             await new Promise<void>((resolve) => pendingMountResolvers.push(resolve));
           }
+          if (inc.nextMountResultSurvivable !== null) {
+            const result = inc.nextMountResultSurvivable;
+            inc.nextMountResultSurvivable = null;
+            return result;
+          }
           if (inc.nextMountResult !== null) {
             const result = inc.nextMountResult;
             inc.nextMountResult = null;
+            phase = "failed"; // this refusal does not leave the child alive (see the field's doc)
             return result;
           }
           return {
@@ -636,6 +655,40 @@ describe("createHostSupervisor — one incarnation per tree revision, in-process
     await supervisor.stopAll();
   });
 
+  // Whole-branch review (design-tree phase 3 Task 9): a mount refusal the child SURVIVES
+  // (`checkKitApiVersion`'s pre-flight check, or any other refusal that never touches the
+  // wire) must fail only the SWITCH, never the whole incarnation — killing a live process
+  // still correctly serving other pages over one page's own static incompatibility would be
+  // exactly the blast-radius regression a revision-keyed incarnation must not have.
+  test("a mount refusal the incarnation survives fails only the switch, not the incarnation or its other pages", async () => {
+    const factory = fakeFactory();
+    const { supervisor, events } = makeSupervisor(factory);
+    const handle = supervisor.preview(specFor({ pageSlug: "a" }));
+    if (handle instanceof Error) throw handle;
+    await waitUntil(() => handle.state() === "ready", "a ready");
+
+    factory.incarnations[0]!.nextMountResultSurvivable = new ProtocolError({
+      code: "KIT_API_MISMATCH",
+      reason: "page b declares an unsupported kitApiVersion",
+    });
+    const switched = supervisor.preview(specFor({ pageSlug: "b" }));
+    if (switched instanceof Error) throw switched;
+    await waitUntil(
+      () => factory.incarnations[0]!.mountCalls.length === 1,
+      "the refused mount was attempted",
+    );
+    expect(switched).toBe(handle); // same key, same facade — nothing was torn down
+
+    // No backoff/circuit event fired, no second incarnation spawned, and the ORIGINAL page's
+    // own incarnation is still the live one.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.some((e) => e.type === "backoff" || e.type === "circuitOpened")).toBe(false);
+    expect(factory.incarnations).toHaveLength(1);
+    expect(handle.state()).toBe("ready");
+    expect(factory.incarnations[0]!.stopped).toBe(false);
+    await supervisor.stopAll();
+  });
+
   test("the restart budget belongs to (revision, page), not to the revision", async () => {
     const factory = fakeFactory({
       startFor: (n) =>
@@ -809,6 +862,32 @@ describe("createHostSupervisor — trust + teardown (§13)", () => {
         (i) => i.stopped || i.startError !== null || i.session.phase === "failed",
       ),
     ).toBe(true);
+  });
+
+  test("close() racing a concurrent preview() for the same key never evicts the newer entry (design-tree phase 3 Task 9 review)", async () => {
+    const factory = fakeFactory();
+    const { supervisor } = makeSupervisor(factory);
+    const a = supervisor.preview(specFor());
+    if (a instanceof Error) throw a;
+    await waitUntil(() => a.state() === "ready", "a ready");
+
+    // close() sets `closed` synchronously, then awaits `current.stop()` — a preview() for the
+    // SAME key issued before that await settles already sees `closed` and creates a FRESH
+    // KeyState at the same map slot while the old one is still finishing its own teardown.
+    const closePromise = a.close();
+    const b = supervisor.preview(specFor());
+    if (b instanceof Error) throw b;
+    expect(b).not.toBe(a); // a genuinely new incarnation, not the closing one
+    await closePromise;
+    await waitUntil(() => b.state() === "ready", "b ready");
+
+    // The map must still resolve this key to b's entry — close()'s own cleanup must not have
+    // deleted the newer entry it raced against.
+    const c = supervisor.preview(specFor());
+    if (c instanceof Error) throw c;
+    expect(c).toBe(b); // reused, not a third incarnation the map "forgot" it already had
+    expect(supervisor.liveCount()).toBe(1);
+    await supervisor.stopAll();
   });
 });
 
