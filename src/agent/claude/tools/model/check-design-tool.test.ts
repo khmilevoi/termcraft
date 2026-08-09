@@ -4,6 +4,7 @@ import { DESIGN_CHECK_CLEAN_HEADLINE } from "agent/checks";
 import type { DesignCheckReportV1, DesignCheckerPort } from "agent/checks";
 
 import {
+  CHECK_DESIGN_DESCRIPTION,
   CHECK_DESIGN_INPUT_SCHEMA,
   CHECK_DESIGN_TOOL_NAME,
   CHECK_DESIGN_TOOL_SHORT_NAME,
@@ -68,8 +69,18 @@ test("the handler asks the checker for the workspace it was built with, on EVERY
 
 test("the server carries exactly the one tool, under the termcraft name", () => {
   const checker = checkerReturning({ errors: [], warnings: [] });
-  expect(createTermcraftMcpTools(checker, "C:\\ws")).toHaveLength(1);
-  const server = createTermcraftMcpServer(checker, "C:\\ws");
+  const tools = createTermcraftMcpTools(checker, "C:\\ws");
+  expect(tools).toHaveLength(1);
+  const server = createTermcraftMcpServer(tools);
   expect((server as { type?: string }).type).toBe("sdk");
   expect((server as { name?: string }).name).toBe(TERMCRAFT_MCP_SERVER_NAME);
+});
+
+test("the description states the MEASURED cost and that the pause is termcraft's, not just the agent's", () => {
+  // An earlier draft said "costs a few seconds" — an order of magnitude out, and framed purely as
+  // the agent's own time. Both halves are corrected, and pinned so a future edit cannot quietly
+  // reintroduce either.
+  expect(CHECK_DESIGN_DESCRIPTION).not.toContain("a few seconds");
+  expect(CHECK_DESIGN_DESCRIPTION).toContain("0.1-0.2 s");
+  expect(CHECK_DESIGN_DESCRIPTION).toContain("pauses termcraft's whole interface");
 });

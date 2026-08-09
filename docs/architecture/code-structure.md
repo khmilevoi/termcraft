@@ -119,7 +119,13 @@ flowchart LR
    ladders), and `checks/` (the design self-check a turn runs against its own
    workspace mid-attempt, plus the `DesignCheckerPort` it consumes). None of the
    five imports a vendor SDK — `checks/` in particular holds the renderer and the
-   port, while the SDK-shaped tool that wraps them lives in `claude/tools/`. `agent/claude/` is the one
+   port, while the SDK-shaped tool that wraps them lives in `claude/tools/`. None of
+   the five imports `core` either: each declares the ports it consumes (item 4) so a
+   second backend reuses them with no domain-ring dependency. That is a property of
+   the SHARED TIER, not of `agent` as a whole — `agent/adapters/` and `agent/prompt/`
+   legitimately import `core/ports` to implement the ports the Kernel hands them, and
+   nothing anywhere in `agent` imports `gate` or reaches past `core/ports` into
+   `core`'s internals. `agent/claude/` is the one
    vendor tier that exists — the Claude Code adapter, which supplies its own
    tool table, its own SDK option building, and a driver that feeds the shared
    run loop, but owns no run loop of its own. A future Codex backend becomes a
@@ -413,10 +419,15 @@ vendor tier's own pre-split run-loop file.
   Claude-specific construction re-exported from `agent/claude`
 - `src/agent/checks/types.ts` — `DesignCheckerPort`, the design self-check `agent`
   CONSUMES and therefore declares (item 4). It cannot import
-  `core/ports/gate-runner.ts`, since `agent` may import neither `core` nor `gate`, so
-  the diagnostic shapes are redrawn narrowly here and
-  `src/entrypoint/model/design-checker.ts` injects the `gate`-backed implementation —
-  the mirror image of `AgentBackend` being lifted into `core/ports/`
+  `core/ports/gate-runner.ts`: no part of `agent` imports `gate`, and the SHARED TIER
+  this module belongs to imports no `core` at all. Read that precisely — `agent` as a
+  whole DOES import `core/ports` (`agent/adapters/agent-registry.ts`,
+  `agent/prompt/`), which is the sanctioned adapter edge the diagram above draws
+  ("Adapters implement the ports they are handed"); what it never imports is `gate`,
+  or anything under `core` other than `core/ports`. So the diagnostic shapes are
+  redrawn narrowly here and `src/entrypoint/model/design-checker.ts` injects the
+  `gate`-backed implementation — the mirror image of `AgentBackend` being lifted into
+  `core/ports/`
 - `src/agent/checks/model/render.ts` — the check's own renderer. An EXPLICITLY
   duplicated copy of `core/turns/model/prompt.ts`'s retry-fold line format (same
   wall: `agent` cannot import `core`), identical character for character so the agent

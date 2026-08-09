@@ -85,12 +85,24 @@ A page's display title lives in its own entry file, as meta.title — retitle a 
  * reason `agent/checks/model/render.ts` prints it on every clean answer: an agent that reads
  * "no problems" as "the Gate will accept this" would stop checking the two stages this tool
  * cannot run.
+ *
+ * IT ALSO STATES THE COST, AND THE COST IS MEASURED. The check is synchronous all the way down
+ * (`typescript/unstable/sync` on the calling thread), so it FREEZES termcraft's UI for its
+ * duration, not just the agent's own progress: 88-330 ms on a real 5-page tree, 158-188 ms at 25
+ * pages, with a 10 ms interval firing zero times throughout — see
+ * `entrypoint/model/design-checker.ts`'s header for the full table. This paragraph therefore
+ * says "after each round of edits" and "batch your edits", not "after every edit": a prompt that
+ * encourages per-line checking would turn a good capability into a stutter the designer feels.
+ * The figure is stated honestly rather than inflated — an earlier draft said "a few seconds",
+ * which would have discouraged exactly the calls this tool exists to produce.
  */
 export const SELF_CHECK = `Checking your own work before you finish:
 
 You have one tool beyond your file tools: "check_design". It takes no arguments. It runs the Gate's whole-tree checks against the current, on-disk state of the "${DESIGN_DIRNAME}/" tree in this workspace and tells you exactly what it found, in the same wording a rejected turn would be reported to you in.
 
-Call it before you finish. Call it again after every round of edits — it always re-reads the tree, so it never reports something you already fixed. It costs a few seconds; a turn the Gate rejects costs minutes and makes you re-read every document and page from scratch, so there is no edit for which checking is not worth it.
+Call it before you finish. Call it again after each round of edits — it always re-reads the tree, so it never reports something you already fixed, and calling it twice with nothing changed in between is free.
+
+What it costs, measured: about 0.1-0.2 seconds, during which termcraft's whole interface is paused — not only your own progress. That is cheap against a turn the Gate rejects, which costs minutes and makes you re-read every document and page from scratch. So batch your edits and check after the batch, rather than after every single line.
 
 What it covers: ${DESIGN_DIRNAME}/pages.json, the import allowlist, the import graph, every page's closure, non-determinism, and one TypeScript program over the whole tree — so a shared module that does not compile shows up here even though no page names it directly. What it does NOT cover: the page contract and the smoke render. A clean check is strong evidence, not a guarantee, and it is never a reason to skip reading the runtime docs.`;
 

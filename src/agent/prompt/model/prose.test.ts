@@ -18,6 +18,22 @@ describe("agent/prompt static prose", () => {
     expect(SELF_CHECK).toContain("smoke render");
   });
 
+  /**
+   * The check is synchronous all the way down and freezes termcraft's UI, not only the agent's
+   * own progress (measured: 88-330 ms, with a 10 ms interval firing zero times throughout —
+   * `entrypoint/model/design-checker.ts`'s header). The prompt must say so with the MEASURED
+   * figure, and must not encourage per-line checking.
+   */
+  test("SELF_CHECK discloses the real, measured cost and that the pause is termcraft's", () => {
+    expect(SELF_CHECK).toContain("0.1-0.2 seconds");
+    expect(SELF_CHECK).toContain("termcraft's whole interface is paused");
+    expect(SELF_CHECK).toContain("not only your own progress");
+    // The inflated guess an earlier draft carried, and the per-line instruction it paired with.
+    expect(SELF_CHECK).not.toContain("a few seconds");
+    expect(SELF_CHECK).not.toContain("after every round of edits");
+    expect(SELF_CHECK).toContain("after each round of edits");
+  });
+
   test("DESIGN_CODE_RULES names the slug mask verbatim and the Windows-reserved names", () => {
     expect(DESIGN_CODE_RULES).toContain("^[a-z0-9][a-z0-9-]{0,31}$");
     expect(DESIGN_CODE_RULES).toContain("con, nul, aux, prn, com1-com9, lpt1-lpt9");

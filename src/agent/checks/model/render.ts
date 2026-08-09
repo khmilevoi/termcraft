@@ -15,12 +15,14 @@ import type { DesignCheckErrorV1, DesignCheckReportV1, DesignCheckWarningV1 } fr
  *     - [kind/code] in design/pages/home.tsx line 7:22 [blocks: home]: message
  *     - [nondeterministic-time] in design/lib/elapsed.ts line 3: message
  *
- * It cannot be REUSED from here. That renderer lives in `core`, this module lives in `agent`,
- * and `agent` may import neither `core` nor `gate` — the same wall that makes
- * `../types.ts` declare its own port instead of importing `core/ports/gate-runner.ts`. The
- * alternative to duplicating it would be inventing a THIRD vocabulary for the same diagnostics,
- * which is strictly worse: the agent would read one shape mid-attempt and a different shape in
- * the retry prompt for the identical fact.
+ * It cannot be REUSED from here. Those functions are module-private to
+ * `core/turns/model/prompt.ts` and, even if they were exported, they live under `core`'s
+ * INTERNALS — and `agent` reaches `core` only through `core/ports`, never past it. The shared
+ * tier this module belongs to (`checks`, `confinement`, `session`, `health`, `run`) goes further
+ * and imports no `core` at all, which is the same wall that makes `../types.ts` declare its own
+ * port. The alternative to duplicating the format would be inventing a THIRD vocabulary for the
+ * same diagnostics, which is strictly worse: the agent would read one shape mid-attempt and a
+ * different shape in the retry prompt for the identical fact.
  *
  * WHAT IS SHARED RATHER THAN COPIED: `DESIGN_DIRNAME`, imported from `entities/design-tree`
  * exactly as `prompt.ts` imports it, so the tree-relative -> workspace-relative translation
@@ -64,6 +66,33 @@ const GRAPH_WARNING_KINDS: ReadonlySet<string> = new Set(["import-cycle", "dead-
 
 /** The one kind this renderer shows and the retry fold does not — see this file's header. */
 const SILENCING_WARNING_KINDS: ReadonlySet<string> = new Set(["silencing-any"]);
+
+/**
+ * Every warning kind this renderer puts under a header, and every kind it deliberately drops.
+ *
+ * EXPORTED SO THE OMISSION CANNOT GO SILENT. These sets are keyed by STRING, not by
+ * `GateWarningKindV1` — this shared-tier module imports no `core`, so the union is not in scope
+ * here (see `../types.ts`). A rename like Task 4's own `unguarded-timer` ->
+ * `nondeterministic-time` would therefore leave a stale literal below and quietly drop a whole
+ * section, with no type error anywhere.
+ *
+ * `entrypoint/model/design-checker.test.ts` closes that gap from the one place that CAN see both
+ * rings: it enumerates `GateWarningKindV1` exhaustively (a `Record<GateWarningKindV1, true>`, so
+ * an added or renamed kind fails the typecheck there) and asserts every kind is in exactly one of
+ * these two sets, and that neither set names a kind the Gate does not produce.
+ */
+export const DESIGN_CHECK_RENDERED_WARNING_KINDS: ReadonlySet<string> = new Set([
+  ...DETERMINISM_WARNING_KINDS,
+  ...GRAPH_WARNING_KINDS,
+  ...SILENCING_WARNING_KINDS,
+]);
+
+/** The retry fold's own UI-contract exclusions, carried verbatim — see this file's header. */
+export const DESIGN_CHECK_EXCLUDED_WARNING_KINDS: ReadonlySet<string> = new Set([
+  "dropped-id",
+  "unpointed-element",
+  "unlisted-navigation",
+]);
 
 const DESIGN_TREE_PREFIX = `${DESIGN_DIRNAME}/`;
 

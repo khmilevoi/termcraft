@@ -1,10 +1,10 @@
-import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 
 import {
   CLAUDE_CONFINEMENT_TABLES,
   CLAUDE_DISALLOWED_TOOLS,
   TERMCRAFT_MCP_SERVER_NAME,
+  createTermcraftMcpServer,
   createTermcraftMcpTools,
 } from "agent/claude/tools";
 import { createConfinementPolicy } from "agent/confinement";
@@ -59,12 +59,7 @@ export function buildQueryOptions(task: AgentTask, deps: QueryOptionDeps): Optio
       : {}),
     ...sessionOpts,
     canUseTool: createCanUseTool(policy),
-    mcpServers: {
-      [TERMCRAFT_MCP_SERVER_NAME]: createSdkMcpServer({
-        name: TERMCRAFT_MCP_SERVER_NAME,
-        tools: mcpTools,
-      }),
-    },
+    mcpServers: { [TERMCRAFT_MCP_SERVER_NAME]: createTermcraftMcpServer(mcpTools) },
     spawnClaudeCodeProcess: createSpawnAndAdopt(deps.processTree, "agent/query"),
   };
   // DIAGNOSTIC (infrastructure/debug-log): the SDK query configuration for this attempt -- model,

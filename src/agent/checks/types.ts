@@ -2,18 +2,30 @@ import type { PageSlug } from "entities/page";
 
 /**
  * THE PORT THIS MODULE CONSUMES, DECLARED HERE BECAUSE THIS MODULE IS THE CONSUMER
- * (docs/architecture/code-structure.md item 4). The real answer comes from the Gate — but
- * `agent` may import neither `gate` (the adapter) nor `core` (where `core/ports/gate-runner.ts`
- * lives), so the port cannot be imported from either. It is DECLARED here and the COMPOSITION
- * ROOT injects a `gate`-backed implementation (`entrypoint/model/design-checker.ts`'s
- * `createGateDesignChecker`), exactly the shape `agent/types.ts`'s `AgentBackend` already
- * establishes in the other direction ("a port lifted verbatim into `core/ports/`" — that file's
- * own comment, :162-164).
+ * (docs/architecture/code-structure.md item 4). The real answer comes from the Gate, and neither
+ * source of it is reachable from here:
+ *
+ *  - NO PART of `agent` imports `gate` — the adapter is out;
+ *  - `agent` reaches `core` ONLY through `core/ports`, the port declarations it implements or
+ *    consumes (`agent/adapters/agent-registry.ts`, `agent/prompt/`), never `core`'s internals —
+ *    and the SHARED TIER this module belongs to (`checks`, `confinement`, `session`, `health`,
+ *    `run`) imports no `core` at all, so that `core/ports/gate-runner.ts` is out too.
+ *
+ * Note what that does NOT say: importing `core/ports` is a sanctioned edge for `agent` in
+ * general (this document's own diagram: "Adapters implement the ports they are handed"). It is
+ * the shared tier that stays free of it, so a future Codex backend reuses these folders with no
+ * domain-ring dependency — the same reason none of them imports a vendor SDK (item 1).
+ *
+ * So the port is DECLARED here and the COMPOSITION ROOT injects a `gate`-backed implementation
+ * (`entrypoint/model/design-checker.ts`'s `createGateDesignChecker`), exactly the shape
+ * `agent/types.ts`'s `AgentBackend` already establishes in the other direction ("a port lifted
+ * verbatim into `core/ports/`" — that file's own comment, :162-164).
  *
  * The types below are a NARROW REDRAW of `core/ports/gate-runner.ts`'s `GateErrorV1`/
  * `GateWarningV1`, not an import of them, for the same reason that port is itself a redraw of
  * `gate/types.ts`: the shapes are plain data, so redrawing them locally costs a structural
- * conformance assertion at the injection site and buys a ring edge that does not exist.
+ * conformance assertion at the injection site and keeps this shared-tier module free of the
+ * domain ring.
  * `kind`/`code` stay OPEN strings rather than the port's unions — this module renders them, it
  * never switches on them, and pinning the union here would be a third copy of a vocabulary that
  * already has two owners (`gate/types.ts` and `core/ports/gate-runner.ts`).

@@ -33,6 +33,17 @@ import type { DesignCheckerPort } from "agent/checks";
  * boundary (`handler({slug: 42})` resolved). With an empty schema the point is moot — one more
  * argument for staying pathless. If a scoped variant is ever added, its handler validates its
  * own input with the repo's `zod` first, exactly as `entities/*`'s decoders do.
+ *
+ * IT BLOCKS THE WHOLE PROCESS WHILE IT RUNS, AND THAT COST IS NOT ONLY THE AGENT'S TIME. The
+ * handler `await`s `runDesignCheck`, but everything beneath it is synchronous: the adapter's
+ * `readdirSync`/`readFileSync` walk, then `typescript/unstable/sync` driving the Go-backed
+ * compiler on the calling thread. Measured 2026-08-09 — `examples/clock` (8 files, 30 KB):
+ * 140-330 ms for the first call in a process, 88-101 ms after; the same tree at 25 pages (28
+ * files, 144 KB): 158-188 ms. A 10 ms `setInterval` fired ZERO times during every one of those
+ * calls, so the UI, the Kernel and the turn's own live event stream are FROZEN, not merely
+ * slowed, for that window. `entrypoint/model/design-checker.ts`'s header carries the full table
+ * and the reasoning; the repeat case is capped there by a content-keyed memo, so two calls with
+ * no edit between them pay the freeze once.
  */
 
 /** The in-process MCP server's name. Half of the `mcp__<server>__<tool>` name confinement matches. */
@@ -58,17 +69,26 @@ export const CHECK_DESIGN_INPUT_SCHEMA = {} as const;
 
 /**
  * What the model reads when it decides whether to call this. Says what it checks, what it does
- * NOT check, and that it is cheap — a tool the model does not understand the cost of is a tool
- * it will either avoid or spam. The system prompt (`agent/prompt/model/prose.ts`'s `SELF_CHECK`)
+ * NOT check, and what it costs — a tool the model does not understand the cost of is a tool it
+ * will either avoid or spam. The system prompt (`agent/prompt/model/prose.ts`'s `SELF_CHECK`)
  * carries the "call it before you finish" instruction; this is the reference card.
+ *
+ * THE COST SENTENCE IS MEASURED, NOT GUESSED. An earlier draft said "costs a few seconds", which
+ * overstated it by an order of magnitude; the real figure is ~0.1-0.2 s, and it is a freeze of
+ * termcraft itself rather than only of the agent's own progress. Both facts are stated: an
+ * inflated cost would discourage exactly the calls this tool exists to encourage, and hiding the
+ * freeze would invite calling it after every single line.
  */
 export const CHECK_DESIGN_DESCRIPTION =
   "Check the whole design tree in this workspace the way the Gate will, and report what it " +
   "finds. Takes no arguments — it always checks the current, on-disk state of design/, so " +
-  "call it again after every edit. Covers the pages.json manifest, the import allowlist, the " +
-  "import graph, every page's closure, non-determinism, and one TypeScript program over the " +
-  "whole tree. Does not run the page contract or the smoke render. Costs a few seconds; a turn " +
-  "the Gate rejects costs minutes and a full re-read.";
+  "call it again after each round of edits. Covers the pages.json manifest, the import " +
+  "allowlist, the import graph, every page's closure, non-determinism, and one TypeScript " +
+  "program over the whole tree. Does not run the page contract or the smoke render. " +
+  "Cost: about 0.1-0.2 s, during which it pauses termcraft's whole interface, not just your " +
+  "own progress — so run it after a batch of edits rather than after every single line. A turn " +
+  "the Gate rejects costs minutes and a full re-read, so checking is almost always worth it. " +
+  "Calling it twice with no edit in between is free: the second call reuses the first answer.";
 
 /** One `check_design` bound to `workspacePath`, reading that workspace LIVE on every call. */
 export function createCheckDesignTool(checker: DesignCheckerPort, workspacePath: string) {
@@ -90,13 +110,16 @@ export function createTermcraftMcpTools(checker: DesignCheckerPort, workspacePat
   return [createCheckDesignTool(checker, workspacePath)];
 }
 
-/** The in-process SDK MCP server one attempt registers under `Options.mcpServers`. */
+/**
+ * The in-process SDK MCP server one attempt registers under `Options.mcpServers`.
+ *
+ * Takes the ALREADY-BUILT tool array rather than the checker, so `buildQueryOptions` can hold
+ * that array to trace its length and still call this factory instead of open-coding a second
+ * `createSdkMcpServer(...)` beside it. Building the tools twice — once for the count, once
+ * inside here — would be the same duplication wearing a different shape.
+ */
 export function createTermcraftMcpServer(
-  checker: DesignCheckerPort,
-  workspacePath: string,
+  tools: ReturnType<typeof createTermcraftMcpTools>,
 ): McpSdkServerConfigWithInstance {
-  return createSdkMcpServer({
-    name: TERMCRAFT_MCP_SERVER_NAME,
-    tools: createTermcraftMcpTools(checker, workspacePath),
-  });
+  return createSdkMcpServer({ name: TERMCRAFT_MCP_SERVER_NAME, tools });
 }

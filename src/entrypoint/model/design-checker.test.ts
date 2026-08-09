@@ -3,8 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { DESIGN_CHECK_CLEAN_HEADLINE, runDesignCheck } from "agent/checks";
+import {
+  DESIGN_CHECK_CLEAN_HEADLINE,
+  DESIGN_CHECK_EXCLUDED_WARNING_KINDS,
+  DESIGN_CHECK_RENDERED_WARNING_KINDS,
+  runDesignCheck,
+} from "agent/checks";
 import { createCheckDesignTool } from "agent/claude/tools";
+import type { GateRunner, GateWarningKindV1 } from "core/ports";
 import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
@@ -167,4 +173,136 @@ describe("createGateDesignChecker over a real turn workspace", () => {
     },
     REAL_COMPILER_TIMEOUT_MS,
   );
+});
+
+/**
+ * THE CONTENT-KEYED MEMO (fix round 1, I1). Two calls with no edit between them must not pay the
+ * ~100-200 ms whole-process freeze twice — but the memo must never be the reason a stale answer
+ * is served, which is the one property this tool cannot lose. Both halves are pinned here.
+ */
+describe("createGateDesignChecker's repeat-call memo", () => {
+  /** The real runner, wrapped so a test can count how many times the EXPENSIVE stage actually
+   *  ran. Counting beats timing here: a wall-clock bound over a three-line fixture would pass
+   *  whether or not the memo exists, which is the definition of a vacuous test. */
+  function createCountingChecker(): {
+    checker: ReturnType<typeof createGateDesignChecker>;
+    runTreeCalls: () => number;
+  } {
+    const tscExePath = resolveCompilerPath();
+    if (tscExePath instanceof Error) throw tscExePath;
+    const real = buildGateRunner(tscExePath, createFakeSmokeRenderer());
+    let calls = 0;
+    const counting: GateRunner = {
+      ...real,
+      runTree: (input) => {
+        calls += 1;
+        return real.runTree(input);
+      },
+    };
+    return { checker: createGateDesignChecker(counting), runTreeCalls: () => calls };
+  }
+
+  test(
+    "an unchanged tree reuses the previous report instead of re-running the compiler",
+    async () => {
+      const workspace = createWorkspace(TWO_DEFECT_SOURCE);
+      const { checker, runTreeCalls } = createCountingChecker();
+
+      const first = await runDesignCheck(checker, workspace);
+      const second = await runDesignCheck(checker, workspace);
+      const third = await runDesignCheck(checker, workspace);
+
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+      // THE ASSERTION THAT MATTERS: the whole-tree pass — the blocking `tsc` program — ran once
+      // for three calls.
+      expect(runTreeCalls()).toBe(1);
+    },
+    REAL_COMPILER_TIMEOUT_MS,
+  );
+
+  test(
+    "one edited byte invalidates the memo — the live-read guarantee is untouched",
+    async () => {
+      const workspace = createWorkspace(TWO_DEFECT_SOURCE);
+      const { checker, runTreeCalls } = createCountingChecker();
+
+      expect(await runDesignCheck(checker, workspace)).toContain("TS7006");
+      writeEntry(workspace, CLEAN_SOURCE);
+      expect(await runDesignCheck(checker, workspace)).toContain(DESIGN_CHECK_CLEAN_HEADLINE);
+      // …and back again, so the memo cannot be "sticky after the first invalidation" either.
+      writeEntry(workspace, TWO_DEFECT_SOURCE);
+      expect(await runDesignCheck(checker, workspace)).toContain("TS7006");
+      // Three different trees, three real passes — nothing was served from the memo.
+      expect(runTreeCalls()).toBe(3);
+    },
+    REAL_COMPILER_TIMEOUT_MS,
+  );
+
+  test(
+    "a NEW file with no effect on any page still invalidates — the key is the tree, not the entry",
+    async () => {
+      const workspace = createWorkspace(CLEAN_SOURCE);
+      const checker = createRealChecker();
+      await runDesignCheck(checker, workspace);
+
+      // A dead module: it changes no page's closure, so a key derived from anything narrower
+      // than "every file's bytes" would miss it — and it produces a real `dead-module` warning.
+      fs.writeFileSync(path.join(workspace, "design", "orphan.ts"), "export const x = 1\n");
+      const after = await runDesignCheck(checker, workspace);
+      expect(after).toContain("dead-module");
+      expect(after).not.toContain(DESIGN_CHECK_CLEAN_HEADLINE);
+    },
+    REAL_COMPILER_TIMEOUT_MS,
+  );
+});
+
+/**
+ * THE RENDERER'S KIND COVERAGE, CROSS-CHECKED FROM THE ONE PLACE THAT SEES BOTH RINGS (fix round
+ * 1, M1). `agent/checks/model/render.ts` keys its sections on STRING literals — it imports no
+ * `core`, so `GateWarningKindV1` is not in scope there, and a rename like Task 4's own
+ * `unguarded-timer` -> `nondeterministic-time` would silently drop a whole section.
+ *
+ * `entrypoint` imports both, so the check lives here. The exhaustive record below fails the
+ * TYPECHECK the moment a kind is added, removed or renamed; the assertions then fail at RUNTIME
+ * if the renderer's literals have not been updated to match.
+ */
+describe("every Gate warning kind is either rendered or deliberately excluded", () => {
+  const EVERY_GATE_WARNING_KIND: Record<GateWarningKindV1, true> = {
+    "dropped-id": true,
+    "unpointed-element": true,
+    "nondeterministic-time": true,
+    "nondeterministic-randomness": true,
+    "unlisted-navigation": true,
+    "silencing-any": true,
+    "import-cycle": true,
+    "dead-module": true,
+  };
+  const kinds = Object.keys(EVERY_GATE_WARNING_KIND);
+
+  test("no kind is unclassified — a new kind must be a deliberate choice, not a silent drop", () => {
+    const unclassified = kinds.filter(
+      (kind) =>
+        !DESIGN_CHECK_RENDERED_WARNING_KINDS.has(kind) &&
+        !DESIGN_CHECK_EXCLUDED_WARNING_KINDS.has(kind),
+    );
+    expect(unclassified).toEqual([]);
+  });
+
+  test("no kind is in both sets", () => {
+    const both = kinds.filter(
+      (kind) =>
+        DESIGN_CHECK_RENDERED_WARNING_KINDS.has(kind) &&
+        DESIGN_CHECK_EXCLUDED_WARNING_KINDS.has(kind),
+    );
+    expect(both).toEqual([]);
+  });
+
+  test("neither set names a kind the Gate does not produce — this is what catches a RENAME", () => {
+    const stale = [
+      ...DESIGN_CHECK_RENDERED_WARNING_KINDS,
+      ...DESIGN_CHECK_EXCLUDED_WARNING_KINDS,
+    ].filter((kind) => !kinds.includes(kind));
+    expect(stale).toEqual([]);
+  });
 });

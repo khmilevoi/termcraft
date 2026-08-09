@@ -13,6 +13,8 @@ export type {
 } from "./types";
 export {
   DESIGN_CHECK_CLEAN_HEADLINE,
+  DESIGN_CHECK_EXCLUDED_WARNING_KINDS,
+  DESIGN_CHECK_RENDERED_WARNING_KINDS,
   renderDesignCheckFailure,
   renderDesignCheckReport,
 } from "./model/render";

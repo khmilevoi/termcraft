@@ -58,8 +58,8 @@ export function createProductionClaudeBackendDeps(
  * backstop, plus the composition root's `gate`-backed design checker (spec WP-10).
  *
  * `designChecker` is a REQUIRED PARAMETER rather than something this factory could build: it is
- * backed by `gate`, and `agent` may import neither `gate` nor `core`. The only ring that can see
- * both is the composition root, so the only honest shape is for it to hand one in.
+ * backed by `gate`, which no part of `agent` imports. The only ring that can see both `agent` and
+ * `gate` is the composition root, so the only honest shape is for it to hand one in.
  */
 export function createProductionClaudeBackend(designChecker: DesignCheckerPort): AgentBackend {
   return createClaudeBackend(createProductionClaudeBackendDeps(designChecker));

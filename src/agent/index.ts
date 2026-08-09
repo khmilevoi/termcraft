@@ -26,8 +26,9 @@ export type {
 } from "./types";
 export { createProductionClaudeBackend } from "./claude";
 // WP-10: the design self-check the in-process `check_design` tool runs. `agent` DECLARES the
-// port (it may import neither `gate` nor `core`); the composition root injects a `gate`-backed
-// implementation into `createProductionAgentRegistry` below.
+// port rather than importing one: no part of `agent` imports `gate`, and the shared tier the
+// port lives in (`agent/checks`) imports no `core` either. The composition root injects a
+// `gate`-backed implementation into `createProductionAgentRegistry` below.
 export type {
   DesignCheckErrorV1,
   DesignCheckInputV1,
