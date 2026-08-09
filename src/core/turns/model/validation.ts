@@ -14,6 +14,7 @@ import type {
   GateErrorV1,
   GatePageDescriptorV1,
   GateRunner,
+  GateWarningKindV1,
   GateWarningV1,
   ManifestSliceV1,
 } from "core/ports";
@@ -256,6 +257,75 @@ function toGateWarningDto(warning: GateWarningV1): TurnGateDiagnosticsV1["warnin
   };
 }
 
+/**
+ * The determinism/`silencing-any` warning kinds `GateRunner.runTree`'s whole-tree lint
+ * (`gate/adapters/gate-runner.ts`'s `lintWholeTreeDeterminism`, Task 5) and
+ * `GateRunner.runPage`'s per-page lint (`gate/model/gate.ts`'s `runGate`, unchanged since Task 4)
+ * can BOTH produce for the SAME entry file. Every other kind (`dropped-id`, `unpointed-element`,
+ * `unlisted-navigation`, `import-cycle`, `dead-module`) is produced by exactly ONE of the two
+ * methods, so it can never collide with itself here — see {@link dedupeWarnings}'s own doc for
+ * why that exclusion is load-bearing, not merely narrow scoping for its own sake.
+ */
+const DEDUPE_ELIGIBLE_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
+  "nondeterministic-time",
+  "nondeterministic-randomness",
+  "silencing-any",
+]);
+
+/**
+ * Collapse a warning `runTree`'s whole-tree determinism/`silencing-any` lint and `runPage`'s
+ * per-page lint both report for the SAME entry file — the residual `gate/adapters/gate-runner.ts`
+ *'s `lintWholeTreeDeterminism` doc comment flagged and deferred ("WHAT THIS DOES NOT CLAIM, SO
+ * IT IS NOT LAUNDERED AS SETTLED"), fixed here rather than left open.
+ *
+ * MEASURED SCENARIO: a page whose OWN entry directly contains a `Date.now()`/`Math.random()`/
+ * `: any` construct (not one that only lives in a shared module) gets warned about it TWICE in
+ * this function's caller's merged `warnings` array — once by `runTree` (pushed first, from
+ * `treePass.warnings`, carrying `blockedPages`) and once by `runPage` (pushed per entry, from
+ * `pageResult.warnings`, carrying none) — because Task 5 made the two methods' lints overlap in
+ * KIND for the first time on a page's own entry: before Task 5, `runTree`'s warnings
+ * (`import-cycle`/`dead-module`) and `runPage`'s (everything else) never shared a kind at all,
+ * so the SAME merge that has always happened here never had anything to collide. Neither copy is
+ * WRONG; the same underlying fact is reported by two stages that both legitimately scan the
+ * identical source text.
+ *
+ * KEYED ON `kind + file + line + column`, SCOPED TO {@link DEDUPE_ELIGIBLE_WARNING_KINDS} ONLY —
+ * deliberately not a blanket key over every warning. `dropped-id` (`gate/model/lints.ts`'s
+ * `lintDroppedIds`) carries NO line/column at all, so two GENUINELY DISTINCT `dropped-id`
+ * warnings for one page (two different ids referenced but no longer present) would collide on an
+ * unscoped `kind+file+line+column` key and one would be silently swallowed — a real regression an
+ * unscoped key would introduce, not a theoretical one. Restricting eligibility to the three kinds
+ * `runTree`'s lint can actually produce is what keeps every other kind completely unaffected:
+ * each of the rest is produced by exactly ONE of `runPage`/`runTree`, so nothing else here can
+ * ever generate a same-kind collision to begin with, and this function never even computes a key
+ * for them — they pass straight through unconditionally, however many share the same file.
+ *
+ * KEEPS THE FIRST OCCURRENCE, never the last: `treePass.warnings` is pushed into the caller's
+ * array before any `pageResult.warnings`, so keeping first is what keeps the MORE INFORMATIVE
+ * copy — the one naming the pages a shared-module finding would have blocked — rather than an
+ * accidental "whichever sorts first" outcome.
+ */
+function dedupeWarnings(warnings: readonly GateWarningV1[]): GateWarningV1[] {
+  const seen = new Set<string>();
+  const deduped: GateWarningV1[] = [];
+  for (const warning of warnings) {
+    if (!DEDUPE_ELIGIBLE_WARNING_KINDS.has(warning.kind)) {
+      deduped.push(warning);
+      continue;
+    }
+    const key = JSON.stringify([
+      warning.kind,
+      warning.file ?? null,
+      warning.line ?? null,
+      warning.column ?? null,
+    ]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(warning);
+  }
+  return deduped;
+}
+
 function gateRetryExhaustedFailure(): FailureDtoV1 {
   return {
     code: "GATE_RETRY_EXHAUSTED",
@@ -380,6 +450,12 @@ export async function runTurnValidation(
     if (pageResult.descriptor !== null) descriptors.push(pageResult.descriptor);
   }
 
+  // DEDUPED HERE, ONCE, AFTER THE MERGED ARRAY IS FULLY ASSEMBLED (design-agent-feedback-loop
+  // repair, Task 5 supplementary fix) — every downstream use of `warnings` below reads
+  // `dedupedWarnings` instead, never the raw merge. See `dedupeWarnings`'s own doc for the exact
+  // scenario this closes and why the key is scoped rather than blanket.
+  const dedupedWarnings = dedupeWarnings(warnings);
+
   if (errors.length === 0) {
     // `checkManifestSlice`'s own contract never actually pairs zero errors with a null slice
     // (`gate/model/manifest.ts`) — this is defensive-only. An empty `pages` is the honest
@@ -395,14 +471,20 @@ export async function runTurnValidation(
       attempt: input.attempt,
       kind: "passed",
       pageCount: descriptors.length,
-      warnings: warnings.map(toGateWarningDto),
+      warnings: dedupedWarnings.map(toGateWarningDto),
     });
-    return { kind: "passed", slice, descriptors, warnings, closures: treePass.closures };
+    return {
+      kind: "passed",
+      slice,
+      descriptors,
+      warnings: dedupedWarnings,
+      closures: treePass.closures,
+    };
   }
 
   const diagnostics: TurnGateDiagnosticsV1 = {
     errors: errors.map(toGateErrorDto),
-    warnings: warnings.map(toGateWarningDto),
+    warnings: dedupedWarnings.map(toGateWarningDto),
   };
   deps.publish({
     kind: "turn.gateRejected",

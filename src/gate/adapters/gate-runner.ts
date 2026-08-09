@@ -919,15 +919,19 @@ function lintFileDeterminism(relPath: string, source: string): readonly GateWarn
  * pins exactly that: each call, run independently, reports the entry's warning exactly once in
  * ITS OWN list, `runPage`'s carrying no `blockedPages` and `runTree`'s naming the page itself).
  *
- * WHAT THIS DOES NOT CLAIM, SO IT IS NOT LAUNDERED AS SETTLED: `core/turns/model/validation.ts`'s
- * `runTurnValidation` already concatenates every `runPage` warning with `runTree`'s into ONE
- * turn's `warnings` list (unchanged by, and outside the Files: list of, this task). For a page
- * whose own entry reads the clock directly, that ONE merged list — the one the retry prompt is
- * actually folded from — carries the finding TWICE: once unattributed (`runPage`'s copy) and
- * once naming the page itself in `blockedPages` (`runTree`'s copy). This is a real, visible
- * residual of taking the recommended answer, flagged here rather than silently accepted; fixing
- * it (a dedupe step, or scoping which of the two lints runs per page) is out of this task's
- * stated file scope and is left for a follow-up.
+ * WHAT THIS DID NOT CLAIM AT FIRST, AND WHY IT IS FIXED RATHER THAN STILL FLAGGED
+ * (design-agent-feedback-loop repair, Task 5 supplementary fix). `core/turns/model/validation.ts`
+ * 's `runTurnValidation` concatenates every `runPage` warning with `runTree`'s into ONE turn's
+ * `warnings` list, and that concatenation predates this task. For a page whose own entry reads
+ * the clock directly, this task's own addition above made that ONE merged list — the one the
+ * retry prompt is actually folded from — carry the finding TWICE: once unattributed (`runPage`'s
+ * copy) and once naming the page itself in `blockedPages` (`runTree`'s copy). This was first
+ * shipped as a documented, deferred residual (an earlier revision of this comment said so
+ * explicitly and left it for a follow-up); it did not stay that way — `validation.ts`'s
+ * `dedupeWarnings`, called once after the merged array is fully assembled, now collapses exactly
+ * this collision (keyed on `kind + file + line + column`, scoped to the three kinds that can
+ * collide at all, keeping the FIRST — `runTree`'s `blockedPages`-carrying — occurrence). Read
+ * that function's own doc for the mechanism and for why the key is scoped rather than blanket.
  */
 function lintWholeTreeDeterminism(input: {
   readonly files: ReadonlyMap<string, string>;

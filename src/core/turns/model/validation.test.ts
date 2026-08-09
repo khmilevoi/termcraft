@@ -519,6 +519,120 @@ describe("runTurnValidation — the verdict", () => {
     });
   });
 
+  test("dedupes a determinism warning runTree and runPage BOTH report for the SAME entry — keeping the blockedPages-attributed copy (Task 5 supplementary fix)", async () => {
+    // MEASURED SCENARIO this fix closes: a page whose OWN entry directly contains a
+    // `Date.now()`-shaped construct gets warned about it by BOTH `runTree`'s new closure-wide
+    // lint (Task 5, carrying `blockedPages`) and `runGate`'s unchanged per-page lint (carrying
+    // none) — the exact same fact, reported by two stages that both legitimately scan the
+    // identical source text. Before the supplementary fix this reproduced as TWO entries in
+    // `result.warnings`.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunManifestSliceResult(sliceOf(HOME_ENTRY_V1));
+      h.gateRunner.queueRunTreeResult({
+        errors: [],
+        warnings: [
+          {
+            kind: "nondeterministic-time",
+            message: "`Date.now()` is non-deterministic",
+            file: HOME_ENTRY,
+            line: 3,
+            column: 15,
+            blockedPages: [PAGE_HOME],
+          },
+        ],
+        closures: [],
+      });
+      h.gateRunner.queueRunPageResult({
+        ok: true,
+        errors: [],
+        warnings: [
+          {
+            kind: "nondeterministic-time",
+            message: "`Date.now()` is non-deterministic",
+            file: HOME_ENTRY,
+            line: 3,
+            column: 15,
+          },
+        ],
+        descriptor: {
+          slug: PAGE_HOME,
+          meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
+        },
+      });
+
+      const result = await wrap(runTurnValidation(h.deps, baseInput(1)));
+
+      if (result.kind !== "passed")
+        throw new Error(`expected passed, got ${JSON.stringify(result)}`);
+      // Exactly ONE, not two — the merged array is deduped once, after assembly.
+      expect(result.warnings).toHaveLength(1);
+      // And it is the MORE INFORMATIVE copy — `runTree`'s, naming the page in `blockedPages` —
+      // never the unattributed `runPage` copy winning by accident of iteration order.
+      expect(result.warnings[0]?.blockedPages).toEqual([PAGE_HOME]);
+    });
+  });
+
+  test("warnings that are NOT the runTree/runPage overlap pass through completely unaffected, including two same-kind same-file dropped-id warnings with no position", async () => {
+    // The risk a BLANKET `kind+file+line+column` key would have introduced: `dropped-id`
+    // (`gate/model/lints.ts`'s `lintDroppedIds`) carries no line/column at all, so two
+    // GENUINELY DISTINCT dropped-id warnings for one page (two different ids referenced but no
+    // longer present) share every field the key would compare except `message`. The dedup must
+    // never touch this kind — it is produced by `runPage` alone, never by `runTree`, so it can
+    // never be part of the collision this fix targets.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunManifestSliceResult(sliceOf(HOME_ENTRY_V1));
+      h.gateRunner.queueRunTreeResult({
+        errors: [],
+        warnings: [
+          {
+            kind: "nondeterministic-time",
+            message: "`Date.now()` is non-deterministic",
+            file: SHARED_MODULE,
+            blockedPages: [PAGE_HOME],
+          },
+        ],
+        closures: [],
+      });
+      h.gateRunner.queueRunPageResult({
+        ok: true,
+        errors: [],
+        warnings: [
+          {
+            kind: "dropped-id",
+            message: 'id "cpu" is referenced by selection or an open pin but is no longer present',
+            file: HOME_ENTRY,
+          },
+          {
+            kind: "dropped-id",
+            message: 'id "mem" is referenced by selection or an open pin but is no longer present',
+            file: HOME_ENTRY,
+          },
+        ],
+        descriptor: {
+          slug: PAGE_HOME,
+          meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
+        },
+      });
+
+      const result = await wrap(runTurnValidation(h.deps, baseInput(1)));
+
+      if (result.kind !== "passed")
+        throw new Error(`expected passed, got ${JSON.stringify(result)}`);
+      // All THREE survive: the shared-module timer (no runPage counterpart could ever exist for
+      // it) and BOTH dropped-id warnings — neither dropped for sharing a kind/file with the other.
+      expect(result.warnings).toHaveLength(3);
+      const droppedMessages = result.warnings
+        .filter((w) => w.kind === "dropped-id")
+        .map((w) => w.message);
+      expect(droppedMessages).toEqual([
+        'id "cpu" is referenced by selection or an open pin but is no longer present',
+        'id "mem" is referenced by selection or an open pin but is no longer present',
+      ]);
+    });
+  });
+
   test("on rejection with attempt < 4: emits turn.gateRejected, drives retryAfterGate, and returns retry with the next attempt", async () => {
     await context.start(async () => {
       const h = harness();
