@@ -91,10 +91,16 @@ export type GateWarningKindV1 =
   | "dead-module";
 
 /**
- * One non-fatal gate warning. `file` mirrors `gate/types.ts`'s own `GateWarning.file` field for
- * field (both redraw the SAME shape per decision C1) — set for `import-cycle`/`dead-module`
- * (both are ABOUT a file, so an unnamed one would be unactionable), absent for every other kind,
- * none of which is produced against a single tree-relative path.
+ * One non-fatal gate warning. `file` names the SOURCE this warning was produced against, and
+ * every producing stage sets it: the per-page lints stamp the entry path `runGate` was called
+ * with (`gate/model/gate.ts`), and the whole-tree pass stamps the tree-relative path its own
+ * graph/closure warnings are about (`gate/adapters/gate-runner.ts`). It is TREE-relative — the
+ * `design/` prefix is added by `core/turns/model/prompt.ts` at the moment the text becomes
+ * something an agent will type into a tool call, and nowhere else.
+ *
+ * ABSENT means "this warning is about the TREE, not about a file", the same distinction
+ * `GateErrorV1.blockedPages` documents for errors. It is not the ordinary case and a consumer
+ * that finds it should not treat the warning as unlocatable-by-design.
  */
 export interface GateWarningV1 {
   readonly kind: GateWarningKindV1;

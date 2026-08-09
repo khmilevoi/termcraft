@@ -239,6 +239,43 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
     expect(result).not.toContain("non-deterministic code");
   });
 
+  test("a determinism warning renders with its file", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "unguarded-timer",
+              message: "`Date.now()` reads wall-clock time",
+              file: "pages/stopwatch.tsx",
+              line: 55,
+              column: 31,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain("pages/stopwatch.tsx");
+  });
+
+  test("a warning with no file still omits the clause entirely", () => {
+    // The renderer's null-guard is NOT deleted by this task: `TYPE_CHECK_UNAVAILABLE`-shaped
+    // whole-tree statements legitimately name no file (core/ports/gate-runner.ts:60-68) — the
+    // same shape a warning producer would use for a statement about the tree rather than a file.
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            { kind: "unguarded-timer", message: "m", line: null, column: null, file: null },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).not.toContain(" in ");
+  });
+
   test("no errors and no determinism warnings folds to an empty string", () => {
     const result = foldGateDiagnosticsIntoPrompt(foldInput({ diagnostics: diagnostics() }));
     expect(result).toBe("");

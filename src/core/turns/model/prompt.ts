@@ -32,8 +32,7 @@ import type { PageSlug } from "entities/page";
  * exactly the two kinds it always named, unchanged by this addition, per this file's own
  * name for that set. But unlike the excluded four, a cycle or an unreached module IS worth the
  * agent's attention on a retry, and neither is derivable from the source the agent already has
- * (an import graph is exactly what the agent lacks) — so both render under their own header,
- * WITH `file`, which is what makes either diagnostic locatable at all.
+ * (an import graph is exactly what the agent lacks) — so both render under their own header.
  */
 
 export type TurnGateDiagnosticsV1 = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"];
@@ -112,8 +111,13 @@ function formatGateError(error: TurnGateErrorDtoV1): string {
 
 /**
  * `file` renders the same way {@link formatGateError}'s `location` does — an unnamed warning
- * (every kind but `import-cycle`/`dead-module`) omits the clause entirely rather than printing
- * an empty `in `.
+ * omits the clause entirely rather than printing an empty `in `. Absence is now the RARE case
+ * (`gate/types.ts`'s `GateWarning.file` doc, `core/ports/gate-runner.ts`'s `GateWarningV1.file`
+ * doc): a statement about the TREE, not about a file, the same distinction
+ * {@link formatBlockedPages} draws for a file-less `GateErrorV1`. Every warning a per-page run
+ * (`gate/model/gate.ts`) or the whole-tree pass (`gate/adapters/gate-runner.ts`) actually
+ * produces today carries one — this guard exists for the producer that legitimately does not,
+ * not because omission is expected of the ones that do.
  */
 function formatGateWarning(warning: TurnGateWarningDtoV1): string {
   const location = warning.file === null ? "" : ` in ${warning.file}`;

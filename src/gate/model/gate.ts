@@ -224,11 +224,20 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
   const contract = read.contract;
   if (contract instanceof Error) return unscannablePage(fileName, contract);
 
+  // EVERY WARNING THIS RUN PRODUCES NAMES `fileName` (defect fix, 2026-08-09). Measured: a
+  // retry prompt carried four `- [unguarded-timer] line NN:CC:` lines with no file, spread
+  // across TWO different files, and the agent spent ~90 s of reasoning and reported "fixed"
+  // while the turn record still carried all four. A position without a file is not a location.
+  //
+  // `fileName` is the SHORT display name the caller passed (`entryRelPath`), which is the same
+  // value the contract-error loop below already stamps — so errors and warnings from one run
+  // now speak one vocabulary, and `core/turns/model/prompt.ts` translates both at one place.
+  const stamp = (w: GateWarning): GateWarning => ({ ...w, file: fileName });
   for (const lint of read.lints) {
     if (lint instanceof Error) return unscannablePage(fileName, lint);
-    warnings.push(...lint);
+    warnings.push(...lint.map(stamp));
   }
-  warnings.push(...read.unpointed);
+  warnings.push(...read.unpointed.map(stamp));
 
   for (const e of contract.errors) {
     errors.push({

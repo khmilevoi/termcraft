@@ -19,6 +19,22 @@ const CLOSURE: ClosureV1 = { entry: ENTRY, files: [ENTRY] };
 
 const HOME = "home" as PageSlug;
 
+/** Shared minimal fields for the file-stamping tests below — each overrides `entryRelPath`/`source`. */
+const base = { slug: SLUG, smoke: "run" as const };
+
+/** Triggers all three token-scannable per-page warning kinds at once: `unguarded-timer`
+ *  (`Date.now()`), `silencing-any` (`: any`), and `unpointed-element` (`<box>` with no `id`). */
+const MULTI_WARNING_SOURCE = `import { definePage, reatomComponent } from "@termcraft/runtime"
+export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 }, theme: "dark-default" })
+const t = Date.now()
+const x: any = 1
+export default reatomComponent(() => <box>{t}{x}</box>)
+`;
+
+/** Declares ids "p"/"t" but never "gone" — pairs with `referencedIds: ["gone"]` to trigger
+ *  `dropped-id`, the one lint that stamps no line/column at all (`lints.ts:232-236`). */
+const NO_IDS_SOURCE = cleanSource;
+
 describe("runGate (§6.3 pipeline)", () => {
   test("a clean page with no injected stages passes and carries its descriptor", async () => {
     const result = await runGate({
@@ -157,6 +173,42 @@ describe("runGate (§6.3 pipeline)", () => {
     ).toBe(true);
   });
 
+  // --- every warning a per-page run produces names its file (defect fix, 2026-08-09) ---------
+
+  test("a determinism warning names the entry it was produced against", async () => {
+    const result = await runGate({
+      ...base,
+      entryRelPath: "pages/stopwatch.tsx",
+      source: "export const meta = { kitApiVersion: 1 };\nconst t = Date.now();\n",
+    });
+    const timer = result.warnings.find((w) => w.kind === "unguarded-timer");
+    expect(timer?.file).toBe("pages/stopwatch.tsx");
+  });
+
+  test("every warning a per-page run produces carries the same file", async () => {
+    const result = await runGate({
+      ...base,
+      entryRelPath: "pages/a.tsx",
+      source: MULTI_WARNING_SOURCE,
+    });
+    expect(result.warnings.length).toBeGreaterThan(2);
+    for (const w of result.warnings) expect(w.file).toBe("pages/a.tsx");
+  });
+
+  test("a dropped-id warning, which has no line, still carries its file", async () => {
+    // `lintDroppedIds` emits with NO line/column (lints.ts:232-236) — the ONE kind where `file`
+    // is the only locator the agent gets, which is exactly why it must not be skipped.
+    const result = await runGate({
+      ...base,
+      entryRelPath: "pages/a.tsx",
+      referencedIds: ["gone"],
+      source: NO_IDS_SOURCE,
+    });
+    const dropped = result.warnings.find((w) => w.kind === "dropped-id");
+    expect(dropped?.file).toBe("pages/a.tsx");
+    expect(dropped?.line).toBeUndefined();
+  });
+
   // The "an injected type-check stage contributes fatal errors" test that used to live here is
   // DELETED, not patched: design-tree phase 2 Task 3 removed `GatePorts.typeCheck` outright.
   // The check now runs once over the whole tree, in `gate/adapters/gate-runner.ts`'s `runTree`,
@@ -293,14 +345,14 @@ describe("runGate (§6.3 pipeline)", () => {
       entryRelPath: "screens/home/index.tsx",
       smoke: "run",
     });
-    // `GateWarning.file` is now optional too (design-tree phase 2 Task 4), set ONLY by
-    // `gate/adapters/gate-runner.ts`'s whole-tree pass (`import-cycle`/`dead-module`) — `runGate`
-    // itself is the PER-PAGE pipeline and never produces either kind, so every warning this call
-    // can return still carries no `file` at all. `"file" in error` is therefore a RUNTIME check
-    // ("does this diagnostic name a file"), not a type-narrowing one anymore — both union members
-    // type-check `.file` directly now — but it is kept so the assertion below only ever runs
-    // against a diagnostic that actually carries the field, which keeps the brief's intent (no
-    // diagnostic of either kind may still carry the slug-derived guess) honestly stated either way.
+    // `GateWarning.file` is optional (design-tree phase 2 Task 4) but, since the file-stamping
+    // fix (defect fix, 2026-08-09, `gate.ts`'s `stamp`), every warning `runGate` itself produces
+    // now carries the entry it ran against, same as `gate/adapters/gate-runner.ts`'s whole-tree
+    // pass already did for `import-cycle`/`dead-module`. `"file" in error` is a RUNTIME check
+    // ("does this diagnostic name a file"), not a type-narrowing one — both union members
+    // type-check `.file` directly — but it is kept so the assertion below only ever runs against
+    // a diagnostic that actually carries the field, which keeps the brief's intent (no diagnostic
+    // of either kind may still carry the slug-derived guess) honestly stated either way.
     for (const error of [...result.errors, ...result.warnings])
       if ("file" in error) expect(error.file).not.toContain("home.tsx");
   });
