@@ -1419,6 +1419,38 @@ async function runTurnStart(
     // in here, under their own header — never confused with a same-turn Gate rejection retry
     // (`resolveSurvivingWarningsFold`'s own header). An empty fold leaves `text` untouched
     // (`appendPromptFold`'s own contract).
+    //
+    // `userMessage` IS NOT ALWAYS THE CHANNEL THE AGENT READS (final whole-branch review, M5,
+    // 2026-08-10). `agent/session/model/prompt.ts`'s `buildPrompt` sends
+    // `task.session.promptDelta ?? task.userMessage` — on a resume carrying a non-null delta,
+    // `userMessage` is not sent AT ALL. Anything appended here would then vanish silently, which
+    // is the exact class of bug Task 8 round 1 and Task 9 round 2 each found and fixed for the
+    // OTHER two producers of a fold (`run-turn.ts`'s Gate-retry branch, and its session-fallback
+    // branch). This third producer is unguarded, deliberately, and here is the reachability
+    // analysis behind that:
+    //
+    // ON EVERY NORMAL PATH THE COMBINATION CANNOT ARISE. `sessionPlan` above is a "resume" with a
+    // non-null `promptDelta` only when `evaluateResume` found extra records past the checkpoint's
+    // own prefix (`store/adapters/session-checkpoint.ts`'s `renderPromptDelta` returns `null` for
+    // an empty delta). A committed turn advances that checkpoint to the chat's CURRENT full record
+    // count (this file's own `advanceSessionCheckpoint` call below, on the `"committed"` branch),
+    // so the next turn sees zero extra records and a null delta — while a turn that did NOT commit
+    // leaves a `system:error`/`system:cancelled` record as the chat tail, which
+    // `resolveSurvivingWarningsFold` refuses to fold from (it folds only from a trailing
+    // `ChatAgentRecord`). Committed ⇒ null delta; not committed ⇒ empty fold. Never both.
+    //
+    // THE ONE PATH THAT BREAKS THAT PAIRING, AND WHY IT IS NOT THIS SITE'S TO FIX: the checkpoint
+    // advance below is deliberately BEST-EFFORT — a failure is logged and the turn stays committed
+    // ("Session checkpoint failure never changes chat history", storage-identity §6.2). After such
+    // a failure the checkpoint is stale but its prefix still hashes clean, so the NEXT turn resumes
+    // with a non-null delta while the chat tail is still an accepted agent record — both halves at
+    // once, and this fold would be dropped. On that same path the USER'S OWN CURRENT MESSAGE is
+    // dropped by the identical rule, because the delta is rendered before this turn's user record
+    // exists and therefore cannot contain it. That is a pre-existing defect of the resume channel,
+    // strictly wider than the fold, and guarding only the fold here would hide it rather than fix
+    // it — recorded in `docs/superpowers/red-debt.md` instead. Whoever fixes it must re-check THIS
+    // line: once the delta channel is handled correctly, the fold must ride whichever channel
+    // `buildPrompt` will actually read, exactly as `run-turn.ts`'s two branches already do.
     userMessage: appendPromptFold(text, survivingWarningsFold),
     model: resolvedAgent.model,
     effort: resolvedAgent.effort,

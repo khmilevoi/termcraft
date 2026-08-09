@@ -53,10 +53,15 @@ export function createConfinementPolicy(
     // name present in both sets is still denied: deny always wins, and a future table edit
     // cannot quietly un-deny a tool by adding it to the newer set.
     //
-    // The input is deliberately not consulted. These tools have no path argument at all (see
-    // `ConfinementTables.pathlessAllowedTools`), so there is nothing in it that could change the
-    // answer, and reading a path-shaped field out of one anyway would invent an aiming mechanism
-    // the tool does not have.
+    // NEITHER `input` NOR `blockedPath` IS CONSULTED, and for the same reason. These tools have no
+    // path argument at all (see `ConfinementTables.pathlessAllowedTools`), so there is nothing in
+    // `input` that could change the answer, and reading a path-shaped field out of one anyway would
+    // invent an aiming mechanism the tool does not have. `blockedPath` is the SDK's own denial
+    // signal about a path — so it is answering a question a pathless tool never asks; returning
+    // before it is read is the same statement, not an oversight (final whole-branch review, M7,
+    // 2026-08-10: the previous wording covered only `input`, which read as if `blockedPath` had
+    // simply been forgotten). If a pathless tool ever gains a path, it stops belonging in this set
+    // and moves to `fileTools`, where both signals are consulted below.
     if (tables.pathlessAllowedTools.has(toolName)) {
       return { behavior: "allow" };
     }

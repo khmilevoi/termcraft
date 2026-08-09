@@ -53,6 +53,15 @@ function slug(value: string): PageSlug {
 const PAGE_HOME = slug("home");
 const T0 = 1_700_000_000_000;
 
+/**
+ * The one user-facing sentence BOTH Gate-exhaustion paths must produce — the ordinary one
+ * (`validation.ts`'s `"exhausted"` result) and the fence-exhaustion-after-a-session-fallback one
+ * (`run-turn.ts`'s `started instanceof Error` branch). Written out literally rather than imported
+ * from `gateRetryExhaustedFailure`: a test that computes the expected string the same way the code
+ * does would pass just as happily if the sentence turned back into an internal error message.
+ */
+const GATE_EXHAUSTION_TEXT = "Gate rejected the candidate after exhausting the 4-attempt budget.";
+
 function manualClock(startMs: number): Clock {
   return { now: () => new Date(startMs) };
 }
@@ -470,6 +479,11 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
       }
       expect(terminalizeCall.input.record.outcome).toBe("error");
       expect(terminalizeCall.input.record.reason).toBe("GATE_RETRY_EXHAUSTED");
+      // THE ORDINARY GATE-EXHAUSTION USER TEXT, pinned here so the fence-exhaustion test far
+      // below can assert it produces the SAME sentence rather than an internal error message
+      // (final whole-branch review, I2). `validation.ts`'s `gateRetryExhaustedFailure` is the one
+      // producer of both.
+      expect(terminalizeCall.input.record.text).toBe(GATE_EXHAUSTION_TEXT);
 
       // No finalize was ever attempted — the candidate never passed Gate.
       expect(h.turnTransactions.calls.map((c) => c.method)).toEqual(["admit", "terminalize"]);
@@ -1741,6 +1755,24 @@ describe("runTurn — session fallback on a rejected resume (design-agent-feedba
       expect(result.result.reason).toBe("GATE_RETRY_EXHAUSTED");
       // Never a 5th attempt: the fence refused it before `agentBackend.startTurn` was ever called.
       expect(h.startedTasks.length).toBe(4);
+
+      // AND THE USER READS A SENTENCE, NOT A LOG LINE (final whole-branch review, I2). This path
+      // became reachable for the first time in Task 9 — before the session fallback existed, the
+      // fence's counter and this driver's own local counter never diverged, so nothing ever
+      // reached `terminalize` from here and no earlier review saw the string it produced. It
+      // interpolated `TurnFenceError.message` straight into the terminal CHAT RECORD's text, so
+      // the user was shown "attempt fence rejected: turn fence rejected the request: attempt 5
+      // exceeds the 4-attempt budget". The honest account of what happened is the one the ORDINARY
+      // Gate-exhaustion path already gives (test "(c)" above pins the identical string) — the
+      // fence detail belongs in the trace, which is where it now goes.
+      const terminalizeCall = h.turnTransactions.calls.find((c) => c.method === "terminalize");
+      if (terminalizeCall?.method !== "terminalize") throw new Error("expected a terminalize call");
+      if (terminalizeCall.input.record.kind !== "system:error") {
+        throw new Error(`expected system:error, got ${terminalizeCall.input.record.kind}`);
+      }
+      expect(terminalizeCall.input.record.text).toBe(GATE_EXHAUSTION_TEXT);
+      expect(terminalizeCall.input.record.text).not.toContain("turn fence rejected the request");
+      expect(terminalizeCall.input.record.text).not.toContain("attempt 5 exceeds");
     });
   });
 });

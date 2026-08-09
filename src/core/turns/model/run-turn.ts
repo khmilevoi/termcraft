@@ -52,6 +52,7 @@ import {
   type RunTurnValidationInputV1,
   type TurnValidationDeps,
   type TurnValidationResultV1,
+  gateRetryExhaustedFailure,
   runTurnValidation,
 } from "./validation";
 
@@ -502,10 +503,34 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       // count-asserted, wire-schema-bound 30-entry registry, and this failure IS a Gate-retry
       // exhaustion in substance — just discovered one attempt later than the driver's own local
       // count alone would have found it.
+      //
+      // THE TEXT IS THE USER'S CHAT MESSAGE, NOT A LOG LINE (final whole-branch review, I2,
+      // 2026-08-10). `terminalize`'s second argument becomes the terminal chat record's `text` —
+      // the sentence the designer reads in the chat. This branch used to interpolate
+      // `TurnFenceError.message` into it, producing "attempt fence rejected: turn fence rejected
+      // the request: attempt 5 exceeds the 4-attempt budget": an internal counter's own words,
+      // twice, for a person who has no fence and no attempt budget in their model of what just
+      // happened. Nobody caught it earlier because Task 9 is what made this branch reachable in
+      // the first place — before the session fallback, the two counters never diverged and this
+      // was dead code. The fallback case now reuses `validation.ts`'s
+      // `gateRetryExhaustedFailure()` VERBATIM (message and code together), so the two routes to
+      // one substantive outcome tell the user one story; `run-turn.test.ts` pins the identical
+      // string on both. The non-fallback case keeps its own `reason` (still not an
+      // `OperationalFailureCode`, still `PERSISTENCE_FAILED` downstream — unchanged, and it
+      // predates this plan) but stops leaking the fence's wording too. The technical detail is
+      // not lost, only relocated: the trace below carries the fence's own reason and message.
+      trace("core.turns.runTurn.fenceRejected", {
+        turnId: context.turnId,
+        attempt,
+        sessionFallbackUsed,
+        reason: started.reason,
+        message: started.message,
+      });
+      const exhausted = gateRetryExhaustedFailure();
       return terminalize(
         "failed",
-        `attempt fence rejected: ${started.message}`,
-        sessionFallbackUsed ? "GATE_RETRY_EXHAUSTED" : String(started.reason),
+        sessionFallbackUsed ? exhausted.safeMessage : "the turn could not start another attempt",
+        sessionFallbackUsed ? exhausted.code : String(started.reason),
         candidateRoot,
       );
     }

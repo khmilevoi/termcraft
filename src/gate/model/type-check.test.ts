@@ -402,11 +402,18 @@ export default reatomComponent(() => (
 // SPECIFIER and which does not resolve hermetically (`@types/react` is not installed and
 // `react@19` ships none).
 //
-// This is a DEFECT, not a documented limitation: `agent/prompt`'s `DESIGN_CODE_RULES` actively
-// teaches lowercase tags as "the runtime's escape hatch", and `gate/model/lints.ts`'s
-// `lintUnpointedElements` exists specifically to warn about a lowercase tag with no `id` — which
-// presumes such tags are legal. A page that follows the documented guidance is rejected naming an
-// interface its author has never heard of and cannot supply.
+// This is a DEFECT, not a documented limitation: `gate/model/lints.ts`'s `lintUnpointedElements`
+// calls a lowercase, non-dotted tag "a low-level/raw OpenTUI primitive (the runtime's escape
+// hatch, e.g. `<box>`/`<text>`)" in its own doc comment, and exists specifically to warn about
+// such a tag carrying no `id` — which presumes those tags are legal and expected. A page that
+// follows this project's own documented guidance is rejected naming an interface its author has
+// never heard of and cannot supply.
+//
+// CITATION CORRECTED 2026-08-10 (final whole-branch review, M2). This comment credited that
+// sentence to `agent/prompt`'s `DESIGN_CODE_RULES`, which never contained it: the system prompt
+// says only "give every pointable low-level element an id" and does not describe lowercase tags
+// as an escape hatch at all. The claim itself survives unchanged — only its source moves, to the
+// file that really makes it.
 //
 // The Gate's own suite could not see it: the stand-in declaration at the top of this file is
 // JSX-free by design, every fixture in the real-declaration suite uses capitalized Kit components,

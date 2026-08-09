@@ -41,7 +41,7 @@ import type { PageSlug } from "entities/page";
  * agent's attention on a retry, and neither is derivable from the source the agent already has
  * (an import graph is exactly what the agent lacks) — so both render under their own header.
  *
- * ONE PATH VOCABULARY IN THE RENDERED PROMPT (design-tree feedback-loop repair, Task 3):
+ * ONE PATH VOCABULARY IN THE RENDERED PROMPT (design-agent feedback-loop repair, Task 3):
  * `GateError.file`/`GateWarning.file` are TREE-relative (relative to `design/`) throughout
  * Gate's own vocabulary — the closure index, the inventory, the manifest's own `entry` values
  * all correctly stay that way. But the AGENT reads THIS prompt and types paths into its own
@@ -75,23 +75,57 @@ export interface TurnGateFoldInputV1 {
   readonly diagnostics: TurnGateDiagnosticsV1;
 }
 
-/** Gate's own two non-determinism warning kinds (master §6.3) — see this file's header. */
-const DETERMINISM_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
+/**
+ * Everything this file's filters and renderers actually read off a Gate warning — with `kind` as a
+ * plain `string`.
+ *
+ * WHY `string` AND NOT `GateWarningKindV1` (final whole-branch review, M4, 2026-08-10).
+ * {@link toSurvivingWarningDto} used to return a full `TurnGateWarningDtoV1` and reach it with
+ * `kind: warning.kind as GateWarningKindV1` — an unchecked cast over a value that arrives from the
+ * PERSISTED `ChatWarningSnapshot.kind`, which decision C14 deliberately schema'd as
+ * `z.string().min(1)` and not an enum, precisely so an older or newer revision's warning kind
+ * round-trips instead of failing to decode. The cast was harmless in effect (the value is only
+ * matched against the two determinism kinds and interpolated into prose) but it asserted a
+ * guarantee the schema refuses to make, against this repo's own "no cast anywhere" convention
+ * (`core/kernel/model/handlers/turn.ts`'s header). Widening the parameter type is the honest
+ * shape: the set membership test below IS the check, so the narrow type was never needed.
+ *
+ * `TurnGateWarningDtoV1` is assignable to this structurally — its `kind` is a narrower literal
+ * union — so {@link foldGateDiagnosticsIntoPrompt}'s real DTOs keep flowing through unchanged.
+ */
+interface RenderableGateWarningV1 {
+  readonly kind: string;
+  readonly message: string;
+  readonly file: string | null;
+  readonly line: number | null;
+  readonly column: number | null;
+  readonly blockedPages: readonly PageSlug[] | null;
+}
+
+/**
+ * Gate's own two non-determinism warning kinds (master §6.3) — see this file's header.
+ *
+ * Declared `ReadonlySet<string>` but CONSTRUCTED `Set<GateWarningKindV1>`: the members are still
+ * checked against Gate's real kind union at compile time (a typo here is a type error), while
+ * `.has()` accepts the plain `string` a persisted {@link SurvivingWarningV1} carries — see
+ * {@link RenderableGateWarningV1} for why that string is not narrowed with a cast.
+ */
+const DETERMINISM_WARNING_KINDS: ReadonlySet<string> = new Set<GateWarningKindV1>([
   "nondeterministic-time",
   "nondeterministic-randomness",
 ]);
 
-/** Design-tree phase 2 Task 4's two whole-tree graph warnings — see this file's header. */
-const GRAPH_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
+/** Design-tree phase 2 Task 4's two whole-tree graph warnings — see this file's header. Typed exactly like {@link DETERMINISM_WARNING_KINDS}. */
+const GRAPH_WARNING_KINDS: ReadonlySet<string> = new Set<GateWarningKindV1>([
   "import-cycle",
   "dead-module",
 ]);
 
-function isDeterminismWarning(warning: TurnGateWarningDtoV1): boolean {
+function isDeterminismWarning(warning: RenderableGateWarningV1): boolean {
   return DETERMINISM_WARNING_KINDS.has(warning.kind);
 }
 
-function isGraphWarning(warning: TurnGateWarningDtoV1): boolean {
+function isGraphWarning(warning: RenderableGateWarningV1): boolean {
   return GRAPH_WARNING_KINDS.has(warning.kind);
 }
 
@@ -185,7 +219,7 @@ function formatGateError(error: TurnGateErrorDtoV1): string {
  * `silencing-any` lint, so a per-page warning (`gate/model/gate.ts`'s `runGate`) renders with no
  * `[blocks: …]` clause, the same as it always has.
  */
-function formatGateWarning(warning: TurnGateWarningDtoV1): string {
+function formatGateWarning(warning: RenderableGateWarningV1): string {
   const location = warning.file === null ? "" : ` in ${toWorkspacePath(warning.file)}`;
   return `- [${warning.kind}]${location}${formatPosition(warning.line, warning.column)}${formatBlockedPages(warning.blockedPages)}: ${warning.message}`;
 }
@@ -308,9 +342,10 @@ const SURVIVING_WARNINGS_HEADER =
   "still present now — the last change did not clear them. A sealed render has no wall clock " +
   'and no tick; see RUNTIME.md\'s "Time and the sealed render":';
 
-function toSurvivingWarningDto(warning: SurvivingWarningV1): TurnGateWarningDtoV1 {
+/** See {@link RenderableGateWarningV1} for why the return type is that and not `TurnGateWarningDtoV1`. */
+function toSurvivingWarningDto(warning: SurvivingWarningV1): RenderableGateWarningV1 {
   return {
-    kind: warning.kind as GateWarningKindV1,
+    kind: warning.kind,
     message: warning.message,
     file: warning.file ?? null,
     line: warning.line ?? null,

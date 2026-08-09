@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { DEFAULT_THEME_ID, themeTokens } from "runtime";
 
+import { DESIGN_CODE_RULES } from "./prose";
+
 const GUIDE_PATH = path.resolve(import.meta.dir, "runtime-authoring-guide.md");
 const GUIDE = fs.readFileSync(GUIDE_PATH, "utf8");
 
@@ -132,23 +134,31 @@ function extractLintIdentifiers(source: string): Set<string> {
 }
 
 /**
- * The construct list the guide documents under "Time and the sealed render", read from the
- * backtick-quoted spans on the sentence that starts "The Gate flags:" — the same sentence
+ * The construct list a document states under "Time and the sealed render", read from the
+ * quote-delimited spans on the paragraph that starts "The Gate flags:" — the same paragraph
  * `extractLintIdentifiers` above is checked against, never an import.
+ *
+ * `quote` differs per document because the two speak different notations for the same fact: the
+ * markdown guides backtick their identifiers, and `prose.ts`'s `DESIGN_CODE_RULES` is plain text
+ * the agent reads inside a system prompt, where every identifier is double-quoted
+ * (`"@termcraft/runtime"`, `"reatomComponent"`, `"<spec>.tsx"`). One extractor, two notations —
+ * never two lists.
  */
-function extractFlaggedConstructs(text: string): Set<string> {
+function extractFlaggedConstructs(text: string, quote: "`" | '"'): Set<string> {
   const marker = "The Gate flags:";
   const idx = text.indexOf(marker);
   if (idx === -1) return new Set();
   const after = text.slice(idx);
   const end = after.indexOf("\n\n");
   const scope = end === -1 ? after : after.slice(0, end);
-  return new Set([...scope.matchAll(/`([^`]+)`/g)].map((m) => m[1]!));
+  return new Set(
+    [...scope.matchAll(new RegExp(`${quote}([^${quote}]+)${quote}`, "g"))].map((m) => m[1]!),
+  );
 }
 
 describe("RUNTIME.md's determinism vocabulary matches the Gate's own", () => {
   test("the guide's flagged-construct list equals the lint's own", () => {
-    const listed = extractFlaggedConstructs(GUIDE);
+    const listed = extractFlaggedConstructs(GUIDE, "`");
     const linted = extractLintIdentifiers(LINTS_SOURCE);
     expect(listed).toEqual(linted);
   });
@@ -156,6 +166,42 @@ describe("RUNTIME.md's determinism vocabulary matches the Gate's own", () => {
   test("the guide states there is no tick", () => {
     expect(GUIDE).toMatch(/no tick/i);
     expect(GUIDE).toMatch(/renders once per commit/i);
+  });
+});
+
+/**
+ * THE THIRD DOCUMENT IN THE PAIRING, AND THE ONE THE AGENT CANNOT SKIP (final whole-branch
+ * review, I1, 2026-08-10).
+ *
+ * WHY THIS TEST EXISTS. Task 4 renamed `unguarded-timer`/`unguarded-randomness` because the old
+ * names promised a guard a token scan can never observe being cleared, and Task 6 rewrote both
+ * authoring guides accordingly — but `prose.ts`'s `DESIGN_CODE_RULES` went on saying "never use
+ * setTimeout, setInterval, or Math.random outside animation guarded by the export flag" for the
+ * whole plan. Two independent sweeps missed it: Task 4's was `rg -n "unguarded" src` (a KIND-NAME
+ * search, and that line says "guarded", not "unguarded"), and Task 6's pairing — the describe
+ * directly above — covered `runtime-authoring-guide.md` and `reatom-guide.md` and stopped there.
+ * The missed file is the one the agent reads on EVERY turn, and its list also omitted
+ * `Date.now()`/`performance.now()`/`new Date()` entirely, which is the exact gap spike 13
+ * measured two `examples/clock` authors reasoning incorrectly from.
+ *
+ * SAME DISCIPLINE, SAME DAG REASON. `lints.ts` is still read as TEXT, never imported: `gate` and
+ * `agent` are sibling adapters over `core` in the module DAG (`docs/architecture/code-structure.md`'s
+ * flowchart — `agent -> core`, `gate -> core`, nothing across), so an `agent`-side test importing
+ * `gate/model/lints.ts` would introduce exactly that missing edge to avoid a text parse. `prose.ts`
+ * needs no such care and is imported directly: it is a sibling FILE in this very module, the same
+ * way `prose.test.ts` imports it.
+ */
+describe("the SYSTEM PROMPT's determinism vocabulary matches the Gate's own", () => {
+  test("DESIGN_CODE_RULES's flagged-construct list equals the lint's own", () => {
+    const listed = extractFlaggedConstructs(DESIGN_CODE_RULES, '"');
+    const linted = extractLintIdentifiers(LINTS_SOURCE);
+    expect(listed).toEqual(linted);
+  });
+
+  test("DESIGN_CODE_RULES states the same rule the guides do, and no longer promises a guard", () => {
+    expect(DESIGN_CODE_RULES).toMatch(/no tick/i);
+    expect(DESIGN_CODE_RULES).toMatch(/renders once per commit/i);
+    expect(DESIGN_CODE_RULES).not.toContain("guarded by the export flag");
   });
 });
 

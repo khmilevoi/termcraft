@@ -14,6 +14,29 @@ export const ROLE =
   'prefetch protocol, no read bookkeeping, and no separate "apply" step: whatever you leave ' +
   "in the workspace when you finish is what termcraft evaluates.";
 
+/**
+ * RETRACTED 2026-08-10, final whole-branch review of the design-agent feedback-loop repair (I1).
+ * The conventions line read: "never use setTimeout, setInterval, or Math.random outside animation
+ * guarded by the export flag". That claim is FALSE and was already known to be false inside this
+ * same plan — Task 4 renamed `unguarded-timer`/`unguarded-randomness` precisely because no guard
+ * can ever clear one (`gate/model/lints.ts`'s `lintDeterminism` is a token scan with no scope
+ * analysis, so an `isExport()` wrapper is invisible to it), and Task 6 replaced the identical
+ * sentence in `runtime-authoring-guide.md` and `reatom-guide.md`. It survived HERE, in the one
+ * document the agent reads on EVERY turn, because Task 4's sweep searched the KIND NAME
+ * (`rg -n "unguarded" src`, which does not match a line saying "guarded") and Task 6's pairing
+ * test covered the two `.md` guides only.
+ *
+ * The old line was also INCOMPLETE in the way spike 13 measured costing real turns: it named three
+ * constructs and omitted `Date.now()`, `performance.now()` and argument-less `new Date()`, which is
+ * exactly what two `examples/clock` authors reasoned incorrectly from.
+ *
+ * THE PREVENTION IS NOT THIS COMMENT. `runtime-authoring-guide.test.ts` now re-derives the Gate's
+ * own flagged-construct set from `gate/model/lints.ts`'s source TEXT (never an import — `agent` and
+ * `gate` are sibling adapters with no DAG edge) and compares it against THIS constant as well as
+ * the two guides, so the next rename cannot leave this file behind. The wording below deliberately
+ * mirrors `runtime-authoring-guide.md`'s own "Time and the sealed render" section rather than
+ * inventing a third phrasing — three documents, one vocabulary.
+ */
 export const DESIGN_CODE_RULES = `Design-code rules, enforced by the Gate and re-checked by the design host:
 
 Import allowlist (error): exactly two kinds of import are legal anywhere in the design tree. A STATIC import of the bare specifier "@termcraft/runtime", and a RELATIVE specifier ("./…" or "../…") that resolves to a real file inside the tree. Everything else is an error: "@termcraft/kit", "@reatom/*", "react", "react/jsx-runtime", "@opentui/*", "node:*", "bun:*", any other npm package, any specifier that escapes the tree, any specifier carrying a query string or fragment, every dynamic import, every "require", and every re-export of "@termcraft/runtime". "eval" and "new Function" are forbidden.
@@ -24,7 +47,13 @@ Page contract (error): a page's ENTRY file's default export must be a "reatomCom
 
 Shared module state: module-level state in a shared module — a Reatom atom declared in "lib/theme.ts", say — is SHARED ACROSS PAGES within one design revision, and RESETS when the design changes. Switch away from a page and back within one revision and it is as you left it; edit any file in the design and everything starts clean. This is deliberate behaviour, not a bug to work around.
 
-Conventions (warnings, fed back to you on your next attempt): keep element ids stable across iterations; give every pointable low-level element an id; never use setTimeout, setInterval, or Math.random outside animation guarded by the export flag; keep any simulated or sample data inside the component that uses it.
+Conventions (warnings, fed back to you on your next attempt): keep element ids stable across iterations; give every pointable low-level element an id; keep any simulated or sample data inside the component that uses it.
+
+Time and the sealed render (warnings): a page renders once per commit. There is no tick, no animation frame, no interval, no clock. Nothing in the runtime calls your component again on its own, so any value that would change with time lives in an atom and advances only from an action — the construct does not belong in a page at all, and wrapping it in an export-flag guard does not clear the warning.
+
+The Gate flags: "Date.now()", "performance.now()", "new Date()" with no arguments, "Math.random()", "setTimeout", "setInterval", "setImmediate", "requestAnimationFrame".
+
+A seeded "new Date(ms)" or "new Date(year, month, day)" is left alone — it reads no clock. RUNTIME.md's "Time and the sealed render" carries the worked example.
 
 Page slugs: a slug must match ^[a-z0-9][a-z0-9-]{0,31}$ and must not be a Windows-reserved device name (con, nul, aux, prn, com1-com9, lpt1-lpt9). A slug violating this mask is a Gate error, not a warning.`;
 

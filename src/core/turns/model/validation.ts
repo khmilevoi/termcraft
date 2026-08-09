@@ -326,7 +326,21 @@ function dedupeWarnings(warnings: readonly GateWarningV1[]): GateWarningV1[] {
   return deduped;
 }
 
-function gateRetryExhaustedFailure(): FailureDtoV1 {
+/**
+ * The one Gate-exhaustion failure — `safeMessage` included, which is the TEXT of the terminal chat
+ * record the user actually reads.
+ *
+ * EXPORTED FOR THE SECOND EXHAUSTION PATH, NOT COPIED (final whole-branch review, I2, 2026-08-10).
+ * `run-turn.ts`'s `started instanceof Error` branch reaches the same substantive outcome by a
+ * different route — the fence's own independent hard `MAX_TURN_ATTEMPTS` counter running dry one
+ * attempt before this driver's local counter expects it to, reachable only after a session fallback
+ * spent one of the four slots (Task 9). It used to interpolate `TurnFenceError.message` — a
+ * debugging string ("turn fence rejected the request: attempt 5 exceeds the 4-attempt budget") —
+ * into that user-visible text. Two paths to one outcome must not tell the user two different
+ * stories, and a second hand-written sentence would drift from this one, so that branch calls this
+ * function instead.
+ */
+export function gateRetryExhaustedFailure(): FailureDtoV1 {
   return {
     code: "GATE_RETRY_EXHAUSTED",
     retryable: false,

@@ -1404,15 +1404,31 @@ fixed it**: it is present at baseline, before the inline, and structural —
 generated declaration re-exports BY SPECIFIER and which does not resolve hermetically (see the C5
 row below for why those types cannot be supplied).
 
-**Why this is a defect and not a documented limitation, which is the whole point of this row.** The
-system prompt actively TEACHES the escape hatch — `agent/prompt/model/prose.ts`'s
-`DESIGN_CODE_RULES` describes lowercase tags as "a low-level/raw OpenTUI primitive (the runtime's
-escape hatch, e.g. `<box>`/`<text>`)" — and `gate/model/lints.ts`'s `lintUnpointedElements` exists
-specifically to WARN about a lowercase tag carrying no `id`, which presumes such tags are legal and
-expected. A page that follows this project's own documented guidance is rejected by this project's
-own Gate, naming an interface its author has never heard of and cannot supply. Per this
-repository's standing rule, that is a defect recorded where it will be acted on, never a
-"limitation" waved through.
+**Why this is a defect and not a documented limitation, which is the whole point of this row.**
+This project's own Gate TEACHES the escape hatch: `gate/model/lints.ts`'s `lintUnpointedElements`
+doc comment describes a lowercase, non-dotted tag as "a low-level/raw OpenTUI primitive (the
+runtime's escape hatch, e.g. `<box>`/`<text>`)", and that lint exists specifically to WARN about
+such a tag carrying no `id`, which presumes those tags are legal and expected. A page that follows
+this project's own documented guidance is rejected by this project's own Gate, naming an interface
+its author has never heard of and cannot supply. Per this repository's standing rule, that is a
+defect recorded where it will be acted on, never a "limitation" waved through.
+
+**CITATION CORRECTED 2026-08-10** (final whole-branch review, M2). This paragraph attributed the
+"escape hatch" wording to the SYSTEM PROMPT — `agent/prompt/model/prose.ts`'s `DESIGN_CODE_RULES` —
+and so did the pinned test's own header comment (`src/gate/model/type-check.test.ts`). Both were
+wrong: that sentence has only ever lived in `lints.ts`, and `DESIGN_CODE_RULES` says nothing more
+than "give every pointable low-level element an id" — it does not call lowercase tags an escape
+hatch at all. The defect and its severity are unchanged; only the source of the guidance moves. Note
+for whoever takes the second candidate fix below ("lowercase tags stop being advertised as an escape
+hatch"): the prompt prose is therefore NOT one of the places that has to change — `lints.ts` and
+this row are.
+
+**PRIORITY RAISED BY TASK 12, though the row's status is unchanged.** The new `check_design` tool
+runs the same whole-tree typecheck the agent is now explicitly told, in the system prompt, to call
+repeatedly before it finishes. So an agent using the documented `<box>`/`<text>` escape hatch now
+hits this unfixable `TS7026` fast and repeatedly WITHIN a single attempt — on a diagnostic it cannot
+act on and cannot silence — instead of once per turn after an expensive Gate rejection. That does
+not change the "no owner" status below; it changes what it is worth to whoever picks it up.
 
 **Why nobody noticed, verified three ways** (all three re-checked by Task 7, not inherited):
 
@@ -1735,6 +1751,54 @@ kind of unreviewed source change a closeout must not smuggle in. Owner: the oper
 `bun run fmt` sweep on its own commit — and whoever takes it should decide at the same time whether
 `fmt:check` joins the per-task verification set, since a formatter that nothing runs will simply
 drift again.
+
+**CLOSED 2026-08-10 by `91093e0`**, exactly as this row asked: a single `bun run fmt` sweep on its
+own commit (`chore(fmt): fix formatting drift introduced across the design-agent feedback-loop
+plan`), landed after the closeout and before the final whole-branch review, so the churn is
+separable from every task's own diff. Re-measured at `91093e0` with the working tree clean,
+`bun run fmt:check` reports **exactly the two genuinely pre-existing files** and nothing else:
+
+```
+src/store/jsonl/model/chat-index.test.ts
+src/ui/workspace/ui/scrollbox-probe.test.tsx
+```
+
+All seven of this plan's own files are green. Those two stay red and stay out of scope, for the
+reason stated above — they were red at `4612cea` and nothing in this plan touched them. The row's
+second question is NOT closed and keeps its owner: nothing yet adds `fmt:check` to the per-task
+verification set, so the drift this row documents can recur exactly as it did.
+
+### A turn that resumes past a STALE checkpoint sends the previous turn's transcript INSTEAD of the user's message — NO OWNER
+
+Opened 2026-08-10 by the final whole-branch review, while checking the reachability of finding M5
+(the surviving-warnings fold's interaction with the resume channel). M5 itself asked only for a
+comment; verifying the "believed unreachable" claim behind it turned up a real, wider, PRE-EXISTING
+defect that no task in this plan introduced and none of them own.
+
+`agent/session/model/prompt.ts`'s `buildPrompt` sends `task.session.promptDelta ?? task.userMessage`
+— on a resume carrying a non-null delta, `userMessage` is not sent at all. At `turn.start` the
+session plan is evaluated BEFORE this turn's own user record is appended
+(`core/kernel/model/handlers/turn.ts`; the surviving-warnings read is ordered against the same
+fact), so a non-null delta can only contain EARLIER records. If such a plan reaches the backend, the
+agent is handed the previous turn's transcript and never sees what the user just typed.
+
+**Normally unreachable, and the invariant that makes it so is fragile.** A committed turn advances
+the checkpoint to the chat's current full record count, so the next turn's delta is empty and
+`renderPromptDelta` returns `null` (`store/adapters/session-checkpoint.ts`). The one path that
+breaks the pairing is that the advance is deliberately BEST-EFFORT: storage-identity §6.2 says
+"Session checkpoint failure never changes chat history", so a failed advance is logged and the turn
+stays committed. The checkpoint is then stale but still hashes clean, so `evaluateSessionResume`
+grants a resume with a non-null delta — and that turn's user message is dropped. Task 10's
+surviving-warnings fold rides `userMessage` and would be dropped along with it, which is how this
+was found; the fold is the smaller half.
+
+**NOT FIXED HERE.** Guarding only the fold at the `userMessage` site would hide the larger defect
+behind a fix for the smaller one — the message loss would remain and would then be harder to see.
+The real fix is a decision about the resume channel itself (does a stale-checkpoint resume fall back
+to fresh, or does the delta get the current message appended?), which is `core/turns`/`store`
+territory and not this plan's to make. Unmeasured: no observed run has hit it, because a failing
+`advanceCheckpoint` has not been observed. `core/kernel/model/handlers/turn.ts`'s `baseTask` comment
+points here and says the fold must be re-checked when this is fixed.
 
 ### Considered and homed elsewhere — deliberately NOT given a row here
 

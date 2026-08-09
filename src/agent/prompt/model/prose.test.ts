@@ -46,11 +46,42 @@ describe("agent/prompt static prose", () => {
     }
   });
 
-  test("DESIGN_CODE_RULES bans setTimeout/setInterval/Math.random outside animation", () => {
-    expect(DESIGN_CODE_RULES).toContain("setTimeout");
-    expect(DESIGN_CODE_RULES).toContain("setInterval");
-    expect(DESIGN_CODE_RULES).toContain("Math.random");
-    expect(DESIGN_CODE_RULES).toContain("animation guarded by the export flag");
+  /**
+   * RETRACTION, PINNED (final whole-branch review, I1, 2026-08-10). This test used to assert
+   * `toContain("animation guarded by the export flag")` — the exact claim Task 4 declared FALSE
+   * ("no kind name promises a guard": `gate/model/lints.ts`'s `lintDeterminism` is a token scan
+   * with no scope analysis, so no `isExport()` wrapper can ever clear a warning) and Task 6
+   * replaced in both authoring guides. The system prompt kept teaching it for one reason worth
+   * recording: Task 4's rename sweep was `rg -n "unguarded" src`, which checks the KIND NAME and
+   * returns nothing against a line that says "guarded", and Task 6's pairing test covered the two
+   * `.md` guides but never this file. The assertion is RETARGETED at the corrected wording rather
+   * than deleted — the same convention every other retraction in this plan followed.
+   *
+   * The old line also omitted `Date.now()`/`performance.now()`/`new Date()` entirely, which is
+   * exactly the gap spike 13 measured two `examples/clock` authors reasoning incorrectly from.
+   * The construct list is pinned against `gate/model/lints.ts`'s own sets in
+   * `runtime-authoring-guide.test.ts`, so a future rename cannot silently miss this file again.
+   */
+  test("DESIGN_CODE_RULES states the sealed-render time rule, not the retracted export-flag guard", () => {
+    expect(DESIGN_CODE_RULES).toContain("a page renders once per commit");
+    expect(DESIGN_CODE_RULES).toContain("no tick");
+    expect(DESIGN_CODE_RULES).toContain("does not belong in a page at all");
+    for (const construct of [
+      "Date.now()",
+      "performance.now()",
+      "new Date()",
+      "Math.random()",
+      "setTimeout",
+      "setInterval",
+      "setImmediate",
+      "requestAnimationFrame",
+    ]) {
+      expect(DESIGN_CODE_RULES).toContain(construct);
+    }
+    // The seeded exemption, so the rule does not read as "avoid dates" instead of "avoid the clock".
+    expect(DESIGN_CODE_RULES).toContain("new Date(ms)");
+    // The retracted claim, in the exact words the prompt used to carry.
+    expect(DESIGN_CODE_RULES).not.toContain("guarded by the export flag");
   });
 
   test("PAGE_FILE_LAYOUT names pages.json, the entry binding, and all three runtime docs", () => {
