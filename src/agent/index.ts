@@ -15,6 +15,7 @@ export type {
   AgentInfo,
   AgentHealthState,
   BackendCapabilities,
+  BackendErrorCause,
   ModelCapability,
   ReasoningEffort,
   SessionWorkspaceBinding,

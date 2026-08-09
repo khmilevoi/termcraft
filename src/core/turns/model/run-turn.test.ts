@@ -1587,4 +1587,100 @@ describe("runTurn — session fallback on a rejected resume (design-agent-feedba
       expect(h.startedTasks.length).toBe(1); // the fallback never reached a second attempt
     });
   });
+
+  // --- Review round 1 regressions -------------------------------------------------------------
+
+  test("the fallback preserves accumulated Gate diagnostics when it fires after a Gate-retry's OWN resume is rejected (review round 1, finding 1)", async () => {
+    // `classifyBackendErrorCause`'s guard 1 is `SessionPlan.kind === "resume"` — it does not
+    // distinguish a cross-turn resume (this describe block's other tests) from an INTRA-turn
+    // resume Task 8's own Gate-retry branch builds (`session = {kind:"resume", sessionId,
+    // promptDelta: folded}`, a few lines below in run-turn.ts). If the backend rejects THAT
+    // resume too, the folded Gate diagnostics living in its `promptDelta` must not be silently
+    // discarded when the fallback replaces `session` with a fresh plan.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT); // attempt 1 (fresh) gets Gate-rejected
+      const input = baseRunTurnInput();
+      const runPromise = wrap(runTurn(h.deps, input));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, completedOutcome(1)); // sessionId "s1"
+
+      // Task 8's own Gate-retry branch resumes attempt 1's session, carrying the fold in
+      // `promptDelta` — confirmed here before the backend rejects THAT resume.
+      await waitForStartCount(h, 2);
+      const secondSession = h.startedTasks[1]?.session;
+      if (secondSession?.kind !== "resume") throw new Error("expected a resume session plan");
+      if (secondSession.promptDelta === null) throw new Error("expected a non-null promptDelta");
+      const foldedDiagnostics = secondSession.promptDelta;
+      expect(foldedDiagnostics).toContain("TS2322");
+
+      // The backend rejects this INTRA-turn resume too — the fallback fires.
+      completeAttempt(h, 2, {
+        kind: "backend-error",
+        message: "No conversation found with session ID: s1",
+        sessionId: null,
+        cause: "resume-rejected",
+      });
+
+      await waitForStartCount(h, 3);
+      completeAttempt(h, 3, completedOutcome(3)); // the fallback's own fresh attempt, passes Gate
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("committed");
+
+      // The fresh attempt's own session carries no `promptDelta` channel, so the diagnostics
+      // that used to ride the now-discarded resume's `promptDelta` must reach the agent folded
+      // onto `userMessage` instead — never silently lost.
+      const thirdSession = h.startedTasks[2]?.session;
+      if (thirdSession?.kind !== "fresh") throw new Error("expected a fresh session plan");
+      expect(h.startedTasks[2]?.userMessage).toContain("TS2322");
+      // Exact reconstruction, matching `appendPromptFold`'s own `${base}\n\n${fold}` shape.
+      expect(h.startedTasks[2]?.userMessage).toBe(
+        `${input.baseTask.userMessage}\n\n${foldedDiagnostics}`,
+      );
+    });
+  });
+
+  test("a fence exhaustion after a session fallback terminalizes GATE_RETRY_EXHAUSTED, not the generic PERSISTENCE_FAILED (review round 1, finding 2)", async () => {
+    // `fence.ts`'s own attempt counter increments on EVERY `startTurnAttempt` call, independent
+    // of this driver's local `attempt` bookkeeping — and the fallback deliberately leaves that
+    // local counter unchanged so it never spends a Gate-retry slot. That means the fence's
+    // independent hard `MAX_TURN_ATTEMPTS` (4) ceiling can run out ONE ATTEMPT BEFORE the local
+    // counter's own `canRetryAfterGate` check expects it to. Reproduced here exactly: one
+    // rejected resume (fence use #1) → the fallback's own fresh attempt (fence use #2) → three
+    // Gate rejections in a row (fence uses #3 and #4, plus the local counter reaching 4) → a 5th
+    // `startTurnAttempt` call the fence itself refuses.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT); // attempt 2 (the fallback's fresh attempt)
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT); // attempt 3
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT); // attempt 4
+      const runPromise = wrap(runTurn(h.deps, inputWithResumePlan()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, RESUME_REJECTED_OUTCOME); // rejected resume -> fallback fires
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2)); // fresh, Gate rejects it
+
+      await waitForStartCount(h, 3);
+      completeAttempt(h, 3, completedOutcome(3)); // resume, Gate rejects it
+
+      await waitForStartCount(h, 4);
+      completeAttempt(h, 4, completedOutcome(4)); // resume, Gate rejects it -- fence exhausted next
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      if (result.result.kind !== "recorded") throw new Error("expected recorded");
+      // The honest code — not the generic `PERSISTENCE_FAILED` a raw, non-`OperationalFailureCode`
+      // fence message ("attempt 5 exceeds the 4-attempt budget") would otherwise fall back to.
+      expect(result.result.reason).toBe("GATE_RETRY_EXHAUSTED");
+      // Never a 5th attempt: the fence refused it before `agentBackend.startTurn` was ever called.
+      expect(h.startedTasks.length).toBe(4);
+    });
+  });
 });

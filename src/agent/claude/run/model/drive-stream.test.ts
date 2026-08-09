@@ -368,4 +368,49 @@ describe("createClaudeDriver", () => {
     await driver(sink);
     expect(completions[0]?.outcome).toMatchObject({ kind: "backend-error", cause: null });
   });
+
+  test(
+    "the SDK's actually-measured sequence (a rejected-resume result message, THEN a throw) still resolves from the result message alone — proving no retention across the throw was needed (review round 1, minor finding)",
+    async () => {
+      // Reproduces spike 12's measured shape exactly: the SDK's own generator throws on the
+      // NEXT pull after yielding a rejected-resume result message. Earlier tests above only
+      // ever scripted the result message alone; this one adds the real subsequent throw so a
+      // wrong claim ("no retention needed") would actually be falsified here if it were wrong
+      // — the driver `return`s right after `sink.complete()` for the result message, so
+      // `for await...of` calls the iterator's `.return()`, never `.next()` again, and the
+      // `throw` below is never reached at runtime.
+      const { sink, completions } = fakeSink();
+      const queryFn = () => ({
+        async *[Symbol.asyncIterator]() {
+          yield rejectedResumeResult();
+          throw new Error(
+            "Claude Code returned an error result: No conversation found with session ID: b40c398a-…",
+          );
+        },
+        interrupt: async () => {},
+      });
+      const driver = createClaudeDriver({
+        queryFn: queryFn as never,
+        prompt: "p",
+        options: {} as never,
+        sessionKind: "resume",
+      });
+      await driver(sink);
+
+      expect(completions).toHaveLength(1);
+      expect(completions[0]?.outcome).toMatchObject({
+        kind: "backend-error",
+        cause: "resume-rejected",
+      });
+      // The classified MESSAGE comes from the result message's own `errors[0]`, not the throw's
+      // (differently-worded) message — proving the completion really was claimed from the
+      // result branch, not from a driver that somehow still reached the throw.
+      if (completions[0]?.outcome.kind === "backend-error") {
+        expect(completions[0].outcome.message).toBe(
+          "No conversation found with session ID: b40c398a-…",
+        );
+      }
+    },
+    GUARD_MS,
+  );
 });

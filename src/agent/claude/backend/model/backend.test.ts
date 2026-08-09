@@ -147,6 +147,45 @@ test(
   GUARD_MS,
 );
 
+test(
+  "startTurn on a resume task classifies a rejected resume through the REAL production wire (review round 1, minor finding — backend.ts's sessionKind pass-through was untested)",
+  async () => {
+    // Exercises the actual production call chain — `createClaudeBackend` -> `buildQueryOptions`
+    // -> `createClaudeDriver({ sessionKind: task.session.kind, ... })` -> the classifier — not
+    // just `drive-stream.ts`'s own unit tests, which construct `ClaudeDriverParams` directly and
+    // could not catch `backend.ts`'s own `sessionKind` line silently drifting to a hardcoded
+    // value (e.g. always `"fresh"`), which would silently kill the whole classification feature
+    // while every other test (which all also pass `sessionKind` directly) stayed green.
+    const resumeTask: AgentTask = {
+      ...task,
+      session: { kind: "resume", sessionId: "prior-s", promptDelta: null },
+    };
+    const rejectedResumeResult = {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      num_turns: 0,
+      duration_api_ms: 0,
+      total_cost_usd: 0,
+      modelUsage: {},
+      usage: {},
+      permission_denials: [],
+      errors: ["No conversation found with session ID: prior-s"],
+      session_id: "prior-s",
+      uuid: "u9",
+    } as unknown as SDKMessage;
+    const backend = createClaudeBackend({
+      queryFn: () => query([rejectedResumeResult]),
+      processTreeFactory: () => createFakeProcessTree({ counts: [0], ownershipConfirmed: true }),
+      wait: async () => {},
+    });
+    const run = backend.startTurn(resumeTask);
+    const outcome = await run.outcome;
+    expect(outcome).toMatchObject({ kind: "backend-error", cause: "resume-rejected" });
+  },
+  GUARD_MS,
+);
+
 test("sessionScope is a pure, stable derivation matching deriveSessionScope", () => {
   const backend = createClaudeBackend({
     queryFn: () => query([success]),

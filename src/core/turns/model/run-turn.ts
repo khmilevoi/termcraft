@@ -453,10 +453,30 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       // machine to "running" (attempt.ts's own call order) — bridge through stopping first.
       bridge("requestCancel");
       bridge("beginTerminalization");
+      // REVIEW ROUND 1, FINDING 2: `fence.ts`'s own `beginAttempt` counter increments
+      // unconditionally on EVERY `startTurnAttempt` call, independent of this driver's local
+      // `attempt` bookkeeping — and a session fallback deliberately leaves `attempt` unchanged
+      // (this file's own comment at the fallback call site) so it never spends a Gate-retry
+      // slot. That is correct for `canRetryAfterGate`'s own local accounting, but it means the
+      // fence's independent hard `MAX_TURN_ATTEMPTS` counter can run out ONE ATTEMPT BEFORE this
+      // driver's local counter expects it to — reachable ONLY when a fallback already fired this
+      // turn (`sessionFallbackUsed`): without one, the local counter and the fence counter never
+      // diverge, and `canRetryAfterGate` already refuses a 5th attempt from this driver's own
+      // side first, so this branch stays genuinely unreachable exactly as it always was.
+      //
+      // Every reachable path into THIS branch after a fallback is the Gate rejecting the
+      // candidate repeatedly until the fence — not the driver's own count — ran dry, which is
+      // honestly `GATE_RETRY_EXHAUSTED`, not the generic `PERSISTENCE_FAILED` a raw,
+      // non-`OperationalFailureCode` fence message would otherwise fall back to
+      // (`handlers/turn.ts`'s `terminalFailureDto`, `isOperationalFailureCode` gate). Reusing
+      // that closed code rather than adding a new one: `OPERATIONAL_FAILURE_CODES_V1` is a
+      // count-asserted, wire-schema-bound 30-entry registry, and this failure IS a Gate-retry
+      // exhaustion in substance — just discovered one attempt later than the driver's own local
+      // count alone would have found it.
       return terminalize(
         "failed",
         `attempt fence rejected: ${started.message}`,
-        String(started.reason),
+        sessionFallbackUsed ? "GATE_RETRY_EXHAUSTED" : String(started.reason),
         candidateRoot,
       );
     }
@@ -540,8 +560,25 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
           // A fresh-session plan for the NEXT attempt, sent as a first message again (never a
           // resume's `promptDelta` channel — see `session`'s own doc comment above for why the
           // two channels are mutually exclusive by construction).
+          //
+          // REVIEW ROUND 1, FINDING 1: `classifyBackendErrorCause`'s guard 1 is
+          // `SessionPlan.kind === "resume"` — it does NOT distinguish a cross-turn resume (the
+          // turn's OWN starting plan) from an INTRA-turn resume Task 8's own Gate-retry branch
+          // built a few lines below (`session = {kind: "resume", sessionId, promptDelta:
+          // folded}`). If the backend rejects THAT resume, `session` here already carries the
+          // accumulated Gate diagnostics in its `promptDelta` — and reassigning `session` to the
+          // fresh plan without capturing them first would silently discard exactly the
+          // information the fresh attempt most needs to avoid reproducing the same invalid
+          // candidate. This is the identical class of bug the defensive branch below (`session`'s
+          // own "DO NOT simplify" comment) already guards against for a different edge — folding
+          // here the same way, via the same append-only `appendPromptFold` convention, rather than
+          // silently starting the fresh attempt with none of what Gate already found wrong.
+          const rejectedSession = session;
           session = fallback;
-          userMessage = input.baseTask.userMessage;
+          userMessage =
+            rejectedSession.kind === "resume" && rejectedSession.promptDelta !== null
+              ? appendPromptFold(input.baseTask.userMessage, rejectedSession.promptDelta)
+              : input.baseTask.userMessage;
           continue;
         }
         // The fallback itself could not build a fresh-session plan (a `selectSeed` failure) —
