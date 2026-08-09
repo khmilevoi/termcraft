@@ -143,6 +143,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: 5,
               column: null,
               file: null,
+              blockedPages: null,
             },
             {
               kind: "nondeterministic-randomness",
@@ -150,6 +151,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: null,
+              blockedPages: null,
             },
           ],
         }),
@@ -176,6 +178,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: null,
+              blockedPages: null,
             },
             {
               kind: "nondeterministic-randomness",
@@ -183,6 +186,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: null,
+              blockedPages: null,
             },
           ],
         }),
@@ -205,7 +209,14 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
         foldInput({
           diagnostics: diagnostics({
             warnings: [
-              { kind: kind as never, message: "m", line: null, column: null, file: "pages/a.tsx" },
+              {
+                kind: kind as never,
+                message: "m",
+                line: null,
+                column: null,
+                file: "pages/a.tsx",
+                blockedPages: null,
+              },
             ],
           }),
         }),
@@ -225,6 +236,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: "lib/a.ts",
+              blockedPages: null,
             },
             {
               kind: "dead-module",
@@ -232,6 +244,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: "lib/orphan.ts",
+              blockedPages: null,
             },
           ],
         }),
@@ -265,6 +278,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: null,
+              blockedPages: null,
             },
             {
               kind: "unpointed-element",
@@ -272,6 +286,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: null,
+              blockedPages: null,
             },
             {
               kind: "unlisted-navigation",
@@ -279,6 +294,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: null,
+              blockedPages: null,
             },
           ],
         }),
@@ -301,6 +317,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: "lib/one.ts",
+              blockedPages: null,
             },
             {
               kind: "dead-module",
@@ -308,6 +325,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               line: null,
               column: null,
               file: "lib/orphan.ts",
+              blockedPages: null,
             },
           ],
         }),
@@ -334,6 +352,7 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
               file: "pages/stopwatch.tsx",
               line: 55,
               column: 31,
+              blockedPages: null,
             },
           ],
         }),
@@ -351,7 +370,14 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
       foldInput({
         diagnostics: diagnostics({
           warnings: [
-            { kind: "nondeterministic-time", message: "m", line: null, column: null, file: null },
+            {
+              kind: "nondeterministic-time",
+              message: "m",
+              line: null,
+              column: null,
+              file: null,
+              blockedPages: null,
+            },
           ],
         }),
       }),
@@ -381,7 +407,14 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
             },
           ],
           warnings: [
-            { kind: "dropped-id", message: "irrelevant", line: null, column: null, file: null },
+            {
+              kind: "dropped-id",
+              message: "irrelevant",
+              line: null,
+              column: null,
+              file: null,
+              blockedPages: null,
+            },
           ],
         }),
       }),
@@ -486,6 +519,7 @@ describe("foldGateDiagnosticsIntoPrompt — workspace-relative paths (Task 3)", 
               file: "pages/alarm.tsx",
               line: 98,
               column: 30,
+              blockedPages: null,
             },
           ],
         }),
@@ -494,6 +528,50 @@ describe("foldGateDiagnosticsIntoPrompt — workspace-relative paths (Task 3)", 
     if (result instanceof Error) throw result;
     expect(result).toContain(`in ${DESIGN_DIRNAME}/pages/alarm.tsx line 98:30`);
     expect(result).not.toContain("in pages/alarm.tsx");
+  });
+
+  test("a warning's blockedPages renders the same [blocks: …] clause an error's does (Task 5)", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "nondeterministic-time",
+              message: "`Date.now()` reads wall-clock time",
+              file: "lib/elapsed.ts",
+              line: 1,
+              column: 24,
+              blockedPages: ["about", "home"] as never,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain("lib/elapsed.ts");
+    expect(result).toContain("[blocks: about, home]");
+  });
+
+  test("a warning's absent blockedPages omits the clause entirely — never an empty list", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "nondeterministic-time",
+              message: "`Date.now()` reads wall-clock time",
+              file: "pages/stopwatch.tsx",
+              line: 1,
+              column: 24,
+              blockedPages: null,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).not.toContain("blocks:");
+    expect(result).toContain("`Date.now()` reads wall-clock time");
   });
 
   test("blockedPages still renders SLUGS and is not prefixed", () => {

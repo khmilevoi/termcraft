@@ -115,6 +115,18 @@ export interface GateWarningV1 {
   readonly line?: number;
   readonly column?: number;
   readonly file?: string;
+  /**
+   * The pages this warning is attributed to — those whose closure contains {@link file} —
+   * sorted, and ABSENT (never `[]`) when the set is empty. Identical in meaning, producer and
+   * absence rule to {@link GateErrorV1.blockedPages}; read that field's contract, which is the
+   * full account for both. Populated ONLY by {@link GateRunner.runTree}, since no other method
+   * holds a closure.
+   *
+   * ADDED 2026-08-09 with closure-wide determinism linting: a `Date.now()` in a module three
+   * pages share is one fact, reported once, naming the module — and the agent has no import
+   * graph with which to work out which pages that module made non-deterministic.
+   */
+  readonly blockedPages?: readonly PageSlug[];
 }
 
 /** The page metadata + identity the Gate parses from a passing candidate's static `meta` (runtime-api §4). */

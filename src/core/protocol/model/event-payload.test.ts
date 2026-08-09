@@ -523,6 +523,9 @@ describe("turnGateRejectedPayloadV1Schema", () => {
           line: null,
           column: null,
           file: null,
+          // ADDED (design-agent-feedback-loop repair, Task 5) — the identical `.nullable()`,
+          // never `.optional()`, convention `errors[0].blockedPages` above already documents.
+          blockedPages: null,
         },
       ],
     },
@@ -645,6 +648,7 @@ describe("turnGateRejectedPayloadV1Schema", () => {
             line: null,
             column: null,
             file: "lib/a.ts",
+            blockedPages: null,
           },
         ],
       },
@@ -665,6 +669,44 @@ describe("turnGateRejectedPayloadV1Schema", () => {
     const bad = {
       ...valid,
       diagnostics: { ...valid.diagnostics, warnings: [warningWithoutFile] },
+    };
+    expect(turnGateRejectedPayloadV1Schema.safeParse(bad).success).toBe(false);
+  });
+
+  test("a NON-null `blockedPages` on a warning round-trips the strict schema (design-agent-feedback-loop repair, Task 5)", () => {
+    // Mirrors the error's own M-4 test above: this schema is `z.strictObject`, so before this
+    // task widened it a warning carrying `blockedPages` would have been rejected outright.
+    // Slugs are parsed by `pageSlugSchema`, not accepted as free strings.
+    const attributed = {
+      ...valid,
+      diagnostics: {
+        ...valid.diagnostics,
+        warnings: [{ ...valid.diagnostics.warnings[0]!, blockedPages: ["home", "calendar"] }],
+      },
+    };
+    const parsed = turnGateRejectedPayloadV1Schema.safeParse(attributed);
+    if (!parsed.success) throw new Error("expected the attributed warning to parse");
+    const attributedWarning = parsed.data.diagnostics.warnings[0];
+    if (attributedWarning === undefined) throw new Error("expected one parsed warning");
+    expect(attributedWarning.blockedPages).not.toBeNull();
+    expect((attributedWarning.blockedPages ?? []).map(String)).toEqual(["home", "calendar"]);
+
+    const malformed = {
+      ...valid,
+      diagnostics: {
+        ...valid.diagnostics,
+        warnings: [{ ...valid.diagnostics.warnings[0]!, blockedPages: ["Not-A-Slug"] }],
+      },
+    };
+    expect(turnGateRejectedPayloadV1Schema.safeParse(malformed).success).toBe(false);
+  });
+
+  test("requires an explicit null `blockedPages` on a warning, never an omitted one", () => {
+    const { blockedPages: _dropped, ...warningWithoutBlockedPages } =
+      valid.diagnostics.warnings[0]!;
+    const bad = {
+      ...valid,
+      diagnostics: { ...valid.diagnostics, warnings: [warningWithoutBlockedPages] },
     };
     expect(turnGateRejectedPayloadV1Schema.safeParse(bad).success).toBe(false);
   });

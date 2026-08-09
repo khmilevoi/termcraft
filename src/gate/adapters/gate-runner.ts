@@ -27,6 +27,7 @@ import {
   unscannableMessage,
 } from "../model/gate";
 import type { GatePorts } from "../model/gate";
+import { lintDeterminism, lintSilencingAny } from "../model/lints";
 import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
 import { createSmokeRender } from "../model/smoke";
@@ -109,6 +110,14 @@ import type { GateError, GateErrorKind, GateWarning } from "../types";
  * closure walk produces keyed FACTS with the page they blocked, and a fact becomes at most one
  * diagnostic carrying every blocked slug in `blockedPages`. Read that function's doc for the
  * invariant, the case-by-case attributability argument, and the one computed suppression.
+ *
+ * WIDENED (design-agent-feedback-loop repair, Task 5, 2026-08-09): `runTree` now ALSO lints
+ * `nondeterministic-time`/`nondeterministic-randomness`/`silencing-any` over every code file in
+ * `input.files`, not only the graph-shaped `import-cycle`/`dead-module` warnings task 4 added —
+ * closing the laundering where moving a `Date.now()` out of a page entry into a module the page
+ * merely imports made the call invisible to the Gate (the per-page lints in `gate/model/gate.ts`
+ * only ever see the ENTRY source). See {@link lintWholeTreeDeterminism}'s own doc for the
+ * mechanism and the duplication decision against `runGate`'s unchanged per-page lints.
  */
 
 /**
@@ -186,14 +195,20 @@ function createClosureIndex(
  * unverifiable edge list is unverifiable for all of them; a rejected specifier is rejected for
  * all). Hence applying this only where `blockedPages` is absent loses nothing: where it is
  * present, this lookup would return nothing to add.
+ *
+ * GENERIC OVER `GateError`/`GateWarning` ALIKE (design-agent-feedback-loop repair, Task 5). Both
+ * shapes carry the identical optional `file`/`blockedPages` pair with the identical absence rule
+ * ({@link GateWarning.blockedPages}'s own doc mirrors {@link GateError.blockedPages} field for
+ * field), and {@link lintWholeTreeDeterminism} below needs the exact same lookup the scan/type
+ * stages already use — reusing this function is one attribution rule for every diagnostic kind
+ * this pass produces, never a second one written for warnings.
  */
-function attributeToReachingPages(
-  error: GateError,
-  blockedBy: (file: string | undefined) => readonly PageSlug[] | undefined,
-): GateError {
-  if (error.blockedPages !== undefined) return error;
-  const blockedPages = blockedBy(error.file);
-  return blockedPages === undefined ? error : { ...error, blockedPages };
+function attributeToReachingPages<
+  T extends { readonly file?: string; readonly blockedPages?: readonly PageSlug[] },
+>(diagnostic: T, blockedBy: (file: string | undefined) => readonly PageSlug[] | undefined): T {
+  if (diagnostic.blockedPages !== undefined) return diagnostic;
+  const blockedPages = blockedBy(diagnostic.file);
+  return blockedPages === undefined ? diagnostic : { ...diagnostic, blockedPages };
 }
 
 /**
@@ -813,6 +828,122 @@ function findImportCycles(edges: ReadonlyMap<string, ReadonlySet<string>>): read
   return warnings;
 }
 
+/**
+ * `lintDeterminism`/`lintSilencingAny` threw. Carried as a value, never rethrown — same
+ * reasoning as {@link ClosureEdgesUnreadableError} just above and `gate/model/gate.ts`'s own
+ * `PageSourceUnscannableError`: `lintWholeTreeDeterminism` is SYNCHRONOUS inside `runTree`, so an
+ * escaping throw would crash the whole turn pipeline rather than skip one file's warnings.
+ *
+ * MEASURED LIVE, not a defensive guess: both lints share `tokenize`/`./jsx`'s recursive-descent
+ * reader with `checkPageContract` and the flat allowlist scan, and this file's own closure-walk
+ * tests already pin that 32 000 reps of `"<a>{"` throws `JsxNestingTooDeepError` out of that
+ * reader, not merely a returned `SourceStreamTruncatedError`.
+ */
+class DeterminismLintUnreadableError extends errore.createTaggedError({
+  name: "DeterminismLintUnreadableError",
+  message: 'the determinism/`silencing-any` lints could not read "$file" to the end',
+}) {}
+
+/**
+ * `nondeterministic-time`/`nondeterministic-randomness`/`silencing-any` warnings for ONE code
+ * file's text, stamped with `file: relPath` — the SAME two lints `gate/model/gate.ts`'s
+ * `runGate` runs per page (`lintDeterminism`, `lintSilencingAny`), called here over a file this
+ * pass read directly rather than only over a manifest entry's own source. See
+ * {@link lintWholeTreeDeterminism}'s doc for why this scans every code file, not only entries.
+ *
+ * TOLERANT OF AN UNSCANNABLE SOURCE, deliberately, TWO WAYS. Both lints share `tokenize` with the
+ * flat allowlist scan (`runTreeImports`): a RETURNED `SourceStreamTruncatedError` from either lint
+ * is filtered out below, and a THROW (see {@link DeterminismLintUnreadableError}) is caught here
+ * — mirroring `gate/model/gate.ts`'s own `errore.try` around the identical pair of calls, rather
+ * than a second, divergent way of surviving the same hazard. Either way the file already carries
+ * its own `UNSCANNABLE_SOURCE` fatal from the flat scan; returning no warnings for it is honest —
+ * nothing here could read past the same truncation — not a second, redundant diagnostic for the
+ * same underlying fact.
+ */
+function lintFileDeterminism(relPath: string, source: string): readonly GateWarning[] {
+  const syntax = parsesJsx(relPath);
+  const linted = errore.try({
+    try: () => ({
+      timers: lintDeterminism(source, syntax),
+      anys: lintSilencingAny(source, syntax),
+    }),
+    catch: (cause) => new DeterminismLintUnreadableError({ file: relPath, cause }),
+  });
+  if (linted instanceof Error) {
+    console.warn(
+      `gate/adapters/gate-runner: ${linted.message} — the flat allowlist scan already carries this file's own UNSCANNABLE_SOURCE fatal, so no determinism/silencing-any warning is manufactured for it`,
+    );
+    return [];
+  }
+  const stamp = (warning: GateWarning): GateWarning => ({ ...warning, file: relPath });
+  return [
+    ...(linted.timers instanceof Error ? [] : linted.timers.map(stamp)),
+    ...(linted.anys instanceof Error ? [] : linted.anys.map(stamp)),
+  ];
+}
+
+/**
+ * DETERMINISM AND `silencing-any` OVER THE WHOLE CLOSURE, NOT ONLY ENTRIES (defect fix,
+ * 2026-08-09). MEASURED: a turn moved `Date.now()` out of `pages/stopwatch.tsx` into
+ * `lib/elapsed.ts` and the call vanished from the Gate's view — the per-page lints run on
+ * the ENTRY source only (`gate/model/gate.ts`). The refactor laundered non-determinism past
+ * the check, and the export/replay guarantee the lint exists to protect was silently gone.
+ *
+ * ONE PASS OVER `input.files`, WITH THE INDEX THIS PASS ALREADY BUILT. `createClosureIndex`
+ * inverts the closures resolved moments ago into `file -> slugs`; re-deriving reachability
+ * from the import graph here would be a second reading of a question already answered, which
+ * is the failure mode this adapter's own comments keep designing against.
+ *
+ * `isCodeFile` GATES WHICH FILES ARE SCANNED — the SAME predicate the type check
+ * (`type-check.ts`'s difference #1) and the closure walk ({@link readClosureEdges}) key on,
+ * never a second reading of "is this code".
+ *
+ * STEP 3'S DUPLICATION QUESTION, SETTLED HERE (design-agent-feedback-loop repair, Task 5).
+ * `runPage` and `runTree` are BOTH live in the shipped pipeline, and a naive addition here would
+ * warn twice for a page whose OWN entry directly reads the clock: once from `runGate`'s per-page
+ * determinism/`silencing-any` lints (`gate/model/gate.ts:212-217`), once here. THE ANSWER TAKEN:
+ * `runTree` lints EVERY code file in `input.files`, including entries, and `runGate`'s per-page
+ * lints stay UNTOUCHED by this task — removing them would silently weaken `runPage`, which is
+ * also called on its own (with no `runTree` call at all) by a hermetic fixture and by
+ * `core/kernel/model/handlers/page-descriptors.ts`'s `buildPageDescriptors`. The alternative —
+ * skipping entries here because `runPage` already covers them — is wrong: `runTree`'s warnings
+ * are what reach the agent's fold (`core/turns/model/validation.ts` calls `runTree`, never
+ * `runPage`, before folding a rejection into the retry prompt), so an entry's own `Date.now()`
+ * must be in THIS pass's own output regardless of what `runPage` separately reports.
+ *
+ * WHICH CALLER SEES WHAT, STATED RATHER THAN LEFT TO BE DISCOVERED FROM OUTPUT: `runPage()`'s
+ * return value carries only ITS OWN per-page findings, and `runTree()`'s return value carries
+ * only ITS OWN whole-tree findings — this adapter never folds one call's warnings into the
+ * other's result, so AT THIS BOUNDARY neither call's own output duplicates the other
+ * (`gate-runner.test.ts`'s "an entry's own warning is not duplicated by the whole-tree pass"
+ * pins exactly that: each call, run independently, reports the entry's warning exactly once in
+ * ITS OWN list, `runPage`'s carrying no `blockedPages` and `runTree`'s naming the page itself).
+ *
+ * WHAT THIS DOES NOT CLAIM, SO IT IS NOT LAUNDERED AS SETTLED: `core/turns/model/validation.ts`'s
+ * `runTurnValidation` already concatenates every `runPage` warning with `runTree`'s into ONE
+ * turn's `warnings` list (unchanged by, and outside the Files: list of, this task). For a page
+ * whose own entry reads the clock directly, that ONE merged list — the one the retry prompt is
+ * actually folded from — carries the finding TWICE: once unattributed (`runPage`'s copy) and
+ * once naming the page itself in `blockedPages` (`runTree`'s copy). This is a real, visible
+ * residual of taking the recommended answer, flagged here rather than silently accepted; fixing
+ * it (a dedupe step, or scoping which of the two lints runs per page) is out of this task's
+ * stated file scope and is left for a follow-up.
+ */
+function lintWholeTreeDeterminism(input: {
+  readonly files: ReadonlyMap<string, string>;
+  readonly blockedBy: (file: string | undefined) => readonly PageSlug[] | undefined;
+}): readonly GateWarning[] {
+  const warnings: GateWarning[] = [];
+  for (const relPath of [...input.files.keys()].sort()) {
+    if (!isCodeFile(relPath)) continue;
+    const source = input.files.get(relPath)!; // `relPath` is a key drawn from `input.files` itself
+    for (const warning of lintFileDeterminism(relPath, source)) {
+      warnings.push(attributeToReachingPages(warning, input.blockedBy));
+    }
+  }
+  return warnings;
+}
+
 export interface GateRunnerAdapterDeps {
   readonly smokeRenderer: SmokeRenderer;
   /** A path already resolved by `gate/model/tsc-extract.ts`'s `resolveCompilerPath()` — this
@@ -908,6 +1039,16 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
     readonly pages: readonly PageEntryV1[];
   }): Promise<RunTreeResultV1> {
     const resolved = resolveTreeClosures({ ...input, scanErrors: runTreeImports(input) });
+    // HOISTED ABOVE EVERYTHING THAT ATTRIBUTES A DIAGNOSTIC (final whole-branch review,
+    // Important; hoisted one step further by design-agent-feedback-loop repair Task 5). THREE
+    // consumers now read this SAME index rather than each deriving their own: the scan stage's
+    // fatals below, the type stage's fatals further down, and {@link lintWholeTreeDeterminism}'s
+    // new warnings — computing it inside the type-check branch is what used to leave
+    // `EVAL_CALL`/`FUNCTION_CALL` unattributed, and building a second instance for the new
+    // warnings pass would be exactly the "second reading of a question already answered" this
+    // adapter's own comments keep designing against. It depends on nothing but `resolved`, so
+    // there is no ordering to respect here beyond "before every one of the three".
+    const blockedBy = createClosureIndex(resolved.closures);
     // Both derived from `resolved`'s own `edges`/`closures`/`anyClosureBlocked` — see each
     // function's doc for why neither re-reads a file or re-derives the import graph.
     const warnings: GateWarning[] = [
@@ -917,13 +1058,11 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
         closures: resolved.closures,
         anyClosureBlocked: resolved.anyClosureBlocked,
       }),
+      // See `lintWholeTreeDeterminism`'s own doc for the measured defect this closes and the
+      // Step 3 duplication decision recorded at its call site (not merely in this file's git
+      // history — the comment lives at the function itself).
+      ...lintWholeTreeDeterminism({ files: input.files, blockedBy }),
     ];
-    // HOISTED ABOVE THE TYPE-CHECK BRANCH DELIBERATELY (final whole-branch review, Important).
-    // The scan stage's fatals need the SAME index the type stage reads, and they are returned on
-    // the branch below that never reaches a compiler at all — computing it inside that branch is
-    // what left `EVAL_CALL`/`FUNCTION_CALL` unattributed. It depends on nothing but `resolved`,
-    // so there is no ordering to respect here beyond that.
-    const blockedBy = createClosureIndex(resolved.closures);
     const passErrors = resolved.errors.map((error) => attributeToReachingPages(error, blockedBy));
     if (treeTypeCheck === undefined) {
       return { errors: passErrors, warnings, closures: resolved.closures };

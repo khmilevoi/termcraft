@@ -510,6 +510,10 @@ describe("runTurnValidation — the verdict", () => {
           line: 12,
           column: 3,
           file: null,
+          // ADDED (design-agent-feedback-loop repair, Task 5): `toGateWarningDto`'s own
+          // `?? null` echo of the port's optional `blockedPages` — this fixture's fake
+          // `runPage` result carries none, so the DTO's is an honest `null`.
+          blockedPages: null,
         },
       ]);
     });

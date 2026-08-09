@@ -887,6 +887,20 @@ const turnGateWarningV1Schema = z.strictObject({
    * `turnGateErrorV1Schema`'s identical `file` field just above).
    */
   file: z.string().min(1).nullable(),
+  /**
+   * The pages this warning is attributed to (`gate/types.ts`'s `GateWarning.blockedPages`,
+   * `core/ports/gate-runner.ts`'s `GateWarningV1.blockedPages`) — `null` when it names none.
+   * SAME shape, SAME absence rule, SAME producer restriction as `turnGateErrorV1Schema`'s
+   * `blockedPages` just above; read that field's doc comment for the full account rather than a
+   * second copy of it here.
+   *
+   * ADDED (design-agent-feedback-loop repair, Task 5, 2026-08-09) alongside the closure-wide
+   * determinism/`silencing-any` lint `GateRunner.runTree` now runs: a warning in a module three
+   * pages share must reach the agent's retry prompt naming all three, the same way a fatal
+   * already does. `.nullable()`, never `.optional()`, for the identical reason `file` just above
+   * takes that treatment.
+   */
+  blockedPages: z.array(pageSlugSchema).readonly().nullable(),
 });
 
 /** "bounded closed Gate diagnostics" (§9 row for `turn.gateRejected`, KCC:801). */

@@ -247,6 +247,12 @@ function toGateWarningDto(warning: GateWarningV1): TurnGateDiagnosticsV1["warnin
     // `gate/model/gate.ts` (defect fix, 2026-08-09); `import-cycle`/`dead-module` are no
     // longer the exception, just one more producer of the same field.
     file: warning.file ?? null,
+    // CARRIED, NOT DERIVED (design-agent-feedback-loop repair, Task 5) — the identical
+    // `?? null` echo `toGateErrorDto` above already applies to `GateErrorV1.blockedPages`.
+    // `GateWarningV1.blockedPages` is populated only by `GateRunner.runTree`'s closure-wide
+    // determinism/`silencing-any` lint; every other producer leaves it `undefined`, which
+    // becomes an honest `null` here rather than a dropped field.
+    blockedPages: warning.blockedPages ?? null,
   };
 }
 

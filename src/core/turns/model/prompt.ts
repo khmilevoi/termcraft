@@ -151,6 +151,12 @@ function toWorkspacePath(file: string): string {
  * TYPE error now renders the same clause a forbidden import already did. The renderer needed no
  * change for that, and the wording here is corrected so it does not go on describing only half of
  * what it prints — `core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages` is the full account.
+ *
+ * A SECOND CALLER, NOT A SECOND FORMATTER (design-agent-feedback-loop repair, Task 5, 2026-08-09).
+ * `formatGateWarning` now calls this SAME function for `GateWarningV1.blockedPages` — identical
+ * shape, identical absence rule, identical rendering, populated only by `GateRunner.runTree`'s
+ * closure-wide determinism/`silencing-any` lint. Writing a second `formatBlockedPagesForWarnings`
+ * would be exactly the "one fact, two readings" shape this whole file's header warns against.
  */
 function formatBlockedPages(blockedPages: readonly PageSlug[] | null): string {
   if (blockedPages === null || blockedPages.length === 0) return "";
@@ -171,10 +177,17 @@ function formatGateError(error: TurnGateErrorDtoV1): string {
  * (`gate/model/gate.ts`) or the whole-tree pass (`gate/adapters/gate-runner.ts`) actually
  * produces today carries one — this guard exists for the producer that legitimately does not,
  * not because omission is expected of the ones that do.
+ *
+ * REUSES {@link formatBlockedPages} VERBATIM (design-agent-feedback-loop repair, Task 5,
+ * 2026-08-09), exactly as {@link formatGateError} already does for `GateErrorV1.blockedPages` —
+ * one renderer for the attribution clause, never a second one for warnings. `GateWarningV1
+ * .blockedPages` is populated only by `GateRunner.runTree`'s closure-wide determinism/
+ * `silencing-any` lint, so a per-page warning (`gate/model/gate.ts`'s `runGate`) renders with no
+ * `[blocks: …]` clause, the same as it always has.
  */
 function formatGateWarning(warning: TurnGateWarningDtoV1): string {
   const location = warning.file === null ? "" : ` in ${toWorkspacePath(warning.file)}`;
-  return `- [${warning.kind}]${location}${formatPosition(warning.line, warning.column)}: ${warning.message}`;
+  return `- [${warning.kind}]${location}${formatPosition(warning.line, warning.column)}${formatBlockedPages(warning.blockedPages)}: ${warning.message}`;
 }
 
 const GATE_ERRORS_HEADER =

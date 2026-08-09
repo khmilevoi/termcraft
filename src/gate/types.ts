@@ -83,6 +83,19 @@ export interface GateWarning {
   readonly line?: number;
   readonly column?: number;
   readonly file?: string;
+  /**
+   * The pages this warning is attributed to — those whose closure contains {@link GateWarning.file}
+   * — sorted, and ABSENT (never `[]`) when the set is empty. Identical in meaning, producer and
+   * absence rule to `core/ports/gate-runner.ts`'s `GateErrorV1.blockedPages`; read that field's
+   * doc comment for the full account — this field does not restate it. Populated ONLY by
+   * `GateRunner.runTree` (`gate/adapters/gate-runner.ts`), since no other method holds a closure.
+   *
+   * ADDED (design-agent-feedback-loop repair, Task 5, 2026-08-09) with closure-wide determinism
+   * linting: a `Date.now()` in a module three pages share is one fact, reported once, naming the
+   * module — and the agent has no import graph with which to work out which pages that module
+   * made non-deterministic.
+   */
+  readonly blockedPages?: readonly PageSlug[];
 }
 
 /**

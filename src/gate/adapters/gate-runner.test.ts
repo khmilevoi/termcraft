@@ -1001,6 +1001,186 @@ describe("createGateRunnerAdapter", () => {
     });
   });
 
+  describe("runTree() determinism/silencing-any warnings across the whole closure (design-agent-feedback-loop repair, Task 5)", () => {
+    const page = (slugValue: string, entryPath: string): PageEntryV1 => ({
+      slug: slugValue as PageSlug,
+      entry: entryPath,
+    });
+    const NO_WARNINGS = `export const meta = 1`;
+
+    test("a Date.now() in a shared module is warned ONCE, named against that module", async () => {
+      // The brief's own fixture shape: two pages share one module that reads the clock.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/a.tsx", `import { elapsed } from "../lib/elapsed"\n${NO_WARNINGS}`],
+        ["pages/b.tsx", `import { elapsed } from "../lib/elapsed"\n${NO_WARNINGS}`],
+        ["lib/elapsed.ts", `export const elapsed = Date.now()`],
+      ]);
+      const treePaths = ["pages/a.tsx", "pages/b.tsx", "lib/elapsed.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("a", "pages/a.tsx"), page("b", "pages/b.tsx")],
+      });
+
+      const timers = result.warnings.filter((w) => w.kind === "nondeterministic-time");
+      expect(timers).toHaveLength(1);
+      expect(timers[0]?.file).toBe("lib/elapsed.ts");
+      expect(timers[0]?.blockedPages).toEqual(["a", "b"] as PageSlug[]);
+    });
+
+    test("moving a Date.now() from an entry into a shared module keeps the warning — the measured regression, before and after", async () => {
+      // MEASURED LAUNDERING THIS TASK FIXES: a turn moved `Date.now()` out of a page entry into
+      // a shared module the page merely imports, and the call became invisible to `runTree` —
+      // whose warnings were graph-only (`import-cycle`/`dead-module`) before this task. Both the
+      // BEFORE and the AFTER shape must warn here, over `runTree` ALONE (no `runPage` involved),
+      // to pin that the fix is in the whole-tree pass itself, not merely in the per-page lint
+      // that already covered the BEFORE shape.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+
+      // BEFORE: `Date.now()` lives directly in the page entry.
+      const beforeResult = await adapter.runTree({
+        files: new Map([["pages/stopwatch.tsx", `export const startedAt = Date.now()`]]),
+        treePaths: ["pages/stopwatch.tsx"],
+        pages: [page("stopwatch", "pages/stopwatch.tsx")],
+      });
+      const beforeTimers = beforeResult.warnings.filter((w) => w.kind === "nondeterministic-time");
+      expect(beforeTimers).toHaveLength(1);
+      expect(beforeTimers[0]?.file).toBe("pages/stopwatch.tsx");
+
+      // AFTER: the SAME call, moved into a shared module the entry imports instead of declaring.
+      const afterResult = await adapter.runTree({
+        files: new Map([
+          [
+            "pages/stopwatch.tsx",
+            `import { startedAt } from "../lib/elapsed"\nexport { startedAt }`,
+          ],
+          ["lib/elapsed.ts", `export const startedAt = Date.now()`],
+        ]),
+        treePaths: ["pages/stopwatch.tsx", "lib/elapsed.ts"],
+        pages: [page("stopwatch", "pages/stopwatch.tsx")],
+      });
+      const afterTimers = afterResult.warnings.filter((w) => w.kind === "nondeterministic-time");
+      expect(afterTimers).toHaveLength(1);
+      expect(afterTimers[0]?.file).toBe("lib/elapsed.ts");
+      expect(afterTimers[0]?.blockedPages).toEqual(["stopwatch"] as PageSlug[]);
+    });
+
+    test("a warning in a module no page's closure reaches names no page", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/home.tsx", NO_WARNINGS],
+        ["lib/orphan.ts", `export const now = Date.now()`],
+      ]);
+      const treePaths = ["pages/home.tsx", "lib/orphan.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx")],
+      });
+
+      // `lib/orphan.ts` is ALSO genuinely unreached by any page's closure, so it carries its own
+      // `dead-module` warning too (design-tree phase 2 Task 4, unrelated to this task) — filter
+      // to the determinism warning specifically rather than assume it is the only one this file
+      // produces.
+      const orphanWarning = result.warnings.find(
+        (w) => w.file === "lib/orphan.ts" && w.kind === "nondeterministic-time",
+      );
+      expect(orphanWarning?.kind).toBe("nondeterministic-time");
+      // ABSENT, never `[]` — `GateWarningV1.blockedPages`'s own contract, mirroring
+      // `GateErrorV1.blockedPages`'s.
+      expect(orphanWarning?.blockedPages).toBeUndefined();
+    });
+
+    test("an entry's own warning is not duplicated by the whole-tree pass", async () => {
+      // The sharpest risk in this task (Step 3): a page entry is a member of its OWN closure, so
+      // a naive implementation warns twice for the same construct. See `gate-runner.ts`'s own
+      // call-site comment on `lintWholeTreeDeterminism` ("STEP 3'S DUPLICATION QUESTION, SETTLED
+      // HERE") for the chosen answer: `runPage` and `runTree` are two independent calls, each
+      // reporting its OWN findings in its OWN return value — neither call's result folds the
+      // other's warnings in.
+      const source = `export const startedAt = Date.now()`;
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+
+      const perPage = await adapter.runPage({
+        source,
+        slug: "stopwatch" as PageSlug,
+        treeRoot: "/proj/.termcraft/design",
+        expectedFiles: [],
+        entryRelPath: "pages/stopwatch.tsx",
+        smoke: "skip",
+      });
+      const tree = await adapter.runTree({
+        files: new Map([["pages/stopwatch.tsx", source]]),
+        treePaths: ["pages/stopwatch.tsx"],
+        pages: [page("stopwatch", "pages/stopwatch.tsx")],
+      });
+
+      // Each call independently reports the SAME entry's warning exactly ONCE in its OWN list —
+      // `runGate`'s per-page lint (unchanged, Task 4's territory) and `runTree`'s new
+      // closure-wide lint (this task) both see the identical source, and neither call's result
+      // contains a second copy of the OTHER call's finding.
+      const perPageTimers = perPage.warnings.filter((w) => w.kind === "nondeterministic-time");
+      const treeTimers = tree.warnings.filter((w) => w.kind === "nondeterministic-time");
+      expect(perPageTimers).toHaveLength(1);
+      expect(treeTimers).toHaveLength(1);
+      // `runPage`'s own warning carries no `blockedPages` — no method other than `runTree`
+      // populates it (`GateWarningV1.blockedPages`'s own doc).
+      expect(perPageTimers[0]?.blockedPages).toBeUndefined();
+      // `runTree`'s DOES, naming the page itself: it is a member of its own closure.
+      expect(treeTimers[0]?.blockedPages).toEqual(["stopwatch"] as PageSlug[]);
+    });
+
+    test("silencing-any is linted across the closure too", async () => {
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const files = new Map([
+        ["pages/a.tsx", `import { ctx } from "../lib/shared"\n${NO_WARNINGS}`],
+        ["pages/b.tsx", `import { ctx } from "../lib/shared"\n${NO_WARNINGS}`],
+        ["lib/shared.ts", `export const ctx: any = {}`],
+      ]);
+      const treePaths = ["pages/a.tsx", "pages/b.tsx", "lib/shared.ts"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("a", "pages/a.tsx"), page("b", "pages/b.tsx")],
+      });
+
+      const anys = result.warnings.filter((w) => w.kind === "silencing-any");
+      expect(anys).toHaveLength(1);
+      expect(anys[0]?.file).toBe("lib/shared.ts");
+      expect(anys[0]?.blockedPages).toEqual(["a", "b"] as PageSlug[]);
+    });
+
+    test("an unscannable file produces no second, redundant determinism warning", async () => {
+      // Same measured shape this file's header (`DEEP_JSX_NESTING`) and the closure-invariant
+      // harness's own `UNSCANNABLE` row already use to defeat the JSX reader: 32 000 reps of
+      // `"<a>{"`, read as JSX (a `.tsx` entry), throws `JsxNestingTooDeepError` past the
+      // 64-level ceiling. `lintFileDeterminism` shares `tokenize` with the flat allowlist scan,
+      // so the SAME file that scan already flagged `UNSCANNABLE_SOURCE` for hits the identical
+      // throw here. This pins the honest-omission branch: the fatal from the flat scan is still
+      // there, but no determinism warning is manufactured on top of it, and the throw does not
+      // escape and crash `runTree`.
+      const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+      const UNSCANNABLE = "<a>{".repeat(32000);
+      const files = new Map([["pages/home.tsx", UNSCANNABLE]]);
+      const treePaths = ["pages/home.tsx"];
+
+      const result = await adapter.runTree({
+        files,
+        treePaths,
+        pages: [page("home", "pages/home.tsx")],
+      });
+
+      expect(
+        result.errors.some((e) => e.file === "pages/home.tsx" && e.code === "UNSCANNABLE_SOURCE"),
+      ).toBe(true);
+      expect(result.warnings.filter((w) => w.file === "pages/home.tsx")).toEqual([]);
+    });
+  });
+
   test("runPage() surfaces a failed smoke render as a smoke-kind error", async () => {
     const adapter = createGateRunnerAdapter({
       smokeRenderer: fakeSmokeRenderer({
