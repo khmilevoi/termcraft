@@ -1489,11 +1489,11 @@ describe("runTurn — session fallback on a rejected resume (design-agent-feedba
     });
   });
 
-  test("the fallback does not consume a Gate retry's attempt budget", async () => {
+  test("the fallback does not advance the LOCAL Gate-retry counter — but the fence's own hard cap is still spent (only 2 real Gate retries remain, not 3; review round 2, finding 2 corrects this test's own prior claim)", async () => {
     await context.start(async () => {
       const h = harness();
-      // The fallback's own fresh-session re-run (attempt 2 of the fence, but see below) gets
-      // Gate-rejected once, then passes.
+      // The fallback's own fresh-session re-run (fence attempt #2) gets Gate-rejected once, then
+      // passes.
       h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT);
       h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
       const runPromise = wrap(runTurn(h.deps, inputWithResumePlan()));
@@ -1516,8 +1516,18 @@ describe("runTurn — session fallback on a rejected resume (design-agent-feedba
       // driver's LOCAL `attempt` counter, deliberately left unchanged by the session fallback
       // (run-turn.ts's own comment at the fallback call site) — so the fallback's re-run is
       // labelled attempt "1" again, not "2", and its own Gate rejection produces nextAttempt
-      // "2", not "3". A Gate rejection AFTER the fallback still has the full 3-retry budget the
-      // author would have had if the resume had never been rejected at all.
+      // "2", not "3".
+      //
+      // CORRECTED (review round 2, finding 2): this does NOT mean "the full 3-retry budget
+      // survives the fallback", as an earlier version of this comment claimed. The `TurnFence`'s
+      // own independent hard cap (`fence.ts`, `MAX_TURN_ATTEMPTS = 4`) is spent on EVERY
+      // `startTurnAttempt` call regardless of this local counter — the rejected resume (fence
+      // use #1) plus this fallback's own re-run (fence use #2) have already consumed two of the
+      // four total slots before a SINGLE real Gate retry has run. A chat whose resume gets
+      // rejected has only 2 real Gate retries left after this point, not 3 — see
+      // `run-turn.ts`'s own comment at the fallback call site for the confirmed, accepted cost,
+      // and `run-turn.test.ts`'s "a fence exhaustion after a session fallback..." test below for
+      // the exhaustion this produces.
       expect(h.foldCalls.length).toBe(1);
       expect(h.foldCalls[0]?.rejectedAttempt).toBe(1);
       expect(h.foldCalls[0]?.nextAttempt).toBe(2);
@@ -1641,6 +1651,57 @@ describe("runTurn — session fallback on a rejected resume (design-agent-feedba
       expect(h.startedTasks[2]?.userMessage).toBe(
         `${input.baseTask.userMessage}\n\n${foldedDiagnostics}`,
       );
+    });
+  });
+
+  test("an ORDINARY cross-turn resume's chat-transcript promptDelta is NOT appended when its resume is rejected — only a Gate fold is preserved (review round 2, finding 1)", async () => {
+    // The task's own headline scenario: turn 2 of a chat tries to resume turn 1's session, and
+    // the checkpoint-derived `promptDelta` is a rendered CHAT TRANSCRIPT
+    // (`store/adapters/session-checkpoint.ts`'s `renderPromptDelta`), never a Gate diagnostic.
+    // `fallbackToFreshSession` already reconstructs the same recent history into the fresh
+    // attempt's own seed — appending the transcript delta too would duplicate that history AND
+    // bury the user's actual current message under a stale "User: ..." line from the transcript.
+    // Round 1's fix (unconditional append) regressed exactly this scenario; this pins the fix.
+    await context.start(async () => {
+      const h = harness();
+      const base = baseRunTurnInput();
+      const transcriptDelta =
+        "User: what about the header color?\n\nAgent: I changed it to blue.";
+      const input: RunTurnInputV1 = {
+        ...base,
+        baseTask: {
+          ...base.baseTask,
+          session: { kind: "resume", sessionId: "prior-s", promptDelta: transcriptDelta },
+        },
+      };
+      const runPromise = wrap(runTurn(h.deps, input));
+
+      await waitForStartCount(h, 1);
+      // The backend rejects this cross-turn resume — never touched by any Gate-retry branch, so
+      // `sessionPromptDeltaIsGateFold` is still `false` (its initial value).
+      completeAttempt(h, 1, {
+        kind: "backend-error",
+        message: "No conversation found with session ID: prior-s",
+        sessionId: null,
+        cause: "resume-rejected",
+      });
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2)); // the fallback's own fresh attempt, passes Gate
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("committed");
+
+      const secondSession = h.startedTasks[1]?.session;
+      if (secondSession?.kind !== "fresh") throw new Error("expected a fresh session plan");
+      // The transcript delta is GONE from userMessage — not appended, not partially present —
+      // and the current message is exactly what the turn's own caller supplied, never buried
+      // under stale history.
+      expect(h.startedTasks[1]?.userMessage).toBe(input.baseTask.userMessage);
+      expect(h.startedTasks[1]?.userMessage).not.toContain("what about the header color");
+      expect(h.startedTasks[1]?.userMessage).not.toContain("I changed it to blue");
     });
   });
 

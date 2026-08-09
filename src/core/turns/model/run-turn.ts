@@ -388,6 +388,35 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
    */
   let session = input.baseTask.session;
   /**
+   * REVIEW ROUND 2, FINDING 1. Whether `session`'s CURRENT `promptDelta` (when it has one) is a
+   * Gate-retry diagnostic fold (Task 8's own shape, built from `foldGateDiagnosticsIntoPrompt`)
+   * as opposed to an ORDINARY cross-turn resume's rendered chat-transcript delta
+   * (`store/adapters/session-checkpoint.ts`'s `renderPromptDelta`, reached via
+   * `evaluateSessionPlan` before this driver ever runs, or `input.baseTask.session` itself).
+   * The two look identical as bare strings — this is deliberately NOT inferred by inspecting
+   * `promptDelta`'s text, which is exactly the kind of guess CLAUDE.md's "never invent a value"
+   * rule and this file's own append-only conventions both forbid; it is tracked explicitly, the
+   * same pattern `session`/`userMessage`/`sessionFallbackUsed` already use.
+   *
+   * WHY THE DISTINCTION MATTERS: the session-fallback branch below folds a REJECTED resume's
+   * `promptDelta` onto the fresh attempt's `userMessage` so a Gate-retry's diagnostics are never
+   * silently lost (round 1, finding 1) — but doing that UNCONDITIONALLY is wrong for an ordinary
+   * cross-turn resume's transcript delta: `fallbackToFreshSession` ALREADY reconstructs recent
+   * history into the fresh attempt's own `seed`, so appending the SAME history again as raw
+   * transcript text would duplicate it in two different renderings AND bury the user's actual
+   * current message under a stale `"User: <the previous turn's message>"` line the agent could
+   * answer instead of the real request. Only a genuine Gate-fold promptDelta is worth preserving
+   * outside the seed; an ordinary transcript delta is not — the fresh seed already covers it.
+   *
+   * Starts `false`: `input.baseTask.session`'s own `promptDelta`, if any, is `evaluateSessionPlan`'s
+   * transcript, never a Gate fold (Gate has not run yet on attempt 1). Set `true` at every point
+   * this driver folds Gate diagnostics INTO `session.promptDelta` (the primary Gate-retry branch,
+   * and the defensive branch's own "append onto an existing promptDelta" case); reset `false`
+   * whenever `session` is reassigned to something that carries no Gate-fold content (the
+   * fallback's own fresh plan).
+   */
+  let sessionPromptDeltaIsGateFold = false;
+  /**
    * The most recently frozen candidate's own root, across every attempt this turn has run so
    * far — hoisted above the retry loop (review finding #4) instead of being declared fresh
    * inside it, precisely so a retry's own abandonment (see `terminalize`'s own doc just
@@ -519,12 +548,21 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       //
       // NOT A GATE RETRY: `attempt` is deliberately left UNCHANGED here, unlike the Gate-retry
       // branch below (which advances it to `validation.nextAttempt`). This is a pure backend
-      // fault, not a Gate rejection of the candidate — spending one of the Gate's own 3 real
-      // retries on it would cut the author's actual retry budget to 2 for a failure they did
-      // nothing to cause. (The underlying `TurnFence`'s own hard `MAX_TURN_ATTEMPTS` ceiling
-      // still counts this retry regardless — every `startTurnAttempt` call mints a lease via
-      // `fence.beginAttempt()` independent of this driver's own `attempt` variable — but that
-      // ceiling is a separate, harder budget this task does not relax.)
+      // fault, not a Gate rejection of the candidate, so it does not advance the driver's own
+      // local Gate-retry counter.
+      //
+      // REVIEW ROUND 2, FINDING 2 (CORRECTING ROUND 1's OWN COMMENT, which claimed the Gate's
+      // full 3-retry budget survives a fallback — confirmed false): the `TurnFence`'s hard
+      // `MAX_TURN_ATTEMPTS` ceiling still counts THIS retry regardless — every `startTurnAttempt`
+      // call mints a lease via `fence.beginAttempt()` independent of this driver's own `attempt`
+      // variable — and that fence ceiling is SHARED between session fallbacks and Gate retries,
+      // never reconciled with the local counter this task leaves untouched. The concrete,
+      // confirmed cost: A CHAT WHOSE RESUME GETS REJECTED HAS ONLY 2 REAL GATE RETRIES LEFT, NOT
+      // 3, because the fallback already spent one of the fence's four total slots. The fence
+      // exhaustion this produces is reported honestly as `GATE_RETRY_EXHAUSTED` (see the
+      // `started instanceof Error` branch above), never silently as a generic
+      // `PERSISTENCE_FAILED` — but the lost retry itself is an accepted, documented cost of NOT
+      // reconciling the two counters, not something this task fixes.
       //
       // Checked and attempted BEFORE `bridge("beginTerminalization")`: that transition is
       // terminal for this loop (a later `startTurnAttempt` would find the machine no longer
@@ -569,16 +607,31 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
           // accumulated Gate diagnostics in its `promptDelta` — and reassigning `session` to the
           // fresh plan without capturing them first would silently discard exactly the
           // information the fresh attempt most needs to avoid reproducing the same invalid
-          // candidate. This is the identical class of bug the defensive branch below (`session`'s
-          // own "DO NOT simplify" comment) already guards against for a different edge — folding
-          // here the same way, via the same append-only `appendPromptFold` convention, rather than
-          // silently starting the fresh attempt with none of what Gate already found wrong.
+          // candidate.
+          //
+          // REVIEW ROUND 2, FINDING 1 (CORRECTING ROUND 1's OWN FIX, which was too broad): a
+          // non-null `promptDelta` is NOT always a Gate fold. An ORDINARY cross-turn resume's
+          // `promptDelta` is a rendered CHAT TRANSCRIPT
+          // (`store/adapters/session-checkpoint.ts`'s `renderPromptDelta`) — and
+          // `fallbackToFreshSession` ALREADY reconstructs that same recent history into the fresh
+          // attempt's own `seed`. Appending the transcript here TOO would duplicate history across
+          // two different renderings and bury the user's actual current message under a stale
+          // `"User: <the previous turn's message>"` line the agent could answer instead of the
+          // real request — a regression round 1 introduced on the task's own headline scenario.
+          // `sessionPromptDeltaIsGateFold` (hoisted above the loop) is the explicit, non-inferred
+          // discriminator: only fold when this driver itself put Gate diagnostics into
+          // `session.promptDelta`; an ordinary transcript delta is discarded here and left to the
+          // fresh seed, exactly as round 0's original (pre-round-1) behavior already did for it.
           const rejectedSession = session;
           session = fallback;
           userMessage =
-            rejectedSession.kind === "resume" && rejectedSession.promptDelta !== null
+            rejectedSession.kind === "resume" &&
+            rejectedSession.promptDelta !== null &&
+            sessionPromptDeltaIsGateFold
               ? appendPromptFold(input.baseTask.userMessage, rejectedSession.promptDelta)
               : input.baseTask.userMessage;
+          // The fresh plan carries no `promptDelta` at all — nothing left to call a Gate fold.
+          sessionPromptDeltaIsGateFold = false;
           continue;
         }
         // The fallback itself could not build a fresh-session plan (a `selectSeed` failure) —
@@ -708,6 +761,9 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
         session = { kind: "resume", sessionId: outcome.sessionId, promptDelta: folded };
         userMessage = input.baseTask.userMessage;
         attempt = validation.nextAttempt;
+        // This `promptDelta` IS a Gate-retry diagnostic fold — see `sessionPromptDeltaIsGateFold`'s
+        // own doc comment above.
+        sessionPromptDeltaIsGateFold = true;
         continue;
       }
 
@@ -742,6 +798,9 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       if (session.kind === "resume" && session.promptDelta !== null) {
         session = { ...session, promptDelta: appendPromptFold(session.promptDelta, folded) };
         userMessage = input.baseTask.userMessage;
+        // The resulting `promptDelta` now carries Gate-fold content (appended onto whatever it
+        // held before, transcript or fold alike) — see `sessionPromptDeltaIsGateFold`'s own doc.
+        sessionPromptDeltaIsGateFold = true;
       } else {
         userMessage = appendPromptFold(input.baseTask.userMessage, folded);
       }

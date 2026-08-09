@@ -407,8 +407,16 @@ import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
  *     (e.g. `undefined`, or a `CommandRejectionCode` from the disjoint command-rejection
  *     vocabulary such as `"TURN_ALREADY_ACTIVE"`) still falls back to the generic
  *     `PERSISTENCE_FAILED` bucket exactly as before — nothing invented for causes this
- *     composition genuinely cannot distinguish (the attempt-budget/deadline/gate-fold-error
- *     call sites, none of which pass a typed `reason` today). `"unrecorded"`'s REAL
+ *     composition genuinely cannot distinguish (the deadline/gate-fold-error call sites, none
+ *     of which pass a typed `reason` today). CORRECTED (design-agent-feedback-loop repair Task
+ *     9, review round 2, minor finding): the attempt-budget/fence-rejection call site
+ *     (`started instanceof Error` in `run-turn.ts`'s retry loop) used to belong on this
+ *     untyped list too, but no longer does — that branch is reachable ONLY after a session
+ *     fallback already fired this turn (without one, the driver's own local attempt counter
+ *     refuses a 5th attempt before the fence ever would), and Task 9 made it pass
+ *     `"GATE_RETRY_EXHAUSTED"` in exactly that case, since every reachable path there is the
+ *     Gate rejecting the candidate until the fence's independent hard cap — not the driver's
+ *     own local count — ran dry. `"unrecorded"`'s REAL
  *     adapter-level `FailureDtoV1` still wins outright over the echoed reason: that failure
  *     describes something more specific (the append itself broke) than why the turn
  *     terminalized in the first place.
