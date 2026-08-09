@@ -77,6 +77,21 @@ export interface FencedEvent {
 }
 
 /**
+ * Why a backend error happened, when the backend can say. `"resume-rejected"` is the one case
+ * the turn driver ACTS on: the vendor refused to resume the session the checkpoint proposed, so
+ * the turn is recoverable on a fresh session rather than terminal
+ * (`core/turns/model/session-plan.ts`'s `fallbackToFreshSession`, storage-identity §6.2's
+ * "…or an SDK resume rejection is a mismatch").
+ *
+ * CLASSIFIED IN THE ADAPTER, NEVER IN THE DRIVER. Only the vendor tier knows the SDK's error
+ * shape; `core` matching on an English message would break the moment the vendor rewords it,
+ * and would misfire on a user's page containing the same words. `null` means "the backend did
+ * not classify this", which is the honest default and is treated exactly as today's untyped
+ * failure is.
+ */
+export type BackendErrorCause = "resume-rejected" | null;
+
+/**
  * One attempt's terminal outcome. Resolves only after the event stream closes
  * and (for cancel) confirmed process-tree exit (§6.4–6.5). Never a thrown
  * error — errors are values. `sessionId` is the backend's opaque session id the
@@ -89,7 +104,12 @@ export type AgentRunOutcome =
       readonly usage: TokenUsage | null;
       readonly sessionId: string;
     }
-  | { readonly kind: "backend-error"; readonly message: string; readonly sessionId: string | null }
+  | {
+      readonly kind: "backend-error";
+      readonly message: string;
+      readonly sessionId: string | null;
+      readonly cause: BackendErrorCause;
+    }
   | { readonly kind: "cancelled"; readonly exitConfirmed: true }
   | { readonly kind: "unconfirmed-exit" };
 

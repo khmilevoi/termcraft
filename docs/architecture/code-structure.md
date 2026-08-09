@@ -464,7 +464,9 @@ vendor tier's own pre-split run-loop file.
   message vocabulary — delegating the deadline/close/ambiguity policy to the shared
   `agent/health`
 - `src/agent/claude/backend/model/capabilities.ts` — `claudeCapabilities`, the MVP
-  model catalog and the `sessionWorkspaceBinding: "rebindable"` declaration
+  model catalog and the `sessionWorkspaceBinding: "fixed"` declaration (corrected from
+  "rebindable" — spike 12 measured that a resumed session does not survive a turn-workspace
+  change; the flag itself has no production reader, so this is an honesty fix)
 - `src/agent/claude/tools/model/vocabulary.ts` — `CLAUDE_TOOLS`, the vendor half of
   the confinement split: the single table Claude's own tool names, path rules, and
   denials all now derive from (collapsing the five separate tables its pre-split
@@ -490,7 +492,14 @@ vendor tier's own pre-split run-loop file.
 - `src/agent/claude/run/model/drive-stream.ts` — `createClaudeDriver`: the vendor
   stream reader — reads `SDKMessage`s, normalizes them, and claims the natural
   outcome; the terminal latch, queue, and exit confirmation now belong to the shared
-  `agent/run/model/engine.ts`, not this file
+  `agent/run/model/engine.ts`, not this file. A non-success `result` message is
+  classified (`classify-backend-error.ts`) before the outcome is claimed — the SDK
+  yields that message BEFORE a later throw, and the throw itself carries nothing
+  usable, so this is the one point the classifier can read structured fields from
+- `src/agent/claude/run/model/classify-backend-error.ts` — `classifyBackendErrorCause`:
+  the SDK's resume-rejection classifier, on structural `result`-message fields
+  (`is_error`, `num_turns`, `errors[]`) gated first on this run's own `SessionPlan.kind
+  === "resume"`, never on the vendor's English sentence alone
 - `src/agent/claude/run/model/normalize.ts` — vendor messages into `AgentEvent`s
   (reasoning, tool, tool-failed, final, error, usage), dropping anything with no
   mapping; the tool-failure kind is read off a vendor `user` message's error-marked

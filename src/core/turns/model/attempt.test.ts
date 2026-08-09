@@ -390,11 +390,40 @@ describe("startTurnAttempt — workspace-ready -> running -> stopping", () => {
         kind: "backend-error",
         message: "boom",
         sessionId: "s1",
+        cause: null,
       });
       const outcome: TurnAttemptOutcomeV1 = await wrap(handle.outcome);
 
-      expect(outcome).toEqual({ kind: "failed", message: "boom", sessionId: "s1" });
+      expect(outcome).toEqual({ kind: "failed", message: "boom", sessionId: "s1", cause: null });
       expect(h.machine.phase()).toBe("stopping");
+    });
+  });
+
+  test("backend-error's classified cause propagates through to the failed outcome unchanged", async () => {
+    // `toAttemptOutcome` (attempt.ts) must carry `AgentRunOutcome.backend-error.cause`
+    // straight onto `TurnAttemptOutcomeV1.failed.cause` — this is the ONLY place that
+    // conversion happens, and `run-turn.ts`'s session-fallback wiring depends on it reaching
+    // that far (design-agent-feedback-loop repair, Task 9).
+    await context.start(async () => {
+      const h = harness();
+      const handle = begin(h.deps, h.fence);
+      const lease = h.fence.currentLease();
+      if (lease === null) throw new Error("expected a live lease");
+
+      h.agentBackend.completeRun(lease, {
+        kind: "backend-error",
+        message: "No conversation found with session ID: abc",
+        sessionId: null,
+        cause: "resume-rejected",
+      });
+      const outcome: TurnAttemptOutcomeV1 = await wrap(handle.outcome);
+
+      expect(outcome).toEqual({
+        kind: "failed",
+        message: "No conversation found with session ID: abc",
+        sessionId: null,
+        cause: "resume-rejected",
+      });
     });
   });
 

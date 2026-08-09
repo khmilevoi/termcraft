@@ -27,7 +27,7 @@ test("AgentTask carries workspace, fence, model, effort, and a session plan", ()
 test("AgentRunOutcome discriminates the four terminal shapes", () => {
   const outcomes: AgentRunOutcome[] = [
     { kind: "completed", finalText: "done", usage: null, sessionId: "sess-1" },
-    { kind: "backend-error", message: "auth failed", sessionId: null },
+    { kind: "backend-error", message: "auth failed", sessionId: null, cause: null },
     { kind: "cancelled", exitConfirmed: true },
     { kind: "unconfirmed-exit" },
   ];

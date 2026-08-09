@@ -13,11 +13,13 @@ import type {
 import {
   type FakeAgentBackend,
   type FakeGateRunner,
+  type FakeSessionCheckpointService,
   type FakeStagingService,
   type FakeTurnTransactionService,
   createFakeAgentBackend,
   createFakeGateRunner,
   createFakePinStore,
+  createFakeSessionCheckpointService,
   createFakeStagingService,
   createFakeTurnTransactionService,
 } from "core/ports/fakes";
@@ -204,6 +206,7 @@ interface Harness {
   readonly staging: FakeStagingService;
   readonly agentBackend: FakeAgentBackend;
   readonly gateRunner: FakeGateRunner;
+  readonly sessionCheckpoint: FakeSessionCheckpointService;
   readonly startedTasks: readonly (Omit<AgentTask, "fence"> & { readonly fence: unknown })[];
   readonly foldCalls: readonly TurnGateFoldInputV1[];
 }
@@ -212,11 +215,15 @@ interface Harness {
  * Fresh fakes + a fresh turn machine per test — never shared across tests (matching every
  * sibling harness in this directory). `deadlines` defaults to the real `createTurnDeadlines`
  * bound to `clock`; the hardening tests below override it with `scriptedDeadlines` to drive
- * `check()` directly instead of through elapsed clock time.
+ * `check()` directly instead of through elapsed clock time. `sessionCheckpoint` defaults to an
+ * empty fake — only `RunTurnDeps.sessionCheckpoint`'s own consumer, `fallbackToFreshSession`
+ * (design-agent-feedback-loop repair, Task 9), ever reads it; every test that does not classify
+ * a resume rejection never touches it at all.
  */
 function harness(
   clock: Clock = manualClock(T0),
   deadlines: TurnDeadlines = createTurnDeadlines({ clock }),
+  sessionCheckpoint: FakeSessionCheckpointService = createFakeSessionCheckpointService(),
 ): Harness {
   const machine = reatomTurnStateMachine();
   // `runTurn` (`run-turn.ts`) calls `runAdmission` directly and applies no transition of its
@@ -277,11 +284,21 @@ function harness(
     agentBackend,
     gateRunner,
     deadlines,
+    sessionCheckpoint,
     publish: (event) => published.push(event),
     foldGateDiagnosticsIntoPrompt: foldSpy,
   };
 
-  return { deps, turnTransactions, staging, agentBackend, gateRunner, startedTasks, foldCalls };
+  return {
+    deps,
+    turnTransactions,
+    staging,
+    agentBackend,
+    gateRunner,
+    sessionCheckpoint,
+    startedTasks,
+    foldCalls,
+  };
 }
 
 /** Drains the microtask queue until the Nth `startTurn` call has landed — see this file's header. */
@@ -572,6 +589,11 @@ describe("runTurn — admission -> attempt/freeze/validate retry loop -> finaliz
         kind: "backend-error",
         message: "the backend crashed",
         sessionId: null,
+        // Fences this test as "an ordinary backend error still terminalizes as BACKEND_FAILED"
+        // (design-agent-feedback-loop repair, Task 9) — an UNCLASSIFIED failure must never route
+        // through the session fallback; the dedicated describe block below covers the classified
+        // "resume-rejected" branch this `cause: null` deliberately does not exercise.
+        cause: null,
       });
 
       const result = await wrap(runPromise);
@@ -1371,6 +1393,198 @@ describe("runTurn — candidate retirement is wired through the COMPOSED driver,
       if (capturedCandidateRoot === null)
         throw new Error("expected buildValidationInput to have captured a candidate root");
       expect(retireCall.root).toBe(capturedCandidateRoot);
+    });
+  });
+});
+
+describe("runTurn — session fallback on a rejected resume (design-agent-feedback-loop repair, Task 9)", () => {
+  // Measured: turn 2 terminalized `BACKEND_FAILED: No conversation found with session ID:
+  // 28b861a5`; the user abandoned the chat and retyped the message into a new one within 20
+  // seconds. `fallbackToFreshSession` (`./session-plan.ts`) already existed, tested, with no
+  // production caller (`docs/mvp-remaining-work.md`'s own row, closed by this task) — these
+  // tests pin the wiring that finally calls it.
+  //
+  // `outcome.cause === "resume-rejected"` is driven directly on the fake `AgentRunOutcome`
+  // below, exactly like every other outcome-branch test in this file (test (f) above, the
+  // Gate-retry describe block) — `run-turn.ts` never re-derives the classification itself, it
+  // only reacts to it, so these tests do not need a real Claude SDK shape to drive from. The
+  // classifier's OWN conjunction (spike 12's four structural conditions) is covered end to end
+  // in `agent/claude/run/model/classify-backend-error.test.ts` and
+  // `agent/claude/run/model/drive-stream.test.ts`.
+
+  const RESUME_REJECTED_OUTCOME: AgentRunOutcome = {
+    kind: "backend-error",
+    message: "No conversation found with session ID: prior-s",
+    sessionId: null,
+    cause: "resume-rejected",
+  };
+
+  /** attempt 1's own plan: a resume of a prior turn's session — the only shape a real backend can reject as "resume-rejected" (the classifier's own guard 1). */
+  function inputWithResumePlan(): RunTurnInputV1 {
+    const base = baseRunTurnInput();
+    return {
+      ...base,
+      baseTask: {
+        ...base.baseTask,
+        session: { kind: "resume", sessionId: "prior-s", promptDelta: null },
+      },
+    };
+  }
+
+  test("a rejected resume produces a completed turn on a fresh session", async () => {
+    await context.start(async () => {
+      const seeds = new Map([["chat-1", [{ role: "agent" as const, text: "prior reply" }]]]);
+      const h = harness(manualClock(T0), undefined, createFakeSessionCheckpointService({ seeds }));
+      const runPromise = wrap(runTurn(h.deps, inputWithResumePlan()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, RESUME_REJECTED_OUTCOME);
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      const result = await wrap(runPromise);
+      // Today this terminalizes as BACKEND_FAILED (the defect this task fixes) — a fresh
+      // second attempt actually running and finalizing is the behavior under test.
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("committed");
+
+      expect(h.startedTasks.length).toBe(2);
+      expect(h.startedTasks[0]?.session).toEqual({
+        kind: "resume",
+        sessionId: "prior-s",
+        promptDelta: null,
+      });
+      const secondSession = h.startedTasks[1]?.session;
+      if (secondSession?.kind !== "fresh") throw new Error("expected a fresh session plan");
+      expect(secondSession.seed).toEqual([{ role: "agent", text: "prior reply" }]);
+      // The turn's own original message is sent again, as a fresh first message — never a
+      // resume prompt delta, since the second attempt is not a resume.
+      expect(h.startedTasks[1]?.userMessage).toBe(inputWithResumePlan().baseTask.userMessage);
+    });
+  });
+
+  test("the fallback happens ONCE; a second rejection terminalizes", async () => {
+    await context.start(async () => {
+      const h = harness();
+      const runPromise = wrap(runTurn(h.deps, inputWithResumePlan()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, RESUME_REJECTED_OUTCOME);
+
+      await waitForStartCount(h, 2);
+      // The fallback's own fresh-session re-run is ALSO reported "resume-rejected" here —
+      // unrealistic for a real backend (a fresh-session run cannot be classified that way, per
+      // the classifier's own guard 1), but this test drives it directly to pin the DRIVER's
+      // own loop guard (`sessionFallbackUsed`), independent of that classifier guarantee.
+      completeAttempt(h, 2, RESUME_REJECTED_OUTCOME);
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("recorded");
+      // No third attempt: the second rejection terminalized instead of falling back again.
+      expect(h.startedTasks.length).toBe(2);
+    });
+  });
+
+  test("the fallback does not consume a Gate retry's attempt budget", async () => {
+    await context.start(async () => {
+      const h = harness();
+      // The fallback's own fresh-session re-run (attempt 2 of the fence, but see below) gets
+      // Gate-rejected once, then passes.
+      h.gateRunner.queueRunPageResult(FAILING_PAGE_RESULT);
+      h.gateRunner.queueRunPageResult(PASSING_PAGE_RESULT);
+      const runPromise = wrap(runTurn(h.deps, inputWithResumePlan()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, RESUME_REJECTED_OUTCOME); // the rejected resume
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2)); // the fallback's own fresh-session re-run
+
+      await waitForStartCount(h, 3);
+      completeAttempt(h, 3, completedOutcome(3)); // the Gate-triggered retry of attempt 2
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+      expect(result.result.kind).toBe("committed");
+
+      // The Gate-retry fold's own `rejectedAttempt`/`nextAttempt` labels are driven by this
+      // driver's LOCAL `attempt` counter, deliberately left unchanged by the session fallback
+      // (run-turn.ts's own comment at the fallback call site) — so the fallback's re-run is
+      // labelled attempt "1" again, not "2", and its own Gate rejection produces nextAttempt
+      // "2", not "3". A Gate rejection AFTER the fallback still has the full 3-retry budget the
+      // author would have had if the resume had never been rejected at all.
+      expect(h.foldCalls.length).toBe(1);
+      expect(h.foldCalls[0]?.rejectedAttempt).toBe(1);
+      expect(h.foldCalls[0]?.nextAttempt).toBe(2);
+    });
+  });
+
+  test("the fallback notes itself on the deadlines and does not reset the absolute bound", async () => {
+    await context.start(async () => {
+      const clock = manualClock(T0);
+      // Wraps the REAL `createTurnDeadlines` (not a no-op fake) so `noteSessionFallback()`
+      // actually runs its production body (`deadlines.ts`'s `markActivity`) — proving this
+      // driver's wiring reaches the real port, not merely that some closure was called.
+      let noteSessionFallbackCalls = 0;
+      const real = createTurnDeadlines({ clock });
+      const deadlines: TurnDeadlines = {
+        ...real,
+        noteSessionFallback: () => {
+          noteSessionFallbackCalls += 1;
+          real.noteSessionFallback();
+        },
+      };
+      const absoluteBefore = deadlines.absoluteDeadlineAt();
+
+      const h = harness(clock, deadlines);
+      const runPromise = wrap(runTurn(h.deps, inputWithResumePlan()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, RESUME_REJECTED_OUTCOME);
+
+      await waitForStartCount(h, 2);
+      completeAttempt(h, 2, completedOutcome(2));
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "finalized")
+        throw new Error(`expected finalized, got ${JSON.stringify(result)}`);
+
+      expect(noteSessionFallbackCalls).toBe(1);
+      // Non-resettable (`deadlines.ts`'s own header: "the absolute bound... is the ONLY thing
+      // standing between that and a runaway turn"): a session fallback is turn activity, but it
+      // must never buy the turn extra absolute lifetime.
+      expect(deadlines.absoluteDeadlineAt()).toBe(absoluteBefore);
+    });
+  });
+
+  test("a fallback that cannot select a seed terminalizes on that failure, not the original resume rejection", async () => {
+    await context.start(async () => {
+      const h = harness();
+      const SEED_FAILURE: FailureDtoV1 = {
+        code: "PERSISTENCE_FAILED",
+        retryable: false,
+        safeMessage: "could not read the chat's history for a fresh seed",
+        details: {},
+      };
+      h.sessionCheckpoint.failNext("selectSeed", SEED_FAILURE);
+      const runPromise = wrap(runTurn(h.deps, inputWithResumePlan()));
+
+      await waitForStartCount(h, 1);
+      completeAttempt(h, 1, RESUME_REJECTED_OUTCOME);
+
+      const result = await wrap(runPromise);
+      if (result.kind !== "terminalized")
+        throw new Error(`expected terminalized, got ${JSON.stringify(result)}`);
+      if (result.result.kind !== "recorded") throw new Error("expected recorded");
+      // The fallback's OWN failure reason, not the original "resume-rejected" message — that
+      // resume rejection is not why this turn ultimately failed.
+      expect(result.result.reason).toBe("PERSISTENCE_FAILED");
+      expect(h.startedTasks.length).toBe(1); // the fallback never reached a second attempt
     });
   });
 });

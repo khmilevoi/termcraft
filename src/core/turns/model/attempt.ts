@@ -2,7 +2,13 @@ import { wrap } from "@reatom/core";
 
 import type { StateMachine, TurnAction, TurnState } from "core/machines";
 import type { PublishableEventV1, TurnBackendLeaseV1 } from "core/mailbox";
-import type { AgentBackend, AgentRunOutcome, AgentTask, FencedEvent } from "core/ports";
+import type {
+  AgentBackend,
+  AgentRunOutcome,
+  AgentTask,
+  BackendErrorCause,
+  FencedEvent,
+} from "core/ports";
 import type { CommandRejectionCode, EventPayloadByKindV1 } from "core/protocol";
 import type { TokenUsage } from "entities/turn";
 import { trace } from "infrastructure/debug-log";
@@ -64,7 +70,13 @@ export type TurnAttemptOutcomeV1 =
       readonly usage: TokenUsage | null;
       readonly sessionId: string;
     }
-  | { readonly kind: "failed"; readonly message: string; readonly sessionId: string | null }
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly sessionId: string | null;
+      /** Carried straight from `AgentRunOutcome`'s `backend-error.cause` — see that type's doc. */
+      readonly cause: BackendErrorCause;
+    }
   | { readonly kind: "cancelled" }
   | { readonly kind: "backend-unhealthy" };
 
@@ -91,7 +103,7 @@ function toAttemptOutcome(raw: AgentRunOutcome): TurnAttemptOutcomeV1 {
       sessionId: raw.sessionId,
     };
   if (raw.kind === "backend-error")
-    return { kind: "failed", message: raw.message, sessionId: raw.sessionId };
+    return { kind: "failed", message: raw.message, sessionId: raw.sessionId, cause: raw.cause };
   if (raw.kind === "cancelled") return { kind: "cancelled" };
   return { kind: "backend-unhealthy" }; // AgentRunOutcome's remaining case, "unconfirmed-exit".
 }

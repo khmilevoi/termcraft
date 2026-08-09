@@ -1593,6 +1593,11 @@ async function runTurnStart(
     agentBackend: resolvedAgent.agentBackend,
     gateRunner: context.deps.gateRunner,
     deadlines: createTurnDeadlines({ clock: context.deps.clock }),
+    // `RunTurnDeps.sessionCheckpoint`'s own doc comment: needed only for
+    // `fallbackToFreshSession` on a classified resume rejection (design-agent-feedback-loop
+    // repair, Task 9) — the SAME port `evaluateSessionPlan` already reads, just above, to
+    // build attempt 1's own plan.
+    sessionCheckpoint: context.deps.sessionCheckpoint,
     publish,
     foldGateDiagnosticsIntoPrompt,
     onAttemptStarted: (handle) => context.turnRunner.setActiveAttempt(handle),

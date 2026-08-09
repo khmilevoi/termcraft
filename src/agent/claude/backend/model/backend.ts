@@ -88,7 +88,12 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
 
       const { run, cancel } = startAgentRun(
         task.fence,
-        createClaudeDriver({ queryFn: deps.queryFn, prompt: buildPrompt(task), options }),
+        createClaudeDriver({
+          queryFn: deps.queryFn,
+          prompt: buildPrompt(task),
+          options,
+          sessionKind: task.session.kind,
+        }),
         {
           processTree: tree,
           abortController,

@@ -6,7 +6,7 @@ test("the latch stays unset for every non-unconfirmed outcome", () => {
   const latch = createUnconfirmedExitLatch("claude");
   latch.noteOutcome({ kind: "completed", finalText: "x", usage: null, sessionId: "s" });
   latch.noteOutcome({ kind: "cancelled", exitConfirmed: true });
-  latch.noteOutcome({ kind: "backend-error", message: "m", sessionId: null });
+  latch.noteOutcome({ kind: "backend-error", message: "m", sessionId: null, cause: null });
   expect(latch.isLatched()).toBe(false);
 });
 

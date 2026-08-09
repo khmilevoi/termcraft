@@ -40,6 +40,7 @@ export type TurnAction =
   | "markBackendUnhealthy"
   | "candidateCaptured"
   | "retryAfterGate"
+  | "retryAfterSessionFallback"
   | "beginFinalization"
   | "markCommitted"
   | "settle"
@@ -58,6 +59,7 @@ export const TURN_ACTION_FULL_NAME: Readonly<Record<TurnAction, string>> = {
   markBackendUnhealthy: "kernel.turn.markBackendUnhealthy",
   candidateCaptured: "kernel.turn.candidateCaptured",
   retryAfterGate: "kernel.turn.retryAfterGate",
+  retryAfterSessionFallback: "kernel.turn.retryAfterSessionFallback",
   beginFinalization: "kernel.turn.beginFinalization",
   markCommitted: "kernel.turn.markCommitted",
   settle: "kernel.turn.settle",
@@ -114,6 +116,23 @@ export const TURN_TRANSITION_TABLE: TransitionTable<TurnState, TurnAction> = {
   ],
   // `stopping | markBackendUnhealthy | backend-unhealthy`
   markBackendUnhealthy: [{ from: "stopping", to: "backend-unhealthy" }],
+  // ADDED (design-agent-feedback-loop repair, Task 9) — kernel-command-contract §7.2's
+  // original table sent EVERY backend failure from `stopping` straight to `terminalizing`
+  // ("Used for confirmed cancellation or backend failure; no candidate is copied") because the
+  // spec predates a backend failure the turn can actually recover from. A resume the session
+  // checkpoint judged legitimate but the vendor rejected (`AgentRunOutcome.backend-error.cause
+  // === "resume-rejected"`, `agent/types.ts`) is exactly that case: `core/turns/model/
+  // session-plan.ts`'s `fallbackToFreshSession` builds a fresh-session plan for a genuine retry,
+  // not a terminal failure — but `attempt.ts`'s `finalizeOutcome` has already driven `running ->
+  // stopping` (`beginStopping`) unconditionally by the time `run-turn.ts` ever sees the failed
+  // outcome, and the ONLY pre-existing edge back to `workspace-ready` was `retryAfterGate`
+  // (`validating -> workspace-ready`), reachable only after a COMPLETED attempt's own
+  // freeze+validation — never after a `failed` one. Mirrors `retryAfterGate`'s own shape
+  // (a dedicated retry action, not a repurposed one) for the identical reason: a session
+  // fallback is not a Gate retry and must not share its name or its attempt-budget semantics
+  // (`run-turn.ts`'s own comment at the call site).
+  // `stopping | retryAfterSessionFallback | workspace-ready`
+  retryAfterSessionFallback: [{ from: "stopping", to: "workspace-ready" }],
   // `snapshotting | candidateCaptured | validating`
   candidateCaptured: [{ from: "snapshotting", to: "validating" }],
   // `validating | retryAfterGate | workspace-ready` — legal only while attempt < 4; see

@@ -305,6 +305,7 @@ const TURN_ACTION_FULL_NAMES_V1 = [
   "kernel.turn.markBackendUnhealthy",
   "kernel.turn.candidateCaptured",
   "kernel.turn.retryAfterGate",
+  "kernel.turn.retryAfterSessionFallback",
   "kernel.turn.beginFinalization",
   "kernel.turn.markCommitted",
   "kernel.turn.settle",

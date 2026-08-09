@@ -841,8 +841,17 @@ Added during the investigation, needs a decision before commit — see §6.
   `selection.changed`; they never write `context.setSelection`, so `context.selection()` stays
   `null` and every sent chat record carries an unpopulated `selection`. The admission read path
   is wired ahead of the handler write path (`docs/architecture/flows/pins-and-selection.md`).
-- **`fallbackToFreshSession` is unwired.** **[read]** Defined and tested, no production caller;
-  needs an `AgentRunOutcome` widening.
+- ~~**`fallbackToFreshSession` is unwired.** **[read]** Defined and tested, no production caller;
+  needs an `AgentRunOutcome` widening.~~
+  **CLOSED 2026-08-09, design-agent-feedback-loop repair Task 9.** The widening this row asked
+  for landed: `AgentRunOutcome`'s (and the lifted `core/ports` copy's, and
+  `TurnAttemptOutcomeV1`'s) `backend-error`/`failed` variant gained a closed
+  `BackendErrorCause = "resume-rejected" | null` field. `agent/claude/run/model/
+  classify-backend-error.ts` classifies a rejected resume in the ONE layer that knows the SDK's
+  error shape, on spike 12's four structural conditions (`SessionPlan.kind === "resume"`,
+  `is_error === true`, `num_turns === 0`, then the measured `errors[]` text) — never on the
+  vendor's English sentence alone. `core/turns/model/run-turn.ts` now calls
+  `fallbackToFreshSession` on a classified rejection, once per turn, before terminalizing.
 - **`account` is a documented `null` literal** rather than a fresh `healthCheck()` per master §9.
 - **The system prompt cannot carry per-page source metadata or the current selection** that
   master §6.2 lists — `AgentPromptContextV1` has no channel for either.

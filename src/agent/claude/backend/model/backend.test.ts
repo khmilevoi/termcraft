@@ -198,6 +198,7 @@ test(
         kind: "backend-error",
         message: "Process-tree failure: no Job Object support",
         sessionId: null,
+        cause: null,
       });
       expect(warnSpy).toHaveBeenCalled();
     } finally {
@@ -577,6 +578,7 @@ test(
         kind: "backend-error",
         message: "backend is unhealthy: a prior run's exit was never confirmed (§6.5)",
         sessionId: null,
+        cause: null,
       });
     } finally {
       warnSpy.mockRestore();

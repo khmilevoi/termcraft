@@ -1651,6 +1651,7 @@ describe('turnHandlers["turn.start"]', () => {
       kind: "backend-error",
       message: "the agent process crashed",
       sessionId: null,
+      cause: null,
     });
 
     const events = await runPromise;
@@ -1798,6 +1799,7 @@ describe('turnHandlers["turn.start"]', () => {
       kind: "backend-error",
       message: "the agent process crashed",
       sessionId: null,
+      cause: null,
     });
 
     const events = await runPromise;

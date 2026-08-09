@@ -51,7 +51,9 @@ function singleEventIterable(event: FencedEvent): AsyncIterable<FencedEvent> {
  * the fence, then a matching `backend-error` outcome.
  */
 export function createDegradedRun(fence: TurnFence, message: string): AgentRun {
-  const outcome: AgentRunOutcome = { kind: "backend-error", message, sessionId: null };
+  // Never classified: the run degraded before it ever reached the vendor stream, so there is
+  // no vendor-specific error shape for a classifier to have read.
+  const outcome: AgentRunOutcome = { kind: "backend-error", message, sessionId: null, cause: null };
   return {
     fence,
     events: singleEventIterable({ fence, event: { kind: "error", message } }),

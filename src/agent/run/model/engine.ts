@@ -153,7 +153,14 @@ export function startAgentRun(
         const driverError = new RunDriverError({ reason: describeThrown(cause), cause });
         queue.push({ kind: "error", message: driverError.message });
         queue.finish();
-        claimed = { kind: "backend-error", message: driverError.message, sessionId: null };
+        claimed = {
+          kind: "backend-error",
+          message: driverError.message,
+          sessionId: null,
+          // The engine's own backstop, never the vendor driver — this failure carries no
+          // vendor-specific shape to classify from.
+          cause: null,
+        };
         resolveClaimedSignal();
       }
     });
@@ -184,7 +191,9 @@ export function startAgentRun(
       const message = "agent run ended without a terminal outcome";
       queue.push({ kind: "error", message });
       queue.finish();
-      claimed = { kind: "backend-error", message, sessionId: null };
+      // Never classified: the driver returned without claiming an outcome at all, so there is
+      // no vendor-specific shape here for a classifier to have read.
+      claimed = { kind: "backend-error", message, sessionId: null, cause: null };
     }
 
     if (claimed !== null) await resolveWithExitConfirm(claimed);

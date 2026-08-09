@@ -4,6 +4,7 @@ import type { AgentEvent } from "entities/turn";
 import { trace } from "infrastructure/debug-log";
 
 import type { ClaudeDriverParams } from "../types";
+import { classifyBackendErrorCause } from "./classify-backend-error";
 import { deriveUsage, normalizeMessage } from "./normalize";
 
 function describeThrown(cause: unknown): string {
@@ -37,8 +38,12 @@ export function createClaudeDriver(params: ClaudeDriverParams): RunDriver {
         error: { name: sdkError.name, message: sdkError.message },
       });
       const events: AgentEvent[] = [{ kind: "error", message: sdkError.message }];
+      // NEVER classified here: this path is a thrown-past-the-stream failure, or a clean end
+      // with no `result` message at all — per spike 12, a rejected resume's structural fields
+      // (`is_error`, `num_turns`, `errors[]`) live on the `result` MESSAGE, which the branch
+      // below reads directly; a bare thrown `Error` carries nothing usable to classify from.
       sink.complete(
-        { kind: "backend-error", message: sdkError.message, sessionId: lastSessionId },
+        { kind: "backend-error", message: sdkError.message, sessionId: lastSessionId, cause: null },
         events,
       );
     };
@@ -98,14 +103,24 @@ export function createClaudeDriver(params: ClaudeDriverParams): RunDriver {
         const errorEvent = events[0];
         const message =
           errorEvent?.kind === "error" ? errorEvent.message : `unexpected result ${msg.subtype}`;
+        // Spike 12 (`docs/spikes/12-resume-rejection/SPIKE.md`): a rejected resume's structural
+        // fields (`is_error`, `num_turns`, `errors[]`) arrive on THIS `result` message, read
+        // directly here — never on the later throw the SDK's own generator produces if iteration
+        // continues past it, which carries nothing usable (a plain `Error`, no code, no cause).
+        // This driver never continues past a `result` message (it `return`s right below), so
+        // that throw is never reached for this case; no retention across an await boundary is
+        // needed — the classifier runs inline, on `msg` as already narrowed by the `type`/
+        // `subtype` checks above.
+        const cause = classifyBackendErrorCause(params.sessionKind, msg);
         // DIAGNOSTIC (infrastructure/debug-log): a non-success result subtype from the SDK -- the agent
         // ran but ended in an error state (e.g. max-turns, refusal) rather than a stream crash.
         trace("agent.claude.driver.failed", {
           sessionId: msg.session_id,
           subtype: msg.subtype,
           message,
+          cause,
         });
-        sink.complete({ kind: "backend-error", message, sessionId: msg.session_id }, events);
+        sink.complete({ kind: "backend-error", message, sessionId: msg.session_id, cause }, events);
         return;
       }
 

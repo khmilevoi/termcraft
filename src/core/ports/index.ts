@@ -24,6 +24,7 @@ export type {
   AgentRunOutcome,
   AgentTask,
   BackendCapabilities,
+  BackendErrorCause,
   FencedEvent,
   ModelCapability,
   ReasoningEffort,

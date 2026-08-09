@@ -1,3 +1,4 @@
+import type { BackendErrorCause } from "agent/types";
 import type { AgentEvent, TokenUsage, TurnFence } from "entities/turn";
 import type { ProcessTree } from "infrastructure/process";
 
@@ -12,7 +13,13 @@ export type NaturalOutcome =
       readonly usage: TokenUsage | null;
       readonly sessionId: string;
     }
-  | { readonly kind: "backend-error"; readonly message: string; readonly sessionId: string | null };
+  | {
+      readonly kind: "backend-error";
+      readonly message: string;
+      readonly sessionId: string | null;
+      /** `null` unless the vendor-specific driver classified the cause (see `agent/types.ts`). */
+      readonly cause: BackendErrorCause;
+    };
 
 /** The engine-owned surface one run's driver writes to. */
 export interface RunSink {

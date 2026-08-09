@@ -17,6 +17,7 @@ test("createDegradedRun reports a single error event and a matching backend-erro
     kind: "backend-error",
     message: "Process-tree failure: no Job Object support",
     sessionId: null,
+    cause: null,
   });
 }, 2000);
 

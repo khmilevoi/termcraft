@@ -102,6 +102,7 @@ describe("createClaudeDriver", () => {
       ]) as never,
       prompt: "p",
       options: {} as never,
+      sessionKind: "fresh",
     });
     await driver(sink);
     expect(completions).toHaveLength(1);
@@ -118,6 +119,7 @@ describe("createClaudeDriver", () => {
       queryFn: scriptedQuery([]) as never,
       prompt: "p",
       options: {} as never,
+      sessionKind: "fresh",
     });
     await driver(sink);
     expect(completions[0]?.outcome.kind).toBe("backend-error");
@@ -137,6 +139,7 @@ describe("createClaudeDriver", () => {
       queryFn: queryFn as never,
       prompt: "p",
       options: {} as never,
+      sessionKind: "fresh",
     });
     await driver(sink);
     expect(completions[0]?.outcome).toMatchObject({ kind: "backend-error", sessionId: "s3" });
@@ -158,6 +161,7 @@ describe("createClaudeDriver", () => {
       ]) as never,
       prompt: "p",
       options: {} as never,
+      sessionKind: "fresh",
     });
     await driver(sink);
     expect(emitted).toEqual([]);
@@ -173,6 +177,7 @@ describe("createClaudeDriver", () => {
         queryFn: scriptedQuery([assistant, success]) as never,
         prompt: "p",
         options: {} as never,
+        sessionKind: "fresh",
       });
       await driver(sink);
 
@@ -207,6 +212,7 @@ describe("createClaudeDriver", () => {
         queryFn: scriptedQuery([success, late]) as never,
         prompt: "p",
         options: {} as never,
+        sessionKind: "fresh",
       });
       await driver(sink);
       // DEVIATION from the plan's literal test body: the plan asserted
@@ -238,6 +244,7 @@ describe("createClaudeDriver", () => {
         queryFn: queryFn as never,
         prompt: "p",
         options: {} as never,
+        sessionKind: "fresh",
       });
       await driver(sink);
 
@@ -263,6 +270,7 @@ describe("createClaudeDriver", () => {
         queryFn: scriptedQuery([assistant]) as never,
         prompt: "p",
         options: {} as never,
+        sessionKind: "fresh",
       });
       await driver(sink);
       expect(emitted.map((e) => e.kind)).toEqual(["reasoning", "tool"]);
@@ -280,6 +288,7 @@ describe("createClaudeDriver", () => {
         queryFn: queryFn as never,
         prompt: "p",
         options: {} as never,
+        sessionKind: "fresh",
       });
 
       const done = driver(sink);
@@ -296,4 +305,67 @@ describe("createClaudeDriver", () => {
     },
     GUARD_MS,
   );
+
+  // --- resume-rejection classification (design-agent-feedback-loop repair, Task 9) ------------
+  //
+  // These pin the classifier's WIRING through the real driver, not just the classifier function
+  // in isolation (`classify-backend-error.test.ts` covers the conjunction itself) — confirming
+  // the driver reads `msg`'s structural fields directly off the `result` message it already has
+  // in scope, with no retention across the generator's later throw. See `drive-stream.ts`'s own
+  // comment at the classification call site for why no such retention is needed.
+
+  /** Shaped exactly like spike 12's measured observations A/D (`SPIKE.md`). */
+  function rejectedResumeResult(overrides: Record<string, unknown> = {}) {
+    return {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      num_turns: 0,
+      duration_api_ms: 0,
+      total_cost_usd: 0,
+      modelUsage: {},
+      usage: {},
+      permission_denials: [],
+      errors: ["No conversation found with session ID: b40c398a-…"],
+      session_id: "s1",
+      uuid: "u1",
+      ...overrides,
+    };
+  }
+
+  test("a resume run whose result message matches spike 12's rejected-resume shape classifies as resume-rejected", async () => {
+    const { sink, completions } = fakeSink();
+    const driver = createClaudeDriver({
+      queryFn: scriptedQuery([rejectedResumeResult()]) as never,
+      prompt: "p",
+      options: {} as never,
+      sessionKind: "resume",
+    });
+    await driver(sink);
+    expect(completions[0]?.outcome).toMatchObject({ kind: "backend-error", cause: "resume-rejected" });
+  });
+
+  test("the SAME result shape on a fresh-session run never classifies — condition 1 is checked first", async () => {
+    const { sink, completions } = fakeSink();
+    const driver = createClaudeDriver({
+      queryFn: scriptedQuery([rejectedResumeResult()]) as never,
+      prompt: "p",
+      options: {} as never,
+      sessionKind: "fresh",
+    });
+    await driver(sink);
+    expect(completions[0]?.outcome).toMatchObject({ kind: "backend-error", cause: null });
+  });
+
+  test("an ordinary (non-rejected-resume) backend error on a resume run still classifies as null", async () => {
+    const { sink, completions } = fakeSink();
+    const driver = createClaudeDriver({
+      queryFn: scriptedQuery([rejectedResumeResult({ errors: ["rate limit exceeded"] })]) as never,
+      prompt: "p",
+      options: {} as never,
+      sessionKind: "resume",
+    });
+    await driver(sink);
+    expect(completions[0]?.outcome).toMatchObject({ kind: "backend-error", cause: null });
+  });
 });

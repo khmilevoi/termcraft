@@ -14,6 +14,7 @@ import type {
   ChatReader,
   GateRunner,
   PinReader,
+  SessionCheckpointService,
   StagingService,
   TurnTransactionService,
 } from "core/ports";
@@ -41,6 +42,7 @@ import {
   appendPromptFold,
   foldGateDiagnosticsIntoPrompt,
 } from "./prompt";
+import { fallbackToFreshSession } from "./session-plan";
 import {
   type TerminalizeTurnDeps,
   type TerminalizeTurnResultV1,
@@ -130,6 +132,14 @@ export interface RunTurnDeps {
   readonly agentBackend: AgentBackend;
   readonly gateRunner: GateRunner;
   readonly deadlines: TurnDeadlines;
+  /**
+   * Needed ONLY for {@link fallbackToFreshSession} (design-agent-feedback-loop repair, Task 9):
+   * when a resume the checkpoint judged legitimate is rejected by the backend itself
+   * (`outcome.cause === "resume-rejected"`), this driver builds a fresh-session plan through
+   * the SAME port `evaluateSessionPlan` already used upstream to produce attempt 1's own plan
+   * — never a second, independently derived seed-selection path.
+   */
+  readonly sessionCheckpoint: SessionCheckpointService;
   readonly publish: (
     event:
       | PublishableEventV1<"turn.attemptStarted">
@@ -387,6 +397,15 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
    * freeze this turn has ever produced.
    */
   let candidateRoot: string | null = null;
+  /**
+   * ONCE PER TURN (design-agent-feedback-loop repair, Task 9). A backend that rejects every
+   * resume must not spin the whole attempt budget on session fallbacks — the SECOND
+   * `"resume-rejected"` outcome in one turn terminalizes ordinarily instead of retrying again.
+   * Set the moment the fallback is ATTEMPTED (not only on its success), so a `selectSeed`
+   * failure inside it never leaves this driver willing to try the fallback path a second time
+   * on a later, unrelated resume rejection.
+   */
+  let sessionFallbackUsed = false;
 
   for (;;) {
     // DIAGNOSTIC (infrastructure/debug-log): marks the start of this turn's Nth attempt -- the retry
@@ -468,6 +487,69 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
       return terminalize("cancelled", "the turn was cancelled", undefined, candidateRoot);
     }
     if (outcome.kind === "failed") {
+      // A REJECTED RESUME IS RECOVERABLE, AND THE RECOVERY WAS ALREADY WRITTEN.
+      // `fallbackToFreshSession` (`./session-plan.ts`) was defined and tested with no
+      // production caller since the session-resume slice landed (`docs/mvp-remaining-work.md`'s
+      // own row, closed by this task). MEASURED cost of the gap, 2026-08-09: a turn
+      // terminalized `BACKEND_FAILED: No conversation found with session ID: 28b861a5`, and the
+      // user abandoned the chat and retyped the message into a new one within 20 seconds.
+      //
+      // ONCE PER TURN (`sessionFallbackUsed`, hoisted above this loop) — a backend that rejects
+      // every resume must not spin the whole attempt budget chasing a fault no retry fixes.
+      //
+      // NOT A GATE RETRY: `attempt` is deliberately left UNCHANGED here, unlike the Gate-retry
+      // branch below (which advances it to `validation.nextAttempt`). This is a pure backend
+      // fault, not a Gate rejection of the candidate — spending one of the Gate's own 3 real
+      // retries on it would cut the author's actual retry budget to 2 for a failure they did
+      // nothing to cause. (The underlying `TurnFence`'s own hard `MAX_TURN_ATTEMPTS` ceiling
+      // still counts this retry regardless — every `startTurnAttempt` call mints a lease via
+      // `fence.beginAttempt()` independent of this driver's own `attempt` variable — but that
+      // ceiling is a separate, harder budget this task does not relax.)
+      //
+      // Checked and attempted BEFORE `bridge("beginTerminalization")`: that transition is
+      // terminal for this loop (a later `startTurnAttempt` would find the machine no longer
+      // `"workspace-ready"`), so the fallback must run first and `continue` the loop on
+      // success — bridging only on the paths that actually terminalize below.
+      if (outcome.cause === "resume-rejected" && !sessionFallbackUsed) {
+        sessionFallbackUsed = true;
+        const fallback = await wrap(
+          fallbackToFreshSession(
+            { sessionCheckpoint: deps.sessionCheckpoint, deadlines: deps.deadlines },
+            context.targetChatId,
+          ),
+        );
+        if (!("code" in fallback)) {
+          // `attempt.ts`'s `finalizeOutcome` already drove `running -> stopping`
+          // (`beginStopping`) unconditionally before this outcome ever reached this driver — the
+          // machine is NOT back in `workspace-ready` the way a Gate retry's own
+          // `validating -> workspace-ready` (`retryAfterGate`, driven inside `validation.ts`)
+          // leaves it. `retryAfterSessionFallback` (`stopping -> workspace-ready`,
+          // `core/machines/model/turn-machine.ts`) is the edge this task added for exactly this
+          // gap — see that file's own comment on the transition-table row for why no pre-existing
+          // edge covered it. Not routed through `bridge(...)` above: that helper is documented as
+          // "one of the three sanctioned bridging edges INTO terminalizing" — this edge goes the
+          // other way, back into `workspace-ready`, so it is applied directly here instead,
+          // mirroring `validation.ts`'s own `retryAfterGate` call exactly (apply, warn-if-illegal,
+          // never throw).
+          const retried = deps.machine.apply("retryAfterSessionFallback");
+          if (retried.kind === "illegal") {
+            console.warn(
+              `core/turns/run-turn: retryAfterSessionFallback illegal (${retried.code}) for turn ${context.turnId}`,
+            );
+          }
+          // A fresh-session plan for the NEXT attempt, sent as a first message again (never a
+          // resume's `promptDelta` channel — see `session`'s own doc comment above for why the
+          // two channels are mutually exclusive by construction).
+          session = fallback;
+          userMessage = input.baseTask.userMessage;
+          continue;
+        }
+        // The fallback itself could not build a fresh-session plan (a `selectSeed` failure) —
+        // terminalize on THAT failure, since it is the actual reason no further attempt is
+        // possible, not the original resume rejection this branch was trying to recover from.
+        bridge("beginTerminalization");
+        return terminalize("failed", fallback.safeMessage, fallback.code, candidateRoot);
+      }
       bridge("beginTerminalization");
       // `"BACKEND_FAILED"` (`core/protocol/model/failure.ts`'s own closed vocabulary) rather
       // than `undefined`: this `reason` is what `terminalize.ts`'s widened

@@ -50,6 +50,7 @@ const TURN_ACTIONS: readonly TurnAction[] = [
   "markBackendUnhealthy",
   "candidateCaptured",
   "retryAfterGate",
+  "retryAfterSessionFallback",
   "beginFinalization",
   "markCommitted",
   "settle",
@@ -80,6 +81,14 @@ const EXPECTED_EDGES: readonly ExpectedEdge[] = [
   { from: "admitting", action: "beginTerminalization", to: "terminalizing" },
   { from: "stopping", action: "beginTerminalization", to: "terminalizing" },
   { from: "stopping", action: "markBackendUnhealthy", to: "backend-unhealthy" },
+  // Amended (design-agent-feedback-loop repair, Task 9): §7.2's original table sent every
+  // `stopping` backend failure straight to `terminalizing` — it predates a failure the turn can
+  // recover from (a resume rejected by the vendor but recoverable on a fresh session,
+  // `turn-machine.ts`'s own `retryAfterSessionFallback` comment has the full rationale). Not a
+  // hand-transcription of the ORIGINAL spec table like the rows above — an intentional,
+  // documented addition to it, exactly like the `admitting -> terminalizing` amendment already
+  // in this list.
+  { from: "stopping", action: "retryAfterSessionFallback", to: "workspace-ready" },
   { from: "snapshotting", action: "candidateCaptured", to: "validating" },
   { from: "validating", action: "retryAfterGate", to: "workspace-ready" },
   { from: "validating", action: "beginFinalization", to: "finalizing" },
@@ -153,8 +162,11 @@ describe("reatomTurnStateMachine", () => {
     });
   });
 
-  test("the hand-counted §7.2 edge total is 26", () => {
-    expect(EXPECTED_EDGES.length).toBe(26);
+  test("the hand-counted §7.2 edge total is 27", () => {
+    // 26 from the original spec table + 1 amendment (design-agent-feedback-loop repair, Task 9:
+    // `stopping -> workspace-ready` via `retryAfterSessionFallback`), matching the identical
+    // "amended, not transcribed" precedent the `admitting -> terminalizing` edge already set.
+    expect(EXPECTED_EDGES.length).toBe(27);
   });
 
   test("every (state, action) pair matches the §7.2 table exactly", () => {
@@ -203,6 +215,7 @@ describe("reatomTurnStateMachine", () => {
       markBackendUnhealthy: "kernel.turn.markBackendUnhealthy",
       candidateCaptured: "kernel.turn.candidateCaptured",
       retryAfterGate: "kernel.turn.retryAfterGate",
+      retryAfterSessionFallback: "kernel.turn.retryAfterSessionFallback",
       beginFinalization: "kernel.turn.beginFinalization",
       markCommitted: "kernel.turn.markCommitted",
       settle: "kernel.turn.settle",
@@ -224,6 +237,20 @@ describe("reatomTurnStateMachine", () => {
       expect(m.apply("retryAfterGate")).toEqual({
         kind: "changed",
         from: "validating",
+        to: "workspace-ready",
+      });
+    });
+  });
+
+  test("retryAfterSessionFallback moves stopping straight back to workspace-ready (design-agent-feedback-loop repair, Task 9)", () => {
+    // Unlike retryAfterGate (only reachable after a COMPLETED attempt's own freeze+validation),
+    // this edge exists precisely because a `failed` attempt never reaches `validating` at all —
+    // see `turn-machine.ts`'s own comment on this transition-table row for the full rationale.
+    context.start(() => {
+      const m = machineAt("stopping");
+      expect(m.apply("retryAfterSessionFallback")).toEqual({
+        kind: "changed",
+        from: "stopping",
         to: "workspace-ready",
       });
     });
