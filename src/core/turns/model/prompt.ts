@@ -2,6 +2,7 @@ import * as errore from "errore";
 
 import type { TurnAttempt } from "core/machines";
 import type { EventPayloadByKindV1 } from "core/protocol";
+import { DESIGN_DIRNAME } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 
 /**
@@ -33,6 +34,20 @@ import type { PageSlug } from "entities/page";
  * name for that set. But unlike the excluded four, a cycle or an unreached module IS worth the
  * agent's attention on a retry, and neither is derivable from the source the agent already has
  * (an import graph is exactly what the agent lacks) — so both render under their own header.
+ *
+ * ONE PATH VOCABULARY IN THE RENDERED PROMPT (design-tree feedback-loop repair, Task 3):
+ * `GateError.file`/`GateWarning.file` are TREE-relative (relative to `design/`) throughout
+ * Gate's own vocabulary — the closure index, the inventory, the manifest's own `entry` values
+ * all correctly stay that way. But the AGENT reads THIS prompt and types paths into its own
+ * tools, which are WORKSPACE-relative (its cwd is the turn workspace root; the tree is staged
+ * one level down, under `design/`). `formatGateError`/`formatGateWarning` are the one place a
+ * diagnostic stops being a DTO and becomes prose the agent will act on, so `toWorkspacePath` is
+ * routed through both of them, right there — see that function's own doc for the measured
+ * defect this fixes.
+ *
+ * `blockedPages` is deliberately UNTOUCHED by this translation (see `formatBlockedPages`'s own
+ * doc): it renders PAGE SLUGS, not file paths, and prefixing a slug with `design/` would
+ * fabricate a path that names nothing real.
  */
 
 export type TurnGateDiagnosticsV1 = EventPayloadByKindV1["turn.gateRejected"]["diagnostics"];
@@ -79,6 +94,38 @@ function formatPosition(line: number | null, column: number | null): string {
   return column === null ? ` line ${line}` : ` line ${line}:${column}`;
 }
 
+const DESIGN_TREE_PREFIX = `${DESIGN_DIRNAME}/`;
+
+/**
+ * A Gate diagnostic's TREE-relative `file` as the agent must type it: workspace-relative.
+ * The one translation point between the two vocabularies (see this file's header).
+ *
+ * THE ONE PLACE THE TWO PATH VOCABULARIES MEET (defect fix, 2026-08-09).
+ *
+ * Gate speaks TREE-relative throughout: `GateError.file`/`GateWarning.file` carry
+ * `entryRelPath` (`gate/adapters/gate-runner.ts`'s display name), which is relative to
+ * `design/`. The AGENT's tools take WORKSPACE-relative paths — its cwd is the turn workspace
+ * root (`agent/claude/query/model/query-options.ts` passes `cwd: task.workspacePath`), and the
+ * tree is staged one level down under `design/` (`store/sandbox/model/staging-store.ts`).
+ *
+ * MEASURED: a retry prompt rendered `in pages/alarm.tsx`; the agent typed exactly that into
+ * `Read` and got ENOENT, then recovered with `Glob **\/*`. Three of the run's five ENOENTs came
+ * from this one line of text.
+ *
+ * The translation happens HERE, at the boundary where a diagnostic stops being a DTO and
+ * becomes something the agent will type — not in the Gate, whose own tree-relative vocabulary
+ * is correct for every other consumer (the closure index, the inventory, the manifest's own
+ * `entry` values). `DESIGN_DIRNAME` is imported rather than duplicated: `core` imports
+ * `entities/` (`candidate.ts` already imports this exact constant), so there is no pair to
+ * keep in sync and no drift test to write.
+ *
+ * Guarded against double-prefixing: nothing produces an already-prefixed `file` today, but a
+ * silent `design/design/pages/a.tsx` would be a worse failure than this `startsWith` check.
+ */
+function toWorkspacePath(file: string): string {
+  return file.startsWith(DESIGN_TREE_PREFIX) ? file : `${DESIGN_TREE_PREFIX}${file}`;
+}
+
 /**
  * Which pages a whole-tree diagnostic is attributed to, rendered for the agent.
  *
@@ -105,7 +152,7 @@ function formatBlockedPages(blockedPages: readonly PageSlug[] | null): string {
 }
 
 function formatGateError(error: TurnGateErrorDtoV1): string {
-  const location = error.file === null ? "" : ` in ${error.file}`;
+  const location = error.file === null ? "" : ` in ${toWorkspacePath(error.file)}`;
   return `- [${error.kind}/${error.code}]${location}${formatPosition(error.line, error.column)}${formatBlockedPages(error.blockedPages)}: ${error.message}`;
 }
 
@@ -120,7 +167,7 @@ function formatGateError(error: TurnGateErrorDtoV1): string {
  * not because omission is expected of the ones that do.
  */
 function formatGateWarning(warning: TurnGateWarningDtoV1): string {
-  const location = warning.file === null ? "" : ` in ${warning.file}`;
+  const location = warning.file === null ? "" : ` in ${toWorkspacePath(warning.file)}`;
   return `- [${warning.kind}]${location}${formatPosition(warning.line, warning.column)}: ${warning.message}`;
 }
 

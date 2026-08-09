@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { TurnAttempt } from "core/machines";
+import { DESIGN_DIRNAME } from "entities/design-tree";
 
 import {
   StaleGateDiagnosticsError,
@@ -231,9 +232,9 @@ describe("foldGateDiagnosticsIntoPrompt — folding errors and determinism warni
     );
     if (result instanceof Error) throw result;
     expect(result).toContain("an import cycle: lib/two.ts -> lib/one.ts -> lib/two.ts");
-    expect(result).toContain("in lib/one.ts");
+    expect(result).toContain(`in ${DESIGN_DIRNAME}/lib/one.ts`);
     expect(result).toContain('"lib/orphan.ts" is not reached');
-    expect(result).toContain("in lib/orphan.ts");
+    expect(result).toContain(`in ${DESIGN_DIRNAME}/lib/orphan.ts`);
     // Not bucketed under the determinism header — DETERMINISM_WARNING_KINDS stays exactly its
     // original two kinds (`unguarded-timer`, `unguarded-randomness`).
     expect(result).not.toContain("non-deterministic code");
@@ -360,5 +361,125 @@ describe("foldGateDiagnosticsIntoPrompt — blockedPages reaches the agent (task
       // …and the diagnostic itself is still rendered, not swallowed with the clause.
       expect(result).toContain("FORBIDDEN_IMPORT");
     }
+  });
+});
+
+describe("foldGateDiagnosticsIntoPrompt — workspace-relative paths (Task 3)", () => {
+  // Gate's `file` is TREE-relative (relative to `design/`); the agent's tools take
+  // WORKSPACE-relative paths (the tree is staged one level down, under `design/`, inside the
+  // turn workspace). See this file's header and `toWorkspacePath`'s own doc for the full story.
+
+  test("a rejection's error file renders workspace-relative", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          errors: [
+            {
+              kind: "type",
+              code: "TS7006",
+              message: "…",
+              file: "pages/alarm.tsx",
+              line: 98,
+              column: 30,
+              blockedPages: null,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain(`in ${DESIGN_DIRNAME}/pages/alarm.tsx line 98:30`);
+    expect(result).not.toContain("in pages/alarm.tsx");
+  });
+
+  test("a warning's file renders workspace-relative too", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          warnings: [
+            {
+              kind: "unguarded-timer",
+              message: "…",
+              file: "pages/alarm.tsx",
+              line: 98,
+              column: 30,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain(`in ${DESIGN_DIRNAME}/pages/alarm.tsx line 98:30`);
+    expect(result).not.toContain("in pages/alarm.tsx");
+  });
+
+  test("blockedPages still renders SLUGS and is not prefixed", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          errors: [
+            {
+              kind: "import",
+              code: "FORBIDDEN_IMPORT",
+              message: "…",
+              file: "lib/theme.ts",
+              line: null,
+              column: null,
+              blockedPages: ["home", "about"] as never,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).toContain("[blocks: home, about]");
+    expect(result).not.toContain(`blocks: ${DESIGN_DIRNAME}/home`);
+  });
+
+  test("an absent file still omits the clause, and is never rendered as a bare prefix", () => {
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          errors: [
+            {
+              kind: "type",
+              code: "TYPE_CHECK_UNAVAILABLE",
+              message: "…",
+              file: null,
+              line: null,
+              column: null,
+              blockedPages: null,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).not.toContain(" in ");
+    expect(result).not.toContain(`${DESIGN_DIRNAME}/\n`);
+  });
+
+  test("an already-prefixed file is not double-prefixed", () => {
+    // Defensive: nothing produces this today, and if a producer ever starts, a silent
+    // `design/design/pages/a.tsx` is a worse failure than an assertion here.
+    const result = foldGateDiagnosticsIntoPrompt(
+      foldInput({
+        diagnostics: diagnostics({
+          errors: [
+            {
+              kind: "type",
+              code: "X",
+              message: "…",
+              file: `${DESIGN_DIRNAME}/pages/a.tsx`,
+              line: null,
+              column: null,
+              blockedPages: null,
+            },
+          ],
+        }),
+      }),
+    );
+    if (result instanceof Error) throw result;
+    expect(result).not.toContain(`${DESIGN_DIRNAME}/${DESIGN_DIRNAME}/`);
   });
 });
