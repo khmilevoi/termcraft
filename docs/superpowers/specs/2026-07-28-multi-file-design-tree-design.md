@@ -246,12 +246,22 @@ hash at mount, and the ready-phase state machine accepts no second `mount`
 
 ### 9.3 Warm spare and residency
 
-- One booted, handshaked, un-mounted spare process is kept ready and replenished after
-  each adoption.
+- One booted, un-mounted spare process is kept ready and replenished after each adoption.
+  **CORRECTED (plan 3 Task 6): booted but NOT handshaked**, unlike this bullet's original
+  "booted, handshaked" wording. `client.hello` is a `z.strictObject` requiring
+  `mode`/`pageSlug`/`sourceHash`/`sourceKitApiVersion`, all facts about a mount the spare does
+  not have yet; making them optional would be a host-supervision §5.1 wire change for one
+  message round trip on top of a boot the spare already removes (measured: ~560ms of a
+  ~597ms cold start, `docs/superpowers/red-debt.md`'s phase-3 section).
 - Total live incarnations stay under the existing global cap of 10.
-- The frame broker and relay (`frame-broker.ts`, `preview-relay.ts`) are unchanged: frames
-  are still emitted only at `handleMount` and `handleResize`, and a page switch is a mount,
-  so it emits naturally.
+- **CORRECTED (plan 3 Task 3): `frame-broker.ts` is NOT unchanged**, unlike this bullet's
+  original claim. `preview-relay.ts` is unchanged — frames are still emitted only at
+  `handleMount` and `handleResize`, and a page switch is a mount, so it emits naturally. But
+  `createFrameBroker`'s `{sessionId, nonce, sourceHash}` guard was fixed at construction,
+  correct only while one incarnation rendered one page forever; §9.2 retires that invariant,
+  so the broker gained `expect(sourceHash)`, re-seeding the guard the instant the pump
+  observes an accepted mount's `ready` (stdout is one ordered stream, so that is the exact
+  wire position where old-page frames end and new-page frames begin).
 - **Prefetch** (second phase, optional): once the visible page has produced a frame and the
   incarnation is otherwise idle, the closures of the neighbouring tabs are *imported* but
   not mounted, so a later switch pays only the React mount. Prefetch is abandoned the
@@ -596,6 +606,46 @@ landing on a working system:
 3. **Host O2.** §9, §11 — the revision-keyed incarnation, repeated `mount`, warm spare,
    watchdog, and the export package shape. This is the plan that delivers instant page
    switching and is the one with the accepted isolation trade-off.
+   **LANDED** — `0b6ccdc..c4a520b` on branch `design-tree`, plan
+   `docs/superpowers/plans/2026-08-04-design-tree-phase-3-host-o2.md`, tasks 1-8 (the
+   closeout's own doc commit extends the range by one). Five decisions this plan settled that
+   the design above left implicit, recorded here so a later reader inherits them rather than
+   re-deriving them:
+   1. **§9.2's "verifies every file in the tree" ships as incremental, per-closure
+      verification with a per-incarnation verified set** (task 2), not a whole-tree read at
+      load. The guarantee is identical where it matters — no byte is linked that was not
+      hash-verified against the revision's inventory first — and the difference is that an
+      asset or an unreachable module nobody imports is never read, which is §9.1's own
+      governing principle ("invalidate eagerly, materialize lazily, keep capacity warm")
+      applied to load, not a departure from it. A verified member is never re-read on a later
+      mount: `import()` already serves the cached module, so re-reading its bytes could only
+      hash bytes the incarnation is not running; the honest answer to a tree that moved under
+      a live incarnation is that the revision moved, which closes the incarnation outright
+      (task 5).
+   2. **The session key and the restart key are different keys** (task 5) — `treeRevision`
+      alone for the session (§9.2), `` `${treeRevision} ${mountingSlug}` `` for the restart
+      budget and circuit (§9.2's last bullet). A revision-keyed incarnation is exactly why the
+      second cannot collapse into the first: one page looping must not spend the budget of
+      every other page sharing its incarnation, which a single shared key would do after three
+      failures of the one page.
+   3. **The expected source hash moves when the pump SEES the mount's `ready`, not when the
+      supervisor SENDS the mount** (task 3). stdout is one ordered stream: the child writes
+      `ready` before the new page's first frame, and every frame of the old page was written
+      before the child even read the mount — so re-seeding at the moment the pump observes
+      `ready` is exact, with no reordering window a `.then()` on the request table's own
+      promise would have opened.
+   4. **A mount/first-frame timeout is design-at-fault** (task 4), so `wsHostCrash` — not
+      `wsHostUnavailable` — is the panel a hang draws. The handshake has already succeeded by
+      the time a mount is sent, proving the child alive and responsive; a mount that then
+      produces no `ready`, or a `ready` with no frame, is the page's own module-init or render
+      loop, exactly what §9.4's watchdog exists for.
+   5. **The warm spare is booted, NOT handshaked** (task 6), with the wire-schema reason —
+      §9.3 above is corrected in place rather than left to mislead a future reader, and
+      `docs/superpowers/red-debt.md`'s phase-3 section carries the M2 measurement that decided
+      it.
+   §11's `design-prompt.md` shared-modules bullet is now real (task 7): `## Shared modules`
+   lists every closure member two or more pages reach, plus a `- shared with:` line per page,
+   derived entirely from the closures `assembleExportPackage` already receives.
 
 Plan 1 is a prerequisite for all the others; plans 1b, 2 and 3 are independent of each
 other.

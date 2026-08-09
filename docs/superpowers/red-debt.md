@@ -1145,3 +1145,158 @@ first — has no way to get past this refusal short of running `termcraft` inter
 OWNER: wiring a migration offer into a non-interactive CLI path (no terminal, no keypress to answer
 `⏎ migrate` / `esc later` with) is a real design question — an unattended CLI cannot show a dialog
 and wait for a key the way the interactive root does — not a mechanical port of the interactive fix.
+
+## Debt accumulated by design-tree-phase-3 (host O2), recorded here by its own Task 9
+
+Plan `docs/superpowers/plans/2026-08-04-design-tree-phase-3-host-o2.md`, tasks 1-8, commits
+`0b6ccdc..c4a520b`. Everything below postdates every row above.
+
+### The warm spare is booted, NOT handshaked — a deliberate divergence from §9.3's literal wording
+
+§9.3 says the spare is "booted, handshaked, un-mounted." `client.hello` is a `z.strictObject`
+requiring `mode`/`pageSlug`/`sourceHash`/`sourceKitApiVersion` (`host/protocol/model/hello.ts:
+50-60`), all facts about a mount the spare does not have yet — making them optional would be a
+host-supervision §5.1 wire change for one message round trip on top of a boot the spare already
+removes. Recorded, not open: `spare-pool.ts`'s own header carries the same argument at the site.
+
+M2 (measured against a real `_host --stdio` child, Bun 1.3.14, 2026-08-09, five runs each,
+spawn-to-first-stdout-byte): `client.hello` sent immediately, 584.4-685.7ms, median 596.5ms (boot
++ handshake); deferred 3000ms, the round trip past that wait was 31.1-41.7ms, median 36.8ms
+(handshake alone, post-boot). The implied boot cost a spare removes is ~560ms, ~94% of the
+cold-start total — the spare was built, not declined, on this evidence.
+
+### `frame-broker.ts` is no longer "unchanged" — corrects §9.3's own claim
+
+§9.3 states "the frame broker and relay (`frame-broker.ts`, `preview-relay.ts`) are unchanged."
+`preview-relay.ts` is; `frame-broker.ts` is not. `createFrameBroker`'s guard used to be a
+construction-time-fixed `{sessionId, nonce, sourceHash}` (rejecting any frame whose `sourceHash`
+differed); Task 3 made the expected `sourceHash` a mutable local and added `expect(sourceHash)`,
+re-seeded the instant the pump observes an accepted mount's `ready`. Necessary the moment §9.2
+retired "one incarnation renders one page forever" — the construction-time guard was correct
+exactly under that retired invariant. Corrected here rather than in the spec's own prose (Task 9
+Step 2 also updates the spec directly); this row is the ledger's copy of the same correction.
+
+### Per-page hang isolation is gone — ACCEPTED (§13's first bullet), not open, mitigation shipped
+
+§13 accepts the trade explicitly: one incarnation now serves a whole tree revision, so a hang in
+one page blocks previewing every other page until the incarnation is replaced. Task 4 shipped the
+mitigation §9.4 asks for: a mount deadline and a first-frame deadline (`timeouts.ts`'s
+`MOUNT_TIMEOUT_MS`/`FIRST_FRAME_TIMEOUT_MS`), both naming the page that was mounting on expiry, and
+`ui/preview/model/failure-class.ts` routes a `MOUNT_TIMEOUT` to the design-at-fault `wsHostCrash`
+panel rather than `wsHostUnavailable`. The trade itself is not reversed and has no owner — it is
+the cost §9.1's "one incarnation per revision" buys, recorded as accepted per this ledger's own
+"accepted consequences" convention (see the phase-1 closeout section's row of the same shape).
+
+### A lint for module-scope mutable state in a shared module — NO OWNER, "likely warranted" only
+
+§13's closing bullet: "a lint warning for module-scope mutable state in a shared module is likely
+warranted." Not required, and this plan does not add one. The behaviour it would warn about
+(module-level state in a shared module survives a page switch and resets only when the design
+changes) is documented to three different readers instead: the agent, in the system prompt's
+`DESIGN_CODE_RULES` (`agent/prompt/model/prose.ts`, "Shared module state"); the implementer, in
+the export prompt's `## Shared modules` section (Task 7, `core/export/model/package.ts`); and the
+codebase's own reader, in `host-state-machine.ts`'s repeated-mount header note (Task 1). A user is
+told before they are surprised on all three paths a design's behaviour reaches someone. NO OWNER:
+the lint itself is still unwritten.
+
+### §9.3's prefetch of neighbouring tabs' closures — deliberately not built, no owner
+
+§9.3 itself calls this "second phase, optional." It needs a new control kind on the wire (importing
+a closure without mounting it), a new idle-detection rule in the child, and an abandonment rule
+("abandoned the moment any control message arrives, and never runs on a stale revision") — a whole
+subsystem whose entire benefit is removing the `import()` of an already-verified closure from a
+switch that Task 5 already made in-process (65.9ms median, M1). Ledgered with this argument,
+carried verbatim from the plan's own closing table; no owner.
+
+## Added by the final whole-branch review (design-tree phase 3, 2026-08-09) — read before trusting `session.ts`/`supervisor.ts` in isolation
+
+Dispatched at the full `0ca25dd..HEAD` range per Task 9's own instruction, pointed at the six named
+risk questions plus a free sweep for anything else. Four findings were real, verified bugs and are
+FIXED in this same closeout commit (each carries its own test, listed for the next reader who wants
+the regression pin rather than re-deriving it):
+
+- **A mount `session.ts`'s pump never committed (a `kind !== "ready"` reply) used to read as a
+  success to `supervisor.ts`'s `reconcileMount`.** The generic `responseTo` routing
+  (`session.ts:424-427`) resolves the request table with the RAW envelope regardless of `kind` —
+  including a typed `error` reply to a repeated `mount()`, which is not `instanceof Error` and so
+  passed `reconcileMount`'s `result instanceof Error` check straight through as a mounted page.
+  FIXED: `mount()` now runs the same `mapHostError` conversion `awaitReady`'s own `kind === "error"`
+  branch already applied to the FIRST mount. Pinned by `session.test.ts`'s "a repeated mount() the
+  child refuses with a typed error resolves to that typed error, never a ControlEnvelope success".
+- **A page-specific mount refusal the incarnation SURVIVES (`checkKitApiVersion`'s pre-flight
+  `KIT_API_MISMATCH`, or `buildMountBody`'s pre-flight `ProtocolError`) used to kill the whole live
+  incarnation.** `reconcileMount`'s `.then()` treated ANY `Error` result from `mount()` as grounds to
+  call `onIncarnationFatal` — including a refusal that never reached the wire and left the child
+  fully alive, still correctly serving every OTHER page sharing the incarnation. This is exactly the
+  blast-radius regression a revision-keyed incarnation (§9.2) must not have: one page's own static
+  incompatibility must not respawn a healthy sibling page's session. FIXED: `reconcileMount` now
+  checks `current.phase === "ready"` before escalating — a refusal the session itself survived logs
+  a warning and fails only the switch. Pinned by `supervisor.test.ts`'s "a mount refusal the
+  incarnation survives fails only the switch, not the incarnation or its other pages".
+- **`pendingMount` was never cleared on an early `sendRequestWithId` rejection** (`TOO_MANY_REQUESTS`,
+  a full outbound queue) that never reaches the wire and therefore never correlates through the
+  pump's inline hook. Left stuck, every LATER `mount()` on that incarnation was permanently refused
+  as "already in flight" — a narrow, defensive-only path (256-entry request table), but a genuine
+  dead end once triggered, and one the phase-check fix above made more likely to matter (an
+  incarnation that survives a refusal keeps running, instead of the pre-fix behaviour of killing and
+  replacing it, which incidentally cleared the stuck slot via a fresh incarnation). FIXED: `mount()`
+  defensively clears its own `pendingMount` slot (by requestId) once its own promise settles,
+  regardless of outcome. Pinned by `session.test.ts`'s "a mount() refused by the pre-send
+  TOO_MANY_REQUESTS guard does not leave a later mount() stuck as 'already in flight'".
+- **The export prompt's `## Shared modules` section undercounted a page importing ANOTHER page's
+  entry** (legal: design §4/§7's "two slugs may share one `entry`"), and mis-stated "every page is
+  self-contained" when zero closures resolved at all rather than saying shared modules could not be
+  checked. FIXED in `core/export/model/package.ts`'s `readersByModule` (a path is dropped only when
+  the SOLE reader is the page whose own entry it is, never merely because it happens to be *an*
+  entry) and in the zero-closures branch of `buildDesignPrompt`. Pinned by `package.test.ts`'s "a
+  page importing ANOTHER page's entry as a module is visible as shared, from both sides" and "zero
+  resolved closures says shared modules could not be checked, never that none exist".
+
+Four more were confirmed real but are NOT fixed here, each with the reason:
+
+- **`preview.retry` never reaches `supervisor.retry()` in production.** `core/preview/model/
+  session-commands.ts`'s `handleRetry` (`:311-322`) calls `establishSession(lastSpec)` →
+  `HostSupervisorPort.preview` → `adapters/host-supervisor.ts:183-187` → `supervisor.ts:preview()`,
+  whose "key exists and is not closed" branch (`:567-571`) returns the SAME circuit-open session as
+  a non-error, without ever calling `policy.retry`/`startIncarnation`. The Kernel then reports
+  `sessionReady`; the retry panel clears; no frame ever arrives, forever. `SupervisedPreviewSession
+  .retry()` — the method whose own internals this plan verified correct in isolation
+  (`restartKeyOf` reads the CURRENT `ks.spec.pageSlug`, so it clears the right page's budget in
+  every state the circuit opens from, `supervisor.test.ts:684-712`) — has exactly one call site
+  (`adapters/host-supervisor.ts:161`) that nothing in `core` ever calls. VERIFIED PRE-EXISTING: the
+  same branch shape was already present at `0ca25dd`, before this plan's first commit — not
+  introduced or worsened by design-tree phase 3. NO OWNER. The green suite exercises `retry()`
+  directly (`supervisor.test.ts:363,671`), which is why this reached HEAD undetected: the tested path
+  and the production path diverge before `supervisor.retry()` is ever reached.
+- **`project.close` leaks the live host incarnation AND, since this plan, the warm spare too.**
+  `core/kernel/model/kernel.ts:613-616`'s null branch of `setActivePreviewSession` calls only
+  `noteSessionClosed()`, never closing the session it displaces; `project.ts:210` is its one caller.
+  `sparePool.drain()` is reachable only from `supervisor.ts`'s `stopAll()` (`:606`), called solely at
+  application exit. So closing a project leaves BOTH the live incarnation and its warm spare running,
+  each holding a slot against §13's ≤10 cap, until the app itself exits. The incarnation half is
+  PRE-EXISTING (same gap before this plan); the spare half is new, added by Task 6 onto the same
+  unfixed gap. NO OWNER: fixing `project.close`'s teardown path touches `kernel.ts`'s session
+  lifecycle outside anything Tasks 1-8 changed, and is a decision about when a project-scoped
+  resource should release, not a mechanical host-side fix.
+- **A narrow race can misattribute an incarnation's real fatal cause to a generic `TRANSPORT_ERROR`.**
+  Between `session.ts`'s `phase = "failed"` (synchronous, inside `failFromReady`) and its
+  `deps.onFatal` call (async, after `await teardown(true)` — up to ~1s) there is a window where
+  `session.phase` already reads "failed" but the supervisor does not know it yet. A `reconcileMount`
+  triggered in that window calls `mount()`, which immediately refuses with a generic `TRANSPORT_ERROR`
+  ("mount requires a ready session") — `current.phase !== "ready"`, so this plan's own phase-check
+  fix above does NOT suppress it, and it reaches `onIncarnationFatal` first, before the real
+  originating error arrives via the slower `deps.onFatal` path. `onIncarnationFatal`'s own
+  idempotency guard (`ks.incarnationFailed`) then discards the real cause. Diagnostic-only — the
+  incarnation is correctly killed and restarted either way, only the reported REASON is wrong. NO
+  OWNER: a correct fix needs the failure-notification path to prefer whichever error actually
+  originates the failure over one that is a downstream symptom of it, which is a bigger change than
+  this closeout's own scope; a hasty fix risks a worse bug in the sequencing it would touch.
+- **`supervisor.ts`'s `spawnFor(ks.spec)` is computed and discarded on spare adoption.** `:175-176`
+  calls `deps.spawnFor(ks.spec)` inside `sessionDepsFor` even when `sessionDepsFor`'s own
+  `spawn` wrapper is about to serve a pre-spawned spare (`sparePool.take() ?? deps.spawn(command)`) —
+  the computed `command` is simply unused in that branch. Safe today only because the production
+  `spawnFor` ignores its `spec` argument entirely (`entrypoint/model/create-shell.ts:190`); the
+  widened type signature (`HostSessionSpec | null) => SpawnCommand`, Task 6) invites a future
+  `spawnFor` that DOES depend on `spec` to silently compute the wrong command for an adopted spare.
+  NO OWNER — recorded so a future `spawnFor` implementer reads this before assuming `ks.spec` is
+  used uniformly.
