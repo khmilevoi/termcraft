@@ -44,6 +44,9 @@ import type { HostSessionSpec } from "../types";
  *   own header: "Deferred facade methods (forwardInput, setTheme, setCapabilities, tweaks)
  *   remain intentionally absent"). This adapter returns a `HOST_PROTOCOL_FAILED` FailureDtoV1
  *   naming the gap rather than silently no-op-succeeding.
+ * - ONE WRAPPER PER SUPERVISED SESSION — see {@link createHostSupervisorAdapter}'s own
+ *   `wrappers` cache. This is NOT a divergence but the opposite: without it this adapter broke
+ *   an invariant the Kernel depends on.
  * - `query` needs a Kernel-side `FrameTokenV1` → `FrameIdentity` ledger (the port's own header:
  *   "TODO(blocker B1): ... this method resolves and verifies it as the broker's current
  *   displayed frame"). That ledger is Kernel/composition-root state this adapter has no
@@ -180,10 +183,51 @@ export function createHostSupervisorAdapter(deps: HostSupervisorDeps): HostSuper
     },
   });
 
+  /**
+   * ONE `PreviewSession` WRAPPER PER SUPERVISED SESSION — the identity invariant this adapter
+   * must not break (defect found in a live run, 2026-08-09: every page switch tore down the
+   * preview it had just established).
+   *
+   * `HostSupervisor.preview` returns the SAME `SupervisedPreviewSession` object whenever the key
+   * is unchanged and still live (`host/supervisor/model/supervisor.ts`'s `sessionFor` cache) —
+   * and since the key became `treeRevision` alone (design-tree phase 3 Task 5), a PAGE SWITCH is
+   * exactly that case: same session, `mount()` on the live child. `core/kernel/model/kernel.ts`'s
+   * `setActivePreviewSession` reads that as object identity — `if (previous !== session) previous
+   * .close()` — precisely so it never closes the session it is establishing.
+   *
+   * Building a fresh object literal per call (what `toPreviewSession` does, and what this
+   * function used to hand back unmemoised) made that guard structurally unable to hold: two
+   * distinct wrappers around ONE `KeyState`, so every switch closed the underlying session.
+   * `close()` nulls `current` before it moves `state` off `"ready"`, so the resize that follows
+   * logged `resize(<revision>) dropped — no live incarnation (state "ready")`; `relay.close()`
+   * ended the frame stream; the in-flight `mount()` reached a child already being killed. The
+   * pane kept the previous page's last frame — "switching pages does nothing" — and the next
+   * switch paid a full respawn instead of Task 5's ~66ms mount.
+   *
+   * A `WeakMap` and not a `Map`: the supervisor DELETES a closed key (`supervisor.ts`'s `close`),
+   * so a later `preview()` for the same revision legitimately builds a fresh
+   * `SupervisedPreviewSession` and belongs in a fresh wrapper. Keying on the object itself means
+   * a retired entry is collected with the session it wrapped — no eviction hook to keep in step.
+   *
+   * It also keeps `toPreviewFrames` to ONE generator per session: `PreviewRelay.frames` is
+   * single-consumer by contract and THROWS on a second concurrent reader
+   * (`host/supervisor/model/preview-relay.ts`), which a wrapper-per-call only avoided by
+   * happening to close the predecessor first.
+   */
+  const wrappers = new WeakMap<SupervisedPreviewSession, PreviewSession>();
+
+  function wrapperFor(supervised: SupervisedPreviewSession): PreviewSession {
+    const existing = wrappers.get(supervised);
+    if (existing !== undefined) return existing;
+    const session = toPreviewSession(supervised);
+    wrappers.set(supervised, session);
+    return session;
+  }
+
   async function preview(spec: HostSessionSpecV1): Promise<FailureDtoV1 | PreviewSession> {
     const result = supervisor.preview(toHostSessionSpec(spec));
     if (result instanceof SupervisorError) return toHostFailureDto(result);
-    return toPreviewSession(result);
+    return wrapperFor(result);
   }
 
   function liveCount(): number {

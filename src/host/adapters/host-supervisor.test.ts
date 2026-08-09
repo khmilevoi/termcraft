@@ -272,6 +272,60 @@ describe("createHostSupervisorAdapter", () => {
     expect(adapter.liveCount()).toBe(0);
   });
 
+  // THE IDENTITY INVARIANT `core/ports/host-supervisor.ts`'s `preview` doc pins, and the defect
+  // that made it worth pinning (live run 2026-08-09): this adapter used to build a fresh
+  // `PreviewSession` literal per call, so `kernel.ts`'s `previous !== session` guard was
+  // structurally unable to hold and every page switch closed the session it had just
+  // established — dropped resize, ended frame stream, frozen pane, respawn on the next switch.
+  describe("stable session identity across a page switch", () => {
+    const REVISION = "b".repeat(64);
+
+    test("two preview() calls for one live tree revision resolve the SAME object", async () => {
+      const adapter = createHostSupervisorAdapter(depsFor());
+      const first = await adapter.preview(specFor({ pageSlug: "dash", treeRevision: REVISION }));
+      const second = await adapter.preview({
+        ...specFor({ pageSlug: "calendar", treeRevision: REVISION }),
+      });
+      if ("code" in first || "code" in second) throw new Error("unexpected failure");
+      expect(second).toBe(first);
+      // Memoising the WRAPPER must not freeze what it reports: `identity` delegates to the
+      // supervised session, which reads the CURRENT spec, so the switch is still visible.
+      expect(second.identity.pageSlug).toBe("calendar");
+    });
+
+    test("the Kernel's establish-then-close-predecessor sequence leaves the switched-to session live", async () => {
+      const adapter = createHostSupervisorAdapter(depsFor());
+      const previous = await adapter.preview(specFor({ pageSlug: "dash", treeRevision: REVISION }));
+      const next = await adapter.preview(specFor({ pageSlug: "calendar", treeRevision: REVISION }));
+      if ("code" in previous || "code" in next) throw new Error("unexpected failure");
+
+      // Verbatim `setActivePreviewSession`: close the displaced session, unless it IS this one.
+      if (previous !== next) await previous.close();
+
+      expect(adapter.liveCount()).toBe(1);
+      // The discriminator: a closed key has no live incarnation, so `resize` comes back a
+      // `FailureDtoV1` instead of the accepted `undefined` — exactly the
+      // `resize(<revision>) dropped — no live incarnation` the run log recorded.
+      await expect(next.resize({ w: 100, h: 30 })).resolves.toBeUndefined();
+    });
+
+    test("a different tree revision is a different session, and a retired key is not reused", async () => {
+      const adapter = createHostSupervisorAdapter(depsFor());
+      const first = await adapter.preview(specFor({ treeRevision: REVISION }));
+      const other = await adapter.preview(specFor({ treeRevision: "c".repeat(64) }));
+      if ("code" in first || "code" in other) throw new Error("unexpected failure");
+      expect(other).not.toBe(first);
+
+      // Only the LIVE window is pinned: once closed, the supervisor retires the key, so the
+      // next preview() for that same revision is a genuinely new session and must not be
+      // served the collected wrapper.
+      await first.close();
+      const reopened = await adapter.preview(specFor({ treeRevision: REVISION }));
+      if ("code" in reopened) throw reopened;
+      expect(reopened).not.toBe(first);
+    });
+  });
+
   test("contract: an all-clear preview() disposition matches the fake oracle's own shape", async () => {
     const fake = createFakeHostSupervisorPort();
     const real = createHostSupervisorAdapter(depsFor());

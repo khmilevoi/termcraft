@@ -628,6 +628,16 @@ export function createKernel(deps: KernelDeps): Kernel {
       // unchanged key (a mere size/theme change re-selects without a swap), and closing that
       // would tear down the live preview this call is establishing.
       //
+      // THE GUARD IS OBJECT IDENTITY, AND THE PORT NOW PROMISES IT (2026-08-09). It used to be
+      // an unwritten agreement with `host/supervisor`, and `host/adapters/host-supervisor.ts`
+      // broke it in between by wrapping each `preview()` result in a fresh object — so this
+      // condition was ALWAYS true and every page switch closed its own live preview. Since the
+      // key became `treeRevision` alone (design-tree phase 3 Task 5), a same-revision switch IS
+      // the unchanged-key case, which is what turned a latent mismatch into a dead preview pane.
+      // `core/ports/host-supervisor.ts`'s `preview` states the contract now; the adapter's
+      // `wrappers` cache honours it. Anything reintroducing a per-call wrapper below this port
+      // reintroduces that defect, and no fake-backed test here can see it.
+      //
       // Fire-and-forget with a logged failure, never a swallowed one (errore rule 21): this
       // setter is synchronous by contract — every `HandlerContext` mutator is — and the
       // establishing path must not block on the predecessor's teardown. `preview.close`'s own

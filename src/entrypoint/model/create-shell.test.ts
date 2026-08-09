@@ -7,6 +7,7 @@ import type { Kernel } from "core/kernel";
 import type { PreviewFrameV1, PreviewIdentityV1, RunTreeResultV1 } from "core/ports";
 import { createFakePreviewSession } from "core/ports/fakes";
 import { FrameAckError, PreviewNoLiveSessionError, createFrameTokenLedger } from "core/preview";
+import type { UUIDv7 } from "core/protocol";
 import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
@@ -528,9 +529,19 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
    */
   const PREVIEW_SESSION_ID = "0192f6f0-1111-7000-8000-000000000001";
 
-  function ledgerBackedKernel(): Pick<Kernel, "acknowledgeDisplay" | "publishFrame"> {
+  /**
+   * `live` is what `currentPreviewSessionId()` reports, and the fixture lets a test MOVE it:
+   * the Kernel mints a fresh id on every start/switch, and since a page switch within one tree
+   * revision now reuses one `PreviewSession` (and so one handle), that movement is exactly what
+   * the handle's read-through getter has to follow.
+   */
+  function ledgerBackedKernel(): Pick<
+    Kernel,
+    "acknowledgeDisplay" | "currentPreviewSessionId" | "publishFrame"
+  > & { live: UUIDv7 | null } {
     const ledger = createFrameTokenLedger();
     return {
+      live: PREVIEW_SESSION_ID,
       publishFrame: (frame: PreviewFrameV1) =>
         ledger.mint({
           previewSessionId: uuidv7(),
@@ -539,6 +550,9 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
           frameSeq: frame.frameSeq,
         }),
       acknowledgeDisplay: (frameToken) => ledger.acknowledge(frameToken),
+      currentPreviewSessionId(): UUIDv7 | null {
+        return this.live;
+      },
     };
   }
 
@@ -593,13 +607,43 @@ describe("toPreviewSessionHandle (frame-token wiring)", () => {
     expect(done.done).toBe(true);
   });
 
+  // A handle now OUTLIVES the id it was seeded with: a page switch within one `treeRevision`
+  // keeps the same `PreviewSession` object (`core/ports/host-supervisor.ts`'s `preview`
+  // contract), so `toKernelPort`'s session-keyed cache reuses THIS handle while the Kernel
+  // mints a fresh `previewSessionId`. Capturing the id froze it, and
+  // `ui/preview/model/interaction.ts`'s `handleGeometryResult` correlation then rejected every
+  // geometry result after the first switch — hover, pin and click dead for the rest of the run.
+  test("previewSessionId follows the Kernel's live id across a page switch on one session", () => {
+    const kernel = ledgerBackedKernel();
+    const session = createFakePreviewSession(IDENTITY);
+    const handle = toPreviewSessionHandle(kernel, session, PREVIEW_SESSION_ID);
+    expect(handle.previewSessionId).toBe(PREVIEW_SESSION_ID);
+
+    const afterSwitch = "0192f6f0-1111-7000-8000-000000000002";
+    kernel.live = afterSwitch;
+    expect(handle.previewSessionId).toBe(afterSwitch);
+  });
+
+  test("previewSessionId falls back to the seeded id rather than widening to null", () => {
+    const kernel = ledgerBackedKernel();
+    const session = createFakePreviewSession(IDENTITY);
+    const handle = toPreviewSessionHandle(kernel, session, PREVIEW_SESSION_ID);
+
+    // A closed session is dropped by `toKernelPort.preview()` itself; this getter must still
+    // never report `null` for a field typed `UUIDv7`, nor invent a value.
+    kernel.live = null;
+    expect(handle.previewSessionId).toBe(PREVIEW_SESSION_ID);
+  });
+
   test("a frame published with no live Kernel session is dropped and logged, never yielded with an invented token", async () => {
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
-    const kernel: Pick<Kernel, "acknowledgeDisplay" | "publishFrame"> = {
-      publishFrame: () =>
-        new PreviewNoLiveSessionError({ reason: "no live session in this fixture" }),
-      acknowledgeDisplay: () => new FrameAckError({ reason: "unused in this fixture" }),
-    };
+    const kernel: Pick<Kernel, "acknowledgeDisplay" | "currentPreviewSessionId" | "publishFrame"> =
+      {
+        publishFrame: () =>
+          new PreviewNoLiveSessionError({ reason: "no live session in this fixture" }),
+        acknowledgeDisplay: () => new FrameAckError({ reason: "unused in this fixture" }),
+        currentPreviewSessionId: () => PREVIEW_SESSION_ID,
+      };
     const session = createFakePreviewSession(IDENTITY);
     const handle = toPreviewSessionHandle(kernel, session, PREVIEW_SESSION_ID);
 

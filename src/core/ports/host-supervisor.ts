@@ -85,6 +85,22 @@ export interface SupervisorEventV1 {
 }
 
 export interface HostSupervisorPort {
+  /**
+   * STABLE SESSION IDENTITY (contract, not an implementation detail — a live run cost this
+   * once, 2026-08-09). While one key's session is live, every `preview()` naming that key MUST
+   * resolve the SAME `PreviewSession` OBJECT. A page switch within one `treeRevision` is exactly
+   * that case since design-tree phase 3 Task 5: the underlying incarnation is unchanged and only
+   * re-mounts.
+   *
+   * `core/kernel/model/kernel.ts`'s `setActivePreviewSession` closes the session it displaces,
+   * guarded by `previous !== session` so it never closes the one being established. That guard
+   * is object identity, so an implementation that mints a fresh wrapper per call silently turns
+   * every switch into a teardown of its own live preview — the frame stream ends, the pane
+   * freezes on the previous page, and the next switch pays a full respawn.
+   *
+   * A key whose session was closed is retired; a later `preview()` for it legitimately returns a
+   * NEW object. Only the live window is pinned.
+   */
   preview(spec: HostSessionSpecV1): Promise<FailureDtoV1 | PreviewSession>;
   /** Live (non-stopped, non-queued) incarnation count across all keys (§13: ≤10). */
   liveCount(): number;

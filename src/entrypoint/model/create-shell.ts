@@ -552,13 +552,14 @@ function toKernelPort(kernel: Kernel): KernelPort {
  * REAL `FrameTokenLedger`: the same testability reason `buildGateRunner`, above, is
  * already exported for.
  *
- * `kernel` is narrowed to `Pick<Kernel, "publishFrame" | "acknowledgeDisplay">`: this
- * function never dispatches a command or reads a snapshot, so it depends on nothing
- * beyond the two frame-token methods it actually calls. `previewSessionId` is taken as an
- * explicit parameter (fix round 1, Finding 3) rather than read a third time from `kernel`
- * here — `toKernelPort`'s own `preview()` already resolved and validated it once per fresh
- * session, and re-reading it here could in principle observe a DIFFERENT value if the
- * Kernel's own session churned between the two calls.
+ * `kernel` is narrowed to `Pick<Kernel, "publishFrame" | "acknowledgeDisplay" |
+ * "currentPreviewSessionId">`: this function never dispatches a command or reads a snapshot,
+ * so it depends on nothing beyond the two frame-token methods it calls plus the live
+ * incarnation id. `previewSessionId` is still taken as an explicit parameter (fix round 1,
+ * Finding 3) — `toKernelPort`'s own `preview()` already resolved and validated it once per
+ * fresh session — but it is now the SEED for a read-through getter rather than the value the
+ * handle reports for its whole life; see that property's own comment for why a handle that
+ * outlives a page switch must not freeze it.
  *
  * A frame published with no live Kernel session (`PreviewNoLiveSessionError` — a real, if
  * narrow, race between `session.frames` yielding and the Kernel's own bookkeeping already
@@ -568,7 +569,7 @@ function toKernelPort(kernel: Kernel): KernelPort {
  * that is not propagated must still be logged).
  */
 export function toPreviewSessionHandle(
-  kernel: Pick<Kernel, "acknowledgeDisplay" | "publishFrame">,
+  kernel: Pick<Kernel, "acknowledgeDisplay" | "currentPreviewSessionId" | "publishFrame">,
   session: PreviewSession,
   previewSessionId: UUIDv7,
 ): PreviewSessionHandle {
@@ -584,7 +585,33 @@ export function toPreviewSessionHandle(
   }
 
   const handle: PreviewSessionHandle = {
-    previewSessionId,
+    /**
+     * READ THROUGH TO THE KERNEL, NOT THE VALUE CAPTURED AT BUILD TIME (2026-08-09, with the
+     * `HostSupervisorPort` identity fix). A handle now OUTLIVES the id it was built with: since
+     * a page switch within one `treeRevision` keeps the same `PreviewSession` object,
+     * `toKernelPort`'s session-keyed cache correctly reuses this handle — while the Kernel mints
+     * a fresh `previewSessionId` on every switch (`core/preview/model/session-commands.ts`'s
+     * `noteSessionEstablished`, kernel-command-contract §7.6: "Each start/switch mints a UUIDv7").
+     *
+     * Captured, those two drift apart on the first switch, and
+     * `ui/preview/model/interaction.ts`'s `handleGeometryResult` correlation
+     * (`current.handle.previewSessionId !== payload.previewSessionId`) then rejects every
+     * geometry result for the rest of the run — hover, pin and click silently dead. That is the
+     * SAME defect fix round 1's Finding 3 closed from the other direction, so it is read live
+     * here rather than re-captured.
+     *
+     * REBUILDING THE HANDLE IS NOT THE ALTERNATIVE: `frames` above is one generator over the
+     * supervisor's single-consumer relay, and `ui/app/model/deps.ts`'s `resyncPreviewSession`
+     * returns the iterator the moment the handle identity changes — a rebuild per switch would
+     * end the live frame stream, which is precisely the freeze this whole change removes.
+     *
+     * The seeded value stays the fallback so this never widens to `null`: `toKernelPort` already
+     * refuses to build a handle without a valid id, and a closed session is dropped by the same
+     * `preview()` call rather than read through this getter.
+     */
+    get previewSessionId(): UUIDv7 {
+      return kernel.currentPreviewSessionId() ?? previewSessionId;
+    },
     session,
     frames: { [Symbol.asyncIterator]: displayFrames },
     acknowledgeDisplay: (frameToken) => kernel.acknowledgeDisplay(frameToken),

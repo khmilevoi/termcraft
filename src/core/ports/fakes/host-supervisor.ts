@@ -12,6 +12,16 @@ import { createFakePreviewSession } from "./preview-session";
  * `close()` so closing the session ALSO retires it from this supervisor's own bookkeeping,
  * exactly as a real composed session would: `liveCount()` and `stopAll()` stay accurate
  * without the test having to manually track which sessions are still open.
+ *
+ * KNOWN FIDELITY GAP — DO NOT BUILD ON IT (recorded 2026-08-09, after it hid a live defect).
+ * "A fresh session per call" is the one place this fake does NOT mirror the port: the real
+ * contract pins the opposite (`../host-supervisor.ts`'s `preview` doc) — while a key is live,
+ * every `preview()` naming it resolves the SAME object, and since design-tree phase 3 Task 5 a
+ * page switch within one `treeRevision` is exactly that case. So a Kernel-level test written
+ * against this fake cannot observe what a switch does to a live session: closing the displaced
+ * session is always correct here and was catastrophic in production.
+ * `host/adapters/host-supervisor.test.ts`'s "stable session identity across a page switch"
+ * block is where that invariant is pinned, on the real adapter.
  */
 
 export type HostSupervisorFailableMethod = "preview";
