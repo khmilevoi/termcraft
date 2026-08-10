@@ -5,6 +5,7 @@
  */
 export { colorV1ToInput } from "./model/color";
 export type {
+  FrameElementRects,
   GeometryIntent,
   HoverGeometry,
   PendingGeometry,
@@ -16,10 +17,13 @@ export {
   createPreviewInteractionState,
   frameLocalPoint,
   handleGeometryResult,
+  requestElementRects,
   requestGeometry,
 } from "./model/interaction";
+export type { ElementRectIndex } from "./model/element-rects";
+export { indexElementRects } from "./model/element-rects";
 export type { Point, Rect, SelectionCorners } from "./model/overlay";
-export { SELECTION_GLYPHS, pinAnchor, selectionCorners } from "./model/overlay";
+export { SELECTION_GLYPHS, pinAnchor, pinInputAnchor, selectionCorners } from "./model/overlay";
 export { hostFailureCodeOf, isDesignRenderFailure } from "./model/failure-class";
 export { hostFailurePhrase } from "./model/host-failure-phrase";
 export type { RepairPromptInput } from "./model/repair-prompt";

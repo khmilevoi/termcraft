@@ -92,6 +92,17 @@ export interface WorkspaceLocalState {
   readonly agentHealth: Atom<AgentHealth>;
 }
 
+/**
+ * A preview that has stopped, and the two facts the chrome branches on: whether a retry is offered
+ * at all, and whether the PAGE was at fault (a render crash) rather than the host (never started).
+ * Shared by the component and `model/hint-keys.ts`, which is why it lives here rather than beside
+ * either one.
+ */
+export type PreviewHalt = null | {
+  readonly retryAvailable: boolean;
+  readonly designAtFault: boolean;
+};
+
 export interface WorkspaceDeps {
   readonly mirror: Mirror;
   readonly dispatcher: Dispatcher;
@@ -102,11 +113,12 @@ export interface WorkspaceDeps {
   readonly interaction: PreviewInteractionState;
   readonly local: WorkspaceLocalState;
   /**
-   * The composer editor's wiring. Declared here, structurally, for the same reason the rest of
-   * this interface is: `ui/workspace` never imports `ui/app`, and the App's `UiDeps` satisfies
-   * this shape.
+   * The composer and new-pin editors' wiring. Declared here, structurally, for the same reason
+   * the rest of this interface is: `ui/workspace` never imports `ui/app`, and the App's `UiDeps`
+   * satisfies this shape. The pin field is the Workspace's business because its box is anchored
+   * inside the preview canvas (spec §3.2), not centred in the App's modal layer.
    */
-  readonly editors: { readonly composer: EditorBridge };
+  readonly editors: { readonly composer: EditorBridge; readonly pin: EditorBridge };
   /**
    * The page the Workspace is actually showing: the tab-strip override when the user has picked
    * one, else the Kernel's own `activePageSlug`. Every consumer — tab strip, status bar, pin

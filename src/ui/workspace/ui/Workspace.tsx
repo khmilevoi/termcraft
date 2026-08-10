@@ -21,6 +21,7 @@ import {
 import type { MarkdownLine } from "ui/chat";
 import type { UiPreviewFrame } from "ui/kernel";
 import type { PreviewMirror, TurnMirror } from "ui/mirror";
+import { PIN_INPUT_POPUP_SIZE, PinInputPopup } from "ui/popups";
 import {
   EmptyState,
   ErrorPanel,
@@ -33,13 +34,16 @@ import {
   hostFailureCodeOf,
   isDesignRenderFailure,
   pageEntryOf,
+  pinInputAnchor,
+  requestElementRects,
   requestGeometry,
 } from "ui/preview";
-import type { HoverGeometry, PendingPin, Rect } from "ui/preview";
+import type { ElementRectIndex, HoverGeometry, PendingPin, Rect } from "ui/preview";
 import { SlashMenu } from "ui/slash-menu";
 import { StatusBar } from "ui/status-bar";
 import type { StatusBarHintKey, StatusBarModeChip, StatusBarSegment } from "ui/status-bar";
 import { editorRowCount } from "ui/text-input";
+import type { EditorBridge } from "ui/text-input";
 import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { agentStatusMaxRows } from "../model/agent-block-budget";
@@ -354,6 +358,27 @@ function renderTabs(
 }
 
 /** Selects the preview region content: enlarge is handled by the App; here empty/error/frame/ready. */
+/**
+ * The new-pin comment box, anchored beside its own badge inside the preview canvas (design
+ * `wsPinInput`, `design/termcraft-engine.js:695-701`; spec §3.2 "a mini input opens at the
+ * click point"). It is NOT one of the App's centred modal overlays — the click point only
+ * means anything in this canvas' coordinate space, which is why the box is drawn here.
+ */
+function renderPinInput(
+  bridge: EditorBridge,
+  pending: PendingPin,
+  bounds: Rect,
+  readOnly: boolean,
+) {
+  const at = pinInputAnchor({ badge: pending.point, box: PIN_INPUT_POPUP_SIZE, bounds });
+  return (
+    <box id="ws-pin-input-anchor" position="absolute" left={at.x} top={at.y}>
+      {/* §7.5: the field is live except on a read-only screen, where pins are refused outright. */}
+      <PinInputPopup id="overlay-pin" focused={!readOnly} bridge={bridge} />
+    </box>
+  );
+}
+
 function renderPreviewRegion(
   preview: PreviewMirror,
   uiFrame: UiPreviewFrame | null,
@@ -367,7 +392,16 @@ function renderPreviewRegion(
   region: CellSize,
   interaction: Readonly<{
     pins: readonly PinDtoV1[];
+    /** The displayed frame's element rectangles, or `null` until its `layout` reply lands. */
+    elementRects: ElementRectIndex | null;
     pendingPin: PendingPin | null;
+    /**
+     * The new-pin comment field's wiring, non-null exactly while the `pin-input` overlay is the
+     * active one. The box is anchored beside the pending pin's badge rather than centred in the
+     * App's modal layer (spec §3.2: it "opens at the click point"), so it is drawn here, inside
+     * the preview canvas that owns those coordinates.
+     */
+    pinInputBridge: EditorBridge | null;
     selectionRect: Rect | null;
     hover: HoverGeometry | null;
     onRendered: (frame: UiPreviewFrame) => void;
@@ -454,6 +488,14 @@ function renderPreviewRegion(
   if (!hasPages) return <EmptyState id="ws-preview-empty" width={region.w} height={region.h} />;
   if (uiFrame !== null) {
     const frameRect = { x: 0, y: 0, width: uiFrame.frame.width, height: uiFrame.frame.height };
+    // What the canvas actually SHOWS of that frame. The pin-input box is placed against this,
+    // not against `frameRect`: a box anchored past the clip would simply vanish.
+    const visibleRect = {
+      x: 0,
+      y: 0,
+      width: Math.min(uiFrame.frame.width, region.w),
+      height: Math.min(uiFrame.frame.height, region.h),
+    };
     return (
       <box
         id="ws-preview-canvas"
@@ -463,8 +505,8 @@ function renderPreviewRegion(
         // `ui/app/model/deps.ts`) is a transient the pane clips, never an overdraw that
         // eats the pane's own border and the rows below it. `overflow="hidden"` is what
         // makes the clamp actually cut the content rather than merely mis-measure the box.
-        width={Math.min(uiFrame.frame.width, region.w)}
-        height={Math.min(uiFrame.frame.height, region.h)}
+        width={visibleRect.width}
+        height={visibleRect.height}
         overflow="hidden"
         onMouseMove={interaction.onMouseMove}
         onMouseDown={interaction.onMouseDown}
@@ -478,10 +520,14 @@ function renderPreviewRegion(
           id="ws-preview-overlays"
           frameRect={frameRect}
           pins={interaction.pins}
+          elementRects={interaction.elementRects}
           pendingPin={interaction.pendingPin}
           selectionRect={interaction.selectionRect}
           hover={interaction.hover}
         />
+        {interaction.pinInputBridge !== null &&
+          interaction.pendingPin !== null &&
+          renderPinInput(interaction.pinInputBridge, interaction.pendingPin, visibleRect, readOnly)}
       </box>
     );
   }
@@ -614,7 +660,15 @@ export const Workspace = reatomComponent<{
   const minSize = active !== undefined && active.status === "ready" ? active.minSize : null;
   const ctx = turn.phase === "running" ? (turn.usage?.contextPercent ?? null) : null;
   const pins = activePageSlug === null ? [] : (mirror.pinsByPage().get(activePageSlug) ?? []);
-  const pinRows = derivePinListRows(pins);
+  // Only the DISPLAYED frame's rectangles count. The atom is already cleared on every
+  // acknowledgement, so this guard is belt-and-braces against reading a reply that landed for
+  // a frame the shell has since replaced.
+  const resolvedRects = interaction.elementRects();
+  const elementRects =
+    resolvedRects !== null && resolvedRects.frameToken === interaction.displayedFrameToken()
+      ? resolvedRects.rects
+      : null;
+  const pinRows = derivePinListRows(pins, elementRects);
   const history = mirror.history();
   const records = history.records;
   // Read once, like `history` above — the status-bar key row's "retries" label (review finding
@@ -687,10 +741,14 @@ export const Workspace = reatomComponent<{
   const selectionRect = interaction.selectionRect();
   const hover = interaction.hover();
   const pendingPin = interaction.pendingPin();
-  const acknowledgeRenderedFrame = useWrap(
-    (rendered: UiPreviewFrame) => acknowledgeFrame(props.deps, rendered),
-    "ui.Workspace.acknowledgeRenderedFrame",
-  );
+  const acknowledgeRenderedFrame = useWrap((rendered: UiPreviewFrame) => {
+    acknowledgeFrame(props.deps, rendered);
+    // Every pin on the page is placed against this frame's own element rectangles, so they are
+    // asked for the moment the frame becomes query-authorising. `requestElementRects` is a
+    // no-op while one is in flight or already answered, and OpenTUI calls this back on every
+    // repaint — which is exactly the retry path for a query the Kernel refused.
+    requestElementRects(props.deps);
+  }, "ui.Workspace.acknowledgeRenderedFrame");
   // The live chat scroll surface, published for the keyboard layer (`ChatViewport`,
   // `../types.ts`) — see that interface's own doc comment for why an imperative ref, not a
   // Reatom-derived value, is what bridges the renderable to `applyIntent`.
@@ -1127,17 +1185,14 @@ export const Workspace = reatomComponent<{
                 )}
               </scrollbox>
               {/*
-               * DIVERGENCE (M12 data-source gap): the mirror carries `PinDtoV1` but no
-               * per-pin anchor-resolution signal — anchor resolution is a host-render
-               * concern (`rectOf`, spec §4.2) and `PreviewOverlays` places every open pin
-               * by fraction without ever marking one an orphan. So `visible` has no kernel
-               * source yet; `derivePinListRows` passes `visible: true` for every pin
-               * (matching what the preview always draws) until a render-resolved
-               * element-id set reaches the mirror. The full open/resolved/orphan row
-               * structure and the exact §3.2 "not visible…" marker copy are implemented in
-               * `PinList` and stay dormant for the orphan case, rather than fabricating a
-               * resolution signal. `derivePinListRows` also numbers each open pin's badge
-               * among open pins only, matching `PreviewOverlays`' own numbering.
+               * Anchor resolution is a host-render concern (`rectOf`, spec §4.2) and the
+               * mirror still carries no per-pin signal — but it does not need to: the frame's
+               * own `layout` reply names every element the render contains, so a pin whose
+               * element is missing from `elementRects` IS the §3.2 orphan, and `PinList`'s
+               * "not visible in the current render" row finally has a real source. Both
+               * surfaces read the same map, so the preview and this list can never disagree
+               * about which pins are on screen — and `derivePinListRows` numbers each open
+               * pin among open pins only, matching `PreviewOverlays`' own numbering.
                */}
               <PinList id="ws-pins" pageSlug={activePageSlug ?? ""} pins={pinRows} />
             </box>
@@ -1215,7 +1270,9 @@ export const Workspace = reatomComponent<{
             previewRegion,
             {
               pins,
+              elementRects,
               pendingPin,
+              pinInputBridge: props.activeOverlay === "pin-input" ? props.deps.editors.pin : null,
               selectionRect,
               hover,
               onRendered: acknowledgeRenderedFrame,

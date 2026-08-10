@@ -79,6 +79,13 @@ export interface AdmissionDeps {
   readonly staging: StagingService;
   /** Only `readAppendBase` is needed — see this file's header, step 1b, for why this must be read here, after `admit()`, never earlier. */
   readonly chatReader: Pick<ChatReader, "readAppendBase">;
+  /**
+   * Every element id the currently displayed render contains, or `null` when that is unknown
+   * (no live preview, or no `layout` answer for the frame now displayed). Design spec §3.2:
+   * unresolved pins "are skipped when sending to the agent" — this is the signal that decides
+   * which are unresolved, read at the one honest send-time instant like the fold beside it.
+   */
+  readonly renderedElementIds: () => ReadonlySet<string> | null;
 }
 
 /**
@@ -91,10 +98,18 @@ export interface AdmissionDeps {
  * admission to fail. A fold FAILURE is still swallowed here (kernel-command-contract §12.2
  * item 1 never makes a stale pin reference fatal to sending a new message), but per the
  * errore rule against silently swallowing errors, it is logged before being dropped.
+ *
+ * "Open" is necessary but not sufficient: design spec §3.2 sends only the open pins "whose
+ * anchors resolve", so a pin whose anchored element the current render does not contain is
+ * dropped here too — it is the same pin the preview declines to draw and the chat list marks
+ * "not visible in the current render". When the rendered set is `null` nothing is known about
+ * the render, and an unknown is never treated as an absence: every open pin is sent, exactly
+ * as before this rule existed.
  */
 async function resolveOpenPins(
   pinReader: PinReader,
   candidates: readonly AdmissionCandidatePinV1[],
+  renderedElementIds: ReadonlySet<string> | null,
 ): Promise<string[]> {
   const pageSlugs: PageSlug[] = [];
   for (const candidate of candidates) {
@@ -121,6 +136,12 @@ async function resolveOpenPins(
     const match = pins.find((pin) => pin.pinId === candidate.pinId);
     if (match === undefined) continue;
     if (match.status !== "open") continue;
+    if (renderedElementIds !== null && !renderedElementIds.has(match.element)) {
+      log.info(
+        `admission: not sending pin "${candidate.pinId}" — its element "${match.element}" is not in the current render`,
+      );
+      continue;
+    }
     resolved.push(candidate.pinId);
   }
   return resolved;
@@ -139,7 +160,9 @@ export async function runAdmission(
   const turnId = input.turnId;
   const createdAt = deps.clock.now().toISOString();
 
-  const resolvedPinIds = await wrap(resolveOpenPins(deps.pinReader, input.candidatePins));
+  const resolvedPinIds = await wrap(
+    resolveOpenPins(deps.pinReader, input.candidatePins, deps.renderedElementIds()),
+  );
 
   const userRecord: ChatUserRecord = {
     kind: "user",

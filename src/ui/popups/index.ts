@@ -13,7 +13,7 @@ export {
   formatChatWhen,
 } from "./model/chat-list";
 export type { PinInputPopupProps } from "./ui/PinInputPopup";
-export { PinInputPopup } from "./ui/PinInputPopup";
+export { PIN_INPUT_POPUP_SIZE, PinInputPopup } from "./ui/PinInputPopup";
 export type { ExportFailurePopupProps, ExportPopupProps } from "./ui/ExportPopup";
 export { ExportFailurePopup, ExportPopup } from "./ui/ExportPopup";
 export type { TrustPromptProps } from "./ui/TrustPrompt";

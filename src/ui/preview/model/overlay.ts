@@ -30,6 +30,33 @@ export function pinAnchor(fx: number, fy: number, rect: Rect): Point {
   };
 }
 
+/**
+ * Where the new-pin input box opens: two columns right of the numbered badge, on the badge's
+ * own row (design `wsPinInput`, `design/termcraft-engine.js:696-699` — `pxs = cx+2, pys = cy`;
+ * spec §3.2: "a mini input opens AT THE CLICK POINT over a dimmed preview"). Both `badge` and
+ * the returned point live in `bounds`' own coordinate space.
+ *
+ * A box that would overrun `bounds` slides back inside rather than being clipped — the design
+ * keeps the box whole and only ever shrinks it by width (`pw = min(40, dw-14)`), never cuts it.
+ * When `bounds` is too small to hold the box at all, the origin wins over the offset.
+ */
+export function pinInputAnchor(
+  input: Readonly<{
+    badge: Point;
+    box: { readonly width: number; readonly height: number };
+    bounds: Rect;
+  }>,
+): Point {
+  const place = (badge: number, origin: number, extent: number, size: number): number => {
+    const last = Math.max(origin, origin + extent - size);
+    return Math.min(Math.max(badge, origin), last);
+  };
+  return {
+    x: place(input.badge.x + 2, input.bounds.x, input.bounds.width, input.box.width),
+    y: place(input.badge.y, input.bounds.y, input.bounds.height, input.box.height),
+  };
+}
+
 /** The four selection-corner glyph positions, one cell OUTSIDE the selected rect (design `selCorners`). */
 export interface SelectionCorners {
   readonly topLeft: Point;

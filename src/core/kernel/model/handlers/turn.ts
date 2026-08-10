@@ -1731,6 +1731,11 @@ async function runTurnStart(
     pinReader: context.deps.pinReader,
     turnTransactions: context.deps.turnTransactions,
     chatReader: context.deps.chatReader,
+    // Design spec §3.2: only open pins "whose anchors resolve" ride the next message. The
+    // Kernel already holds the host's own answer for the frame the user is looking at — the
+    // `layout` reply the shell asked for to place its pin badges — so the sent set and the
+    // drawn set come from one source rather than two guesses.
+    renderedElementIds: () => context.previewSessionCommands.renderedElementIds(),
     staging: cachingStaging.staging,
     agentBackend: resolvedAgent.agentBackend,
     gateRunner: context.deps.gateRunner,

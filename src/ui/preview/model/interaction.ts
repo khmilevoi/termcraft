@@ -3,10 +3,11 @@ import * as errore from "errore";
 
 import type { FrameTokenV1, GeometryTokenV1 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
-import type { PageSlug } from "entities/page";
 import { log, trace } from "infrastructure/debug-log";
 import type { Dispatcher, EventOf, UiPreviewFrame } from "ui/kernel";
 
+import type { ElementRectIndex } from "./element-rects";
+import { indexElementRects } from "./element-rects";
 import type { Point, Rect } from "./overlay";
 
 // DIAGNOSTIC (infrastructure/debug-log): added while investigating "pins don't work" — traces
@@ -38,6 +39,12 @@ export interface PendingPin {
   readonly point: Point;
 }
 
+/** The element rectangles of ONE displayed frame — never carried across to the next one. */
+export interface FrameElementRects {
+  readonly frameToken: FrameTokenV1;
+  readonly rects: ElementRectIndex;
+}
+
 export interface HoverGeometry {
   readonly rect: Rect;
   readonly label: string;
@@ -50,6 +57,14 @@ export interface PreviewInteractionState {
   readonly pendingPin: Atom<PendingPin | null>;
   readonly hover: Atom<HoverGeometry | null>;
   readonly selectionRect: Atom<Rect | null>;
+  /**
+   * The displayed frame whose `layout` query is in flight, or `null`. Deliberately its OWN
+   * lane, not `pendingGeometry`'s: that one is latest-wins against the pointer, and a pin's
+   * anchor must not be superseded — and silently dropped — by the next mouse-move.
+   */
+  readonly pendingElementRects: Atom<FrameTokenV1 | null>;
+  /** The resolved element rectangles of the displayed frame, or `null` before they land. */
+  readonly elementRects: Atom<FrameElementRects | null>;
 }
 
 interface PreviewInteractionDeps {
@@ -57,6 +72,13 @@ interface PreviewInteractionDeps {
   readonly previewFrame: Atom<UiPreviewFrame | null>;
   readonly runtimeError: Atom<Error | null>;
   readonly screen: () => string;
+  /**
+   * The page the preview is actually showing — the tab override when the user picked one, else
+   * the Kernel's active slug. A `checkHit` reply names only an element (§7.1), and a selection
+   * is stored as (page, element) per spec §3.2, so the page half is read here rather than
+   * fabricated from a field the wire has never carried.
+   */
+  readonly activePageSlug: () => string | null;
   readonly local: {
     readonly overlay: { set(value: "pin-input" | null): unknown };
     readonly pinDraft: Atom<string>;
@@ -72,6 +94,8 @@ export function createPreviewInteractionState(): PreviewInteractionState {
     pendingPin: atom<PendingPin | null>(null, "ui.preview.pendingPin"),
     hover: atom<HoverGeometry | null>(null, "ui.preview.hover"),
     selectionRect: atom<Rect | null>(null, "ui.preview.selectionRect"),
+    pendingElementRects: atom<FrameTokenV1 | null>(null, "ui.preview.pendingElementRects"),
+    elementRects: atom<FrameElementRects | null>(null, "ui.preview.elementRects"),
   };
 }
 
@@ -95,6 +119,12 @@ export function acknowledgeFrame(deps: PreviewInteractionDeps, uiFrame: UiPrevie
   deps.interaction.pendingPin.set(null);
   deps.interaction.hover.set(null);
   deps.interaction.selectionRect.set(null);
+  // A new frame reseals the hit grid, the rectangles and the layout tree together
+  // (host-supervision §7.1), so the previous frame's rectangles are not evidence about this
+  // one. Dropped rather than reused: a badge drawn from stale geometry is exactly the
+  // "positioning a pin against newer pixels" §7.1 exists to prevent.
+  deps.interaction.pendingElementRects.set(null);
+  deps.interaction.elementRects.set(null);
 }
 
 /** Dispatches one latest-wins geometry query for the successfully displayed frame only. */
@@ -105,11 +135,19 @@ export function requestGeometry(
   y: number,
 ): void {
   if (!Number.isSafeInteger(x) || x < 0 || !Number.isSafeInteger(y) || y < 0) {
-    tracePin("ui.preview.requestGeometry", purpose, { step: "refused", reason: "invalid coordinate", x, y });
+    tracePin("ui.preview.requestGeometry", purpose, {
+      step: "refused",
+      reason: "invalid coordinate",
+      x,
+      y,
+    });
     return;
   }
   if (purpose !== "hover" && deps.screen() === "read-only") {
-    tracePin("ui.preview.requestGeometry", purpose, { step: "refused", reason: "screen is read-only" });
+    tracePin("ui.preview.requestGeometry", purpose, {
+      step: "refused",
+      reason: "screen is read-only",
+    });
     return;
   }
 
@@ -159,11 +197,88 @@ export function requestGeometry(
   dispatchGeometryRequest(deps, request);
 }
 
+/**
+ * Resolves every element rectangle of the displayed frame in ONE `layout` query, so a pin's
+ * badge can sit where the spec puts it — `rect.origin + (fx·width, fy·height)` of the anchored
+ * element (§3.2), not of the whole frame — and so a pin whose element the render does not
+ * contain can be marked "not visible" instead of drawn somewhere it never was.
+ *
+ * `layout` is the spec's own batch primitive (§4.2 `layoutTree`; the closed query enum
+ * §10.1 fixes has no per-id batch member), so this costs no protocol change and one round
+ * trip per frame regardless of how many pins the page has.
+ *
+ * Idempotent and safe to call on every render: it is a no-op once the query is in flight or
+ * the current frame's rectangles have landed. That is also the retry — a refused query leaves
+ * both atoms clear, and the next render asks again.
+ */
+export function requestElementRects(deps: PreviewInteractionDeps): void {
+  const displayed = deps.interaction.displayedFrameToken();
+  if (displayed === null) return;
+  const current = deps.previewFrame();
+  if (current === null || current.frameToken !== displayed) return;
+  if (deps.interaction.pendingElementRects() !== null) return;
+  const resolved = deps.interaction.elementRects();
+  if (resolved !== null && resolved.frameToken === displayed) return;
+
+  deps.interaction.pendingElementRects.set(displayed);
+  const dispatched = deps.dispatcher.dispatch("preview.queryGeometry", {
+    frameToken: displayed,
+    query: { kind: "layout" },
+  });
+  void dispatched.then(
+    wrap((result) => {
+      const error =
+        result instanceof Error
+          ? result
+          : result.status === "rejected"
+            ? new GeometryQueryRejectedError({ code: result.code })
+            : null;
+      if (error === null) return;
+      // Logged, never raised into `runtimeError` (errore rule 21): unlike a click, nothing
+      // the user did is waiting on this. The cost of a refusal is that this frame's pins stay
+      // unplaced until the next render retries — not a failure worth a shell-wide banner.
+      log.warn("UI element-rect query failed:", error);
+      if (deps.interaction.pendingElementRects() === displayed) {
+        deps.interaction.pendingElementRects.set(null);
+      }
+    }),
+  );
+}
+
+/**
+ * Stores a `layout` reply as the displayed frame's rectangles, subject to the same correlation
+ * checks a pointer-driven result gets: the reply must be about the frame still displayed, from
+ * the session still live, and the one this lane actually asked for.
+ */
+function applyElementRects(
+  deps: PreviewInteractionDeps,
+  envelope: EventOf<"preview.geometryResult">,
+): void {
+  const payload = envelope.payload;
+  const pending = deps.interaction.pendingElementRects();
+  if (pending === null || payload.frameTokenId !== pending) return;
+  deps.interaction.pendingElementRects.set(null);
+  if (deps.interaction.displayedFrameToken() !== pending) return;
+  const current = deps.previewFrame();
+  if (current === null || current.frameToken !== pending) return;
+  if (current.handle.previewSessionId !== payload.previewSessionId) return;
+  if (payload.result.kind !== "layoutTree") return;
+
+  deps.interaction.elementRects.set({
+    frameToken: pending,
+    rects: indexElementRects(payload.result.tree),
+  });
+}
+
 /** Applies a geometry event only when both of its capability correlation fields still match. */
 export function handleGeometryResult(
   deps: PreviewInteractionDeps,
   envelope: EventOf<"preview.geometryResult">,
 ): void {
+  // The element-rect lane owns every `layout` reply and is correlated separately — see
+  // `requestElementRects`. Checked before `pendingGeometry`, which that lane never touches.
+  if (envelope.payload.queryKind === "layout") return applyElementRects(deps, envelope);
+
   const pending = deps.interaction.pendingGeometry();
   if (pending === null) return;
   const payload = envelope.payload;
@@ -239,68 +354,46 @@ export function handleGeometryResult(
     return;
   }
 
-  const hit = parseHitGeometry(payload.result);
-  if (hit === null) {
-    if (pending.purpose === "hover") deps.interaction.hover.set(null);
+  // A `hit`/`pin-anchor` reply is a `checkHit` (§7.1) and carries ONE fact: the element id
+  // under the cursor. Everything else the overlays need — where that element is — comes from
+  // this frame's own rectangles, the map the pin badges already read.
+  const elementId = payload.result.kind === "checkHit" ? (payload.result.hit?.id ?? null) : null;
+  if (elementId === null) {
+    deps.interaction.hover.set(null);
     if (pending.purpose === "select") deps.interaction.selectionRect.set(null);
     return;
   }
 
-  deps.interaction.hover.set({ rect: hit.rect, label: hit.label });
+  const resolved = deps.interaction.elementRects();
+  const rect =
+    resolved !== null && resolved.frameToken === pending.frameToken
+      ? (resolved.rects.get(elementId) ?? null)
+      : null;
+
+  // DIVERGENCE (the same one the composer chip already carries, `deriveComposerAttach`): the
+  // design's hover label is `panel "network"` — component kind plus human label, from
+  // `describe`. Neither exists yet: the runtime catalog is unbuilt, so the host's own
+  // `DescribedElement` has no `label` and its `kind` is an OpenTUI constructor name
+  // (`BoxRenderable`), not the design's vocabulary. The element id is the one real name in
+  // play, and it is what the selection chip shows for the very same element.
+  deps.interaction.hover.set(rect === null ? null : { rect, label: elementId });
   if (pending.purpose === "hover") return;
 
-  deps.interaction.selectionRect.set(hit.rect);
-  reportDispatchFailure(
-    deps.dispatcher.dispatch("selection.set", {
-      pageSlug: hit.pageSlug,
-      elementId: hit.elementId,
-    }),
-  );
-}
-
-interface HitGeometry extends HoverGeometry {
-  readonly pageSlug: PageSlug;
-  readonly elementId: string;
-}
-
-function parseHitGeometry(value: unknown): HitGeometry | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  if (!("pageSlug" in value) || typeof value.pageSlug !== "string") return null;
-  const pageSlug = parsePageSlug(value.pageSlug);
-  if (pageSlug instanceof Error) return null;
-  if (
-    !("elementId" in value) ||
-    typeof value.elementId !== "string" ||
-    value.elementId.length === 0
-  )
-    return null;
-  if (!("label" in value) || typeof value.label !== "string") return null;
-  if (!("rect" in value)) return null;
-  const rect = parseRect(value.rect);
-  if (rect === null) return null;
-  return {
-    pageSlug,
-    elementId: value.elementId,
-    rect,
-    label: value.label,
-  };
-}
-
-function parseRect(value: unknown): Rect | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  if (!("x" in value) || !isNonNegativeInteger(value.x)) return null;
-  if (!("y" in value) || !isNonNegativeInteger(value.y)) return null;
-  if (!("width" in value) || !isPositiveInteger(value.width)) return null;
-  if (!("height" in value) || !isPositiveInteger(value.height)) return null;
-  return { x: value.x, y: value.y, width: value.width, height: value.height };
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isPositiveInteger(value: unknown): value is number {
-  return isNonNegativeInteger(value) && value > 0;
+  // Corners need the rectangle; the selection itself does not. A click still selects while the
+  // frame's rectangles are in flight — the corner glyphs simply appear when they land.
+  deps.interaction.selectionRect.set(rect);
+  const active = deps.activePageSlug();
+  const pageSlug = active === null ? null : parsePageSlug(active);
+  if (pageSlug === null || pageSlug instanceof Error) {
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "dropped",
+      reason: "no valid active page to attribute the selection to",
+      activePageSlug: active,
+      elementId,
+    });
+    return;
+  }
+  reportDispatchFailure(deps.dispatcher.dispatch("selection.set", { pageSlug, elementId }));
 }
 
 class GeometryQueryRejectedError extends errore.createTaggedError({

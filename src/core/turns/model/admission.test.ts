@@ -128,8 +128,29 @@ function harness(
   const pinReader = createFakePinStore();
   const turnTransactions = createFakeTurnTransactionService();
   const staging = createFakeStagingService();
-  const deps: AdmissionDeps = { machine, clock, pinReader, turnTransactions, staging, chatReader };
-  return { deps, machine, pinReader, turnTransactions, staging, chatReader };
+  // `null` — nothing is known about the current render — is the neutral default these cases
+  // want: it leaves the §3.2 anchor filter inert so each test exercises only the fold.
+  let renderedElementIds: ReadonlySet<string> | null = null;
+  const deps: AdmissionDeps = {
+    machine,
+    clock,
+    pinReader,
+    turnTransactions,
+    staging,
+    chatReader,
+    renderedElementIds: () => renderedElementIds,
+  };
+  return {
+    deps,
+    machine,
+    pinReader,
+    turnTransactions,
+    staging,
+    chatReader,
+    setRenderedElementIds: (ids: ReadonlySet<string> | null) => {
+      renderedElementIds = ids;
+    },
+  };
 }
 
 describe("runAdmission — idle -> admitting -> workspace-ready", () => {
@@ -433,6 +454,72 @@ describe("runAdmission — idle -> admitting -> workspace-ready", () => {
       expect(outcome.context.userRecord.pins).toEqual(["pin-open"]);
       // Exactly one fold call per DISTINCT page, regardless of how many candidates named it.
       expect(h.pinReader.calls.filter((call) => call.method === "fold").length).toBe(2);
+    });
+  });
+
+  describe("only pins whose anchors resolve are sent (design spec §3.2)", () => {
+    const created = (recordId: string, pinId: string, element: string) =>
+      ({
+        kind: "pin:created",
+        recordId,
+        pinId,
+        element,
+        fx: 0.5,
+        fy: 0.5,
+        text: "note",
+        ts: new Date(T0).toISOString(),
+      }) as const;
+
+    /**
+     * Two open pins on "home" — `pin-drawn` anchored to `el-drawn`, `pin-orphan` to `el-gone`
+     * — admitted against the given rendered-element set.
+     *
+     * Every await is `wrap`ped AND the calls are flat: an intermediate async helper would put
+     * an unwrapped await between them, which resumes outside this test's own `context.start`
+     * frame and leaves `finishAdmission` applying against a context that never saw
+     * `beginAdmission` (the same rule this file's fold test states at length).
+     */
+    async function admittedPins(rendered: ReadonlySet<string> | null) {
+      return context.start(async () => {
+        const h = harness();
+        h.machine.apply("beginAdmission");
+        h.setRenderedElementIds(rendered);
+        await wrap(
+          h.pinReader.appendStandaloneEvent(PAGE_HOME, created("rec-1", "pin-drawn", "el-drawn")),
+        );
+        await wrap(
+          h.pinReader.appendStandaloneEvent(PAGE_HOME, created("rec-2", "pin-orphan", "el-gone")),
+        );
+
+        const outcome = await wrap(
+          runAdmission(
+            h.deps,
+            baseInput({
+              candidatePins: [
+                { pageSlug: PAGE_HOME, pinId: "pin-drawn" },
+                { pageSlug: PAGE_HOME, pinId: "pin-orphan" },
+              ],
+            }),
+          ),
+        );
+        if (outcome.kind !== "workspace-ready")
+          throw new Error(`expected workspace-ready, got ${JSON.stringify(outcome)}`);
+        return outcome.context.userRecord.pins;
+      });
+    }
+
+    test("drops an open pin whose element the current render does not contain", async () => {
+      expect(await admittedPins(new Set(["el-drawn", "el-other"]))).toEqual(["pin-drawn"]);
+    });
+
+    test("sends every open pin when nothing is known about the render", async () => {
+      // An unknown render is not an absent element: refusing to send here would silently drop
+      // a pin the user can see, whenever the preview happens not to have answered yet.
+      expect(await admittedPins(null)).toEqual(["pin-drawn", "pin-orphan"]);
+    });
+
+    test("sends nothing when the render resolves none of the anchors", async () => {
+      expect(await admittedPins(new Set(["something-else"]))).toBeUndefined();
     });
   });
 });

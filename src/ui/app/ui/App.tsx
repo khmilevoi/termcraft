@@ -12,7 +12,6 @@ import {
   ExportFailurePopup,
   ExportPopup,
   FRESH_CHAT_LABEL,
-  PinInputPopup,
   TrustPrompt,
   formatChatWhen,
 } from "ui/popups";
@@ -102,16 +101,10 @@ function renderOverlay(deps: UiDeps, nowMs: number, overlay: OverlayKind | null)
       <ChatListPopup id="overlay-chats" rows={rows} selectedIndex={deps.local.chatSelection()} />
     );
   }
-  if (overlay === "pin-input") {
-    return (
-      <PinInputPopup
-        id="overlay-pin"
-        // §7.5: the field is live except on a read-only screen, where pins are refused outright.
-        focused={deps.screen() !== "read-only"}
-        bridge={deps.editors.pin}
-      />
-    );
-  }
+  // `pin-input` is deliberately absent: its box is not a centred modal. Spec §3.2 opens it "at
+  // the click point over a dimmed preview" and design `wsPinInput` draws it two columns right of
+  // the numbered badge — coordinates that only exist inside the preview canvas, so `Workspace`
+  // renders it there (`renderPinInput`). It still resolves as an overlay for focus and keymap.
   if (overlay !== "export") return null;
   const exportState = deps.mirror.export();
   if (exportState.phase === "done") {

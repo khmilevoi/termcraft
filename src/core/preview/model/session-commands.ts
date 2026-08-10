@@ -17,6 +17,7 @@ import type {
   FrameIdentityV1,
   FrameTokenV1,
   GeometryTokenV1,
+  LayoutNodeV1,
   UnavailableReason,
 } from "core/protocol";
 import type { Size } from "entities/page";
@@ -116,6 +117,23 @@ export interface PreviewSessionCommands {
     frameToken: FrameTokenV1,
     query: GeometryQueryV1,
   ) => Promise<PreviewQueryOutcomeV1>;
+  /**
+   * Every element id the CURRENTLY DISPLAYED frame's render contains, or `null` when that is
+   * not known — no live session, no acknowledged frame, or no `layout` query answered for the
+   * frame now displayed.
+   *
+   * Recorded as a by-product of {@link queryGeometry}: the shell asks each acknowledged frame
+   * for its `layout` tree to place pin badges (`ui/preview`'s `requestElementRects`), and this
+   * keeps the host's answer instead of discarding it. Nothing extra is sent to the child, and —
+   * more importantly — the set a turn sends pins against is THE SAME host answer the preview
+   * drew from, so "what you see pinned" and "what gets sent" cannot disagree.
+   *
+   * Self-invalidating: the answer is stored with the frame identity it was about and read back
+   * only while that identity is still the acknowledged one, so a newer frame reports `null`
+   * rather than the previous render's elements (host-supervision §7.1 reseals the layout tree
+   * with every frame).
+   */
+  readonly renderedElementIds: () => ReadonlySet<string> | null;
   /** Publishes one frame-stream item and mints its `FrameTokenV1` "beside the frame" (§8.1). */
   readonly publishFrame: (frame: PreviewFrameV1) => PreviewNoLiveSessionError | FrameTokenV1;
   /** The UI's typed display acknowledgement (§8.1) — not a Kernel command, see `frame-token-ledger.ts`. */
@@ -340,6 +358,33 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
   }
 
   let outstandingGeometryRequests = 0;
+  /** The last `layout` answer, kept with the frame identity it described. See {@link PreviewSessionCommands.renderedElementIds}. */
+  let renderedElements: Readonly<{
+    identity: FrameIdentityV1;
+    ids: ReadonlySet<string>;
+  }> | null = null;
+
+  function collectElementIds(node: LayoutNodeV1, into: Set<string>): void {
+    into.add(node.id);
+    for (const child of node.children) collectElementIds(child, into);
+  }
+
+  function sameFrameIdentity(left: FrameIdentityV1, right: FrameIdentityV1): boolean {
+    return (
+      left.previewSessionId === right.previewSessionId &&
+      left.nonce === right.nonce &&
+      left.sourceHash === right.sourceHash &&
+      left.frameSeq === right.frameSeq
+    );
+  }
+
+  function renderedElementIds(): ReadonlySet<string> | null {
+    const stored = renderedElements;
+    if (stored === null) return null;
+    const displayed = deps.frameTokenLedger.currentIdentity();
+    if (displayed === null || !sameFrameIdentity(stored.identity, displayed)) return null;
+    return stored.ids;
+  }
 
   async function queryGeometry(
     frameToken: FrameTokenV1,
@@ -363,10 +408,30 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     }
     outstandingGeometryRequests += 1;
 
-    const result = await wrap(session.query(frameToken, query));
+    // The token stays here, on the side that can resolve it; only the two identity fields
+    // `verifyCurrent` just PROVED — and that `host` cannot derive on its own — cross the port.
+    // See `core/ports/preview-session.ts`'s `PreviewFrameCoordinatesV1` for the full split.
+    const result = await wrap(
+      session.query(
+        {
+          sourceHash: verification.identity.sourceHash,
+          frameSeq: verification.identity.frameSeq,
+        },
+        query,
+      ),
+    );
     outstandingGeometryRequests -= 1;
 
     if ("code" in result) return { kind: "failed", failure: result };
+
+    // Keep what a `layout` answer already told us about this frame — see
+    // {@link PreviewSessionCommands.renderedElementIds}. Stored against the identity the frame
+    // token was VERIFIED as, never the caller's word for it.
+    if (result.result.kind === "layoutTree") {
+      const ids = new Set<string>();
+      collectElementIds(result.result.tree, ids);
+      renderedElements = { identity: verification.identity, ids };
+    }
 
     const geometryToken =
       result.resolvedAnchor !== null && mintsGeometryToken(query.kind)
@@ -450,6 +515,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     retry,
     close,
     queryGeometry,
+    renderedElementIds,
     publishFrame,
     acknowledgeDisplay,
     currentPreviewSessionId: () => currentPreviewSessionId,

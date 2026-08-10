@@ -289,6 +289,9 @@ function harness(
     pinReader,
     turnTransactions,
     chatReader: fakeChatAppendBaseReader(),
+    // No live preview in these cases — see `AdmissionDeps.renderedElementIds`: unknown is never
+    // read as "the element is gone", so the §3.2 anchor filter stays inert here.
+    renderedElementIds: () => null,
     staging,
     agentBackend,
     gateRunner,

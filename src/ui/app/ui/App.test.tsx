@@ -225,6 +225,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       .map((raw) => raw as { kind: string; payload: { query?: unknown } })
       .filter((command) => command.kind === "preview.queryGeometry");
     expect(geometryQueries.map((command) => command.payload.query)).toEqual([
+      // The frame's own element rectangles, asked for once the moment it is acknowledged —
+      // the batch every saved pin's badge is placed against (`requestElementRects`).
+      { kind: "layout" },
       { kind: "hit", x: 4, y: 3 },
       { kind: "hit", x: 5, y: 4 },
       { kind: "pin-anchor", x: 6, y: 5 },
@@ -1020,7 +1023,16 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     // Workspace frame origin at 120 cols: round(120*.37)+border = x45; tabs+rule+gap+border =
     // y4 (task 8: design `paneShell`'s `dy = 4`).
     await renderer.act(() => renderer.mockMouse.pressDown(51, 9, MouseButtons.RIGHT));
-    const geometryQuery = dispatchedOf("preview.queryGeometry");
+    // The acknowledged frame has already drawn one `preview.queryGeometry` of its own — the
+    // `layout` batch every saved pin's badge is placed against (`requestElementRects`) — so the
+    // right click's own query is selected by its kind, not by being the first of its command.
+    const geometryQuery = kernel.dispatched.find(
+      (raw): raw is DispatchedCommand =>
+        (raw as DispatchedCommand).kind === "preview.queryGeometry" &&
+        ((raw as DispatchedCommand).payload as { query: { kind: string } }).query.kind ===
+          "pin-anchor",
+    );
+    if (geometryQuery === undefined) throw new Error("fixture bug: no pin-anchor query dispatched");
     expect(geometryQuery).toEqual({
       protocolVersion: 1,
       commandId: geometryQuery.commandId,
@@ -1104,6 +1116,9 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       "turn.start",
       "chat.create",
       "chat.switch",
+      // The acknowledged frame's own `layout` batch (`requestElementRects`), then the right
+      // click's `pin-anchor` — two geometry queries, on two independent lanes.
+      "preview.queryGeometry",
       "preview.queryGeometry",
       "pin.create",
       "project.setTrust",

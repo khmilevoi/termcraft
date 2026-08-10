@@ -687,6 +687,110 @@ describe("createPreviewSessionCommands — queryGeometry (the token chain)", () 
     });
   });
 
+  describe("renderedElementIds — the layout answer kept for the send-time anchor check", () => {
+    const layoutSupervisor = () =>
+      stubHostSupervisor(() =>
+        stubSession({
+          query: async () => ({
+            result: {
+              kind: "layoutTree",
+              tree: {
+                id: "root",
+                kind: "BoxRenderable",
+                box: { x: 0, y: 0, width: 80, height: 24 },
+                children: [
+                  {
+                    id: "digital-time",
+                    kind: "TextRenderable",
+                    box: { x: 6, y: 3, width: 17, height: 1 },
+                    children: [],
+                  },
+                ],
+              },
+            },
+            resolvedAnchor: null,
+          }),
+        }),
+      );
+
+    test("is null before any layout query has answered", async () => {
+      await context.start(async () => {
+        const h = harness(layoutSupervisor());
+        await wrap(h.commands.selectPage(baseSpec()));
+        acknowledgedFrameToken(h);
+
+        expect(h.commands.renderedElementIds()).toBeNull();
+      });
+    });
+
+    test("reports every id of the answered tree, root and descendants alike", async () => {
+      await context.start(async () => {
+        const h = harness(layoutSupervisor());
+        await wrap(h.commands.selectPage(baseSpec()));
+        const token = acknowledgedFrameToken(h);
+
+        await wrap(h.commands.queryGeometry(token, { kind: "layout" }));
+
+        const ids = h.commands.renderedElementIds();
+        expect(ids?.has("digital-time")).toBe(true);
+        expect(ids?.has("root")).toBe(true);
+        expect(ids?.has("never-rendered")).toBe(false);
+      });
+    });
+
+    test("a non-layout query leaves it untouched rather than clearing what is known", async () => {
+      await context.start(async () => {
+        const h = harness(
+          stubHostSupervisor(() =>
+            stubSession({
+              query: async (_frame, query) =>
+                query.kind === "layout"
+                  ? {
+                      result: {
+                        kind: "layoutTree",
+                        tree: {
+                          id: "root",
+                          kind: "BoxRenderable",
+                          box: { x: 0, y: 0, width: 80, height: 24 },
+                          children: [],
+                        },
+                      },
+                      resolvedAnchor: null,
+                    }
+                  : { result: { kind: "checkHit", hit: null }, resolvedAnchor: null },
+            }),
+          ),
+        );
+        await wrap(h.commands.selectPage(baseSpec()));
+        const token = acknowledgedFrameToken(h);
+        await wrap(h.commands.queryGeometry(token, { kind: "layout" }));
+
+        await wrap(h.commands.queryGeometry(token, { kind: "hit", x: 1, y: 1 }));
+
+        expect(h.commands.renderedElementIds()?.has("root")).toBe(true);
+      });
+    });
+
+    test("goes back to null once a newer frame is the displayed one — never the old render's ids", async () => {
+      await context.start(async () => {
+        const h = harness(layoutSupervisor());
+        await wrap(h.commands.selectPage(baseSpec()));
+        const token = acknowledgedFrameToken(h);
+        await wrap(h.commands.queryGeometry(token, { kind: "layout" }));
+        expect(h.commands.renderedElementIds()).not.toBeNull();
+
+        const newer = h.commands.publishFrame(frame({ frameSeq: "2" }));
+        if (newer instanceof Error) throw newer;
+        const acked = h.commands.acknowledgeDisplay(newer);
+        if (acked instanceof Error) throw acked;
+
+        // §7.1 reseals the layout tree with every frame, so the previous answer describes a
+        // render that is no longer on screen — reported as unknown, not reused.
+        expect(h.commands.renderedElementIds()).toBeNull();
+      });
+    });
+  });
+
   test("a port failure during queryGeometry returns 'failed' and releases its outstanding-request slot", async () => {
     await context.start(async () => {
       const supervisor = stubHostSupervisor(() => stubSession({ query: async () => FAILURE }));

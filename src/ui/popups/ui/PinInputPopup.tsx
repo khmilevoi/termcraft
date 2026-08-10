@@ -5,6 +5,13 @@ import { SHELL_PALETTE } from "ui/theme";
 /** The content width of the box, inside its border. */
 const PIN_INPUT_WIDTH = 38;
 
+/**
+ * The popup's own outer cell footprint — the border plus its two content rows (comment field,
+ * footer hint). The preview shell needs it to anchor the box beside the pin badge without
+ * letting it overrun the frame (`pinInputAnchor`).
+ */
+export const PIN_INPUT_POPUP_SIZE = { width: PIN_INPUT_WIDTH + 2, height: 4 } as const;
+
 /** Props for the {@link PinInputPopup} new-pin comment input box. */
 export interface PinInputPopupProps {
   /** Stable id the host selects and answers geometry on. */
@@ -29,10 +36,10 @@ export interface PinInputPopupProps {
  * a second row — the closest faithful mapping.
  *
  * divergence (width): design sizes the box `pw = Math.min(40, dw - 14)` (`wsPinInput` `:696`),
- * where `dw` is the preview pane's inner width — the popup there is anchored beside the numbered
- * badge. This component is centred in the App's modal layer instead (already a documented
- * divergence: "the numbered anchor badge … are the App/overlay's concern"), so the `dw - 14`
- * shrink term has no meaning here and the design's own upper bound, 40, is used directly.
+ * where `dw` is the preview pane's inner width — a shrink term that keeps the box inside the pane
+ * when it is anchored beside the badge. The box keeps the design's own upper bound, 40, at every
+ * pane width and the shell slides it back inside instead (`pinInputAnchor`) — same guarantee, one
+ * fixed width, so the field never changes size under the caret as the pane resizes.
  *
  * The comment field is `ui/text-input`'s {@link TextEditor} in its single-line form. Design draws
  * the cursor one column past the end of the value (`this.put(b,pxs+2+26,pys+1,'█',…)`, `:699`),
@@ -43,7 +50,7 @@ export function PinInputPopup(props: PinInputPopupProps) {
   return (
     <box
       id={props.id}
-      width={PIN_INPUT_WIDTH + 2}
+      width={PIN_INPUT_POPUP_SIZE.width}
       border
       borderStyle="rounded"
       borderColor={SHELL_PALETTE.amber}

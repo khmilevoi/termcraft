@@ -130,6 +130,8 @@ export interface RunTurnDeps {
   readonly staging: StagingService;
   /** Only `readAppendBase` is needed — threaded straight through to `AdmissionDeps` (`admission.ts`'s own header, step 1b). */
   readonly chatReader: Pick<ChatReader, "readAppendBase">;
+  /** Threaded straight through to `AdmissionDeps` — see its own doc for the §3.2 rule it serves. */
+  readonly renderedElementIds: () => ReadonlySet<string> | null;
   readonly agentBackend: AgentBackend;
   readonly gateRunner: GateRunner;
   readonly deadlines: TurnDeadlines;
@@ -292,6 +294,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
     turnTransactions: deps.turnTransactions,
     staging: deps.staging,
     chatReader: deps.chatReader,
+    renderedElementIds: deps.renderedElementIds,
   };
   const admission = await wrap(runAdmission(admissionDeps, input.admission));
   if (admission.kind !== "workspace-ready") {
@@ -309,9 +312,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
   function bridge(action: "beginSnapshot" | "beginTerminalization" | "requestCancel"): void {
     const moved = deps.machine.apply(action);
     if (moved.kind === "illegal") {
-      log.warn(
-        `core/turns/run-turn: ${action} illegal (${moved.code}) for turn ${context.turnId}`,
-      );
+      log.warn(`core/turns/run-turn: ${action} illegal (${moved.code}) for turn ${context.turnId}`);
     }
   }
 

@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import type { PreviewFrameV1 } from "core/ports";
-import type { FrameTokenV1, GeometryTokenV1, UUIDv7 } from "core/protocol";
+import type { FrameTokenV1, GeometryTokenV1, LayoutNodeV1, UUIDv7 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import { createUiDeps } from "ui/app";
 import {
   acknowledgeFrame,
   frameLocalPoint,
   handleGeometryResult,
+  requestElementRects,
   requestGeometry,
 } from "ui/preview";
 import {
@@ -61,6 +62,8 @@ function geometryEvent(
   frameTokenId: FrameTokenV1,
   queryKind: "hit" | "pin-anchor",
   geometryToken: GeometryTokenV1 | null,
+  /** The element the host resolved under the cursor; `null` is "nothing there". */
+  hitElementId: string | null = "network",
 ) {
   return event("preview.geometryResult", {
     previewSessionId,
@@ -72,11 +75,10 @@ function geometryEvent(
       frameSeq: "1",
     },
     queryKind,
-    // M21's closed `GeometryQueryResultV1` (`core/protocol`): a bare `checkHit`
-    // carries only a resolved element id — no `pageSlug`/`rect`/`label` the way
-    // this module's own `parseHitGeometry` still checks for (see the two tests
-    // below that document the resulting hover/selection gap explicitly).
-    result: { kind: "checkHit", hit: { id: "network" } },
+    // M21's closed `GeometryQueryResultV1` (`core/protocol`): a `checkHit` carries only the
+    // resolved element id. Its rectangle comes from the frame's own element-rect map and its
+    // page from the shell's active slug — see `handleGeometryResult`.
+    result: { kind: "checkHit", hit: hitElementId === null ? null : { id: hitElementId } },
     geometryToken,
   });
 }
@@ -174,19 +176,19 @@ describe("preview interaction token chain", () => {
       query: { kind: "hit", x: 7, y: 8 },
     });
 
-    // The promoted (second) query's own result IS applied here — but a bare
-    // `checkHit` result (M21's closed `GeometryQueryResultV1`) carries no
-    // rect/label/pageSlug, so `parseHitGeometry` still can't resolve a
-    // selection from it; only the token/queryKind promotion itself is
-    // observable (no third dispatch fires). See the "structural narrowing"
-    // test below for the same gap, documented in full.
+    // The promoted (second) query's own result IS applied here — it selects the element the
+    // host named. No THIRD geometry query fires: the queue is empty, which is what this test
+    // is about. The hover rect stays null only because this frame's element rects have not
+    // landed (see the element-rect tests); the selection itself resolves.
     handleGeometryResult(
       deps,
       geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
     );
     expect(deps.interaction.hover()).toBeNull();
     expect(deps.interaction.selectionRect()).toBeNull();
-    expect(kernel.dispatched).toHaveLength(2);
+    expect(
+      kernel.dispatched.filter((raw) => (raw as { kind: string }).kind === "preview.queryGeometry"),
+    ).toHaveLength(2);
   });
 
   test("three rapid intents retain only the newest queued geometry request", () => {
@@ -320,22 +322,28 @@ describe("preview interaction token chain", () => {
   });
 
   /**
-   * DISCOVERED GAP (M21, WP-1 task 3): this test used to prove `parseHitGeometry`
-   * rejects a malformed `result` bag and accepts a well-formed one, dispatching
-   * `selection.set` only for the latter. Now that `preview.geometryResult`'s
-   * `result` is CLOSED to design §4.2's real per-query shapes
-   * (`GeometryQueryResultV1`, `core/protocol`), a bare `checkHit` is
-   * `{ kind: "checkHit"; hit: { id: string } | null }` — it never carries
-   * `pageSlug`/`rect`/`label`, the fields `parseHitGeometry` still checks for.
-   * Neither an unresolved nor a resolved `checkHit` can complete a
-   * `selection.set` today, so this test now proves exactly that (both a
-   * non-resolving and a resolving `checkHit` are inert) rather than proving a
-   * structural-narrowing distinction that the closed DTO no longer admits.
-   * Restoring the hover-highlight/selection-chip feature needs a follow-up task
-   * that chains `rectOf`/`describe` after a resolving `checkHit` — out of scope
-   * for the DTO closure itself.
+   * A `checkHit` names ONE thing — the element under the cursor (§7.1). The page half of a
+   * selection comes from the shell's own active page, and the rectangle from the frame's
+   * element-rect map; neither was ever on the wire.
    */
-  test("a selected hit never dispatches selection.set: a bare checkHit carries no page/element context (M21)", () => {
+  test("an unresolved hit selects nothing and clears what was selected", () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+    requestGeometry(deps, "select", 4, 5);
+
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null, null),
+    );
+
+    expect(deps.interaction.selectionRect()).toBeNull();
+    expect(deps.interaction.hover()).toBeNull();
+    expect(kernel.dispatched.map((raw) => (raw as { kind: string }).kind)).toEqual([
+      "preview.queryGeometry",
+    ]);
+  });
+
+  test("a resolved hit selects that element on the active page", () => {
     const { deps, kernel, uiFrame } = harness();
     acknowledgeFrame(deps, uiFrame);
     requestGeometry(deps, "select", 4, 5);
@@ -344,25 +352,53 @@ describe("preview interaction token chain", () => {
       deps,
       geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
     );
-    expect(kernel.dispatched.map((raw) => (raw as { kind: string }).kind)).toEqual([
-      "preview.queryGeometry",
-    ]);
 
-    requestGeometry(deps, "select", 4, 5);
-    const resolved = geometryEvent(
-      uiFrame.handle.previewSessionId,
-      uiFrame.frameToken,
-      "hit",
-      null,
+    const selection = kernel.dispatched.find(
+      (raw) => (raw as { kind: string }).kind === "selection.set",
     );
-    handleGeometryResult(deps, {
-      ...resolved,
-      payload: { ...resolved.payload, result: { kind: "checkHit", hit: { id: "network" } } },
+    expect((selection as { payload: unknown } | undefined)?.payload).toEqual({
+      pageSlug: "main",
+      elementId: "network",
     });
-    expect(kernel.dispatched.map((raw) => (raw as { kind: string }).kind)).toEqual([
-      "preview.queryGeometry",
-      "preview.queryGeometry",
-    ]);
+  });
+
+  test("highlights the hit element's own rectangle, taken from this frame's element rects", () => {
+    const { deps, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+    deps.interaction.elementRects.set({
+      frameToken: uiFrame.frameToken,
+      rects: new Map([["network", { x: 3, y: 2, width: 8, height: 4 }]]),
+    });
+    requestGeometry(deps, "hover", 4, 5);
+
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
+    );
+
+    expect(deps.interaction.hover()).toEqual({
+      rect: { x: 3, y: 2, width: 8, height: 4 },
+      // The element id stands in for the design's `panel "network"` label — see the
+      // divergence note in `handleGeometryResult`.
+      label: "network",
+    });
+  });
+
+  test("selects an element whose rectangle has not landed yet, with no corner glyphs to draw", () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+    requestGeometry(deps, "select", 4, 5);
+
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "hit", null),
+    );
+
+    // No rects for this frame yet: the chip still resolves, the corners simply wait.
+    expect(deps.interaction.selectionRect()).toBeNull();
+    expect(
+      kernel.dispatched.some((raw) => (raw as { kind: string }).kind === "selection.set"),
+    ).toBe(true);
   });
 
   test("a superseded pin result cannot open a popup after hover becomes latest", () => {
@@ -384,6 +420,158 @@ describe("preview interaction token chain", () => {
 
     expect(deps.local.overlay()).toBeNull();
     expect(deps.interaction.pendingPin()).toBeNull();
+  });
+});
+
+describe("preview element-rect lane", () => {
+  const layoutEvent = (previewSessionId: UUIDv7, frameTokenId: FrameTokenV1, tree: LayoutNodeV1) =>
+    event("preview.geometryResult", {
+      previewSessionId,
+      frameTokenId,
+      frameIdentity: { previewSessionId, nonce: TEST_NONCE, sourceHash: TEST_SHA, frameSeq: "1" },
+      queryKind: "layout",
+      result: { kind: "layoutTree", tree },
+      geometryToken: null,
+    });
+
+  const tree = (id: string): LayoutNodeV1 => ({
+    id: "root",
+    kind: "BoxRenderable",
+    box: { x: 0, y: 0, width: 20, height: 10 },
+    children: [
+      { id, kind: "TextRenderable", box: { x: 3, y: 2, width: 8, height: 1 }, children: [] },
+    ],
+  });
+
+  test("asks for the whole layout tree once the frame is display-acknowledged", () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+
+    requestElementRects(deps);
+
+    expect(kernel.dispatched).toHaveLength(1);
+    expect(kernel.dispatched[0]).toMatchObject({
+      kind: "preview.queryGeometry",
+      payload: { frameToken: uiFrame.frameToken, query: { kind: "layout" } },
+    });
+  });
+
+  test("does not ask before the frame is display-acknowledged", () => {
+    const { deps, kernel } = harness();
+    requestElementRects(deps);
+
+    expect(kernel.dispatched).toHaveLength(0);
+  });
+
+  test("is idempotent — repeated calls neither re-ask in flight nor re-ask once resolved", () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+
+    requestElementRects(deps);
+    requestElementRects(deps);
+    expect(kernel.dispatched).toHaveLength(1);
+
+    handleGeometryResult(
+      deps,
+      layoutEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, tree("digital-time")),
+    );
+    requestElementRects(deps);
+
+    expect(kernel.dispatched).toHaveLength(1);
+    expect(deps.interaction.elementRects()?.rects.get("digital-time")).toEqual({
+      x: 3,
+      y: 2,
+      width: 8,
+      height: 1,
+    });
+  });
+
+  test("a pointer query in flight neither supersedes the layout query nor is superseded by it", () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+
+    requestGeometry(deps, "hover", 1, 1);
+    requestElementRects(deps);
+
+    // Two lanes, two commands — the hover request did not take the layout query's slot.
+    expect(kernel.dispatched).toHaveLength(2);
+    handleGeometryResult(
+      deps,
+      layoutEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, tree("gauge-cpu")),
+    );
+
+    expect(deps.interaction.elementRects()?.rects.has("gauge-cpu")).toBe(true);
+    // …and the hover request is still the pending one on its own lane.
+    expect(deps.interaction.pendingGeometry()?.purpose).toBe("hover");
+  });
+
+  test("drops a reply about a frame that is no longer displayed", () => {
+    const { deps, kernel, preview, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+    requestElementRects(deps);
+    expect(kernel.dispatched).toHaveLength(1);
+
+    const newer = { ...frame(preview.handle.previewSessionId), frameSeq: "2" };
+    preview.pushFrame(newer);
+    const newerUiFrame = {
+      frame: newer,
+      frameToken: preview.frameTokenFor(newer),
+      handle: preview.handle,
+    };
+    deps.previewFrame.set(newerUiFrame);
+    acknowledgeFrame(deps, newerUiFrame);
+
+    handleGeometryResult(
+      deps,
+      layoutEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, tree("digital-time")),
+    );
+
+    expect(deps.interaction.elementRects()).toBeNull();
+  });
+
+  test("a newly acknowledged frame drops the previous frame's rectangles rather than reusing them", () => {
+    const { deps, preview, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+    requestElementRects(deps);
+    handleGeometryResult(
+      deps,
+      layoutEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, tree("digital-time")),
+    );
+    expect(deps.interaction.elementRects()).not.toBeNull();
+
+    const newer = { ...frame(preview.handle.previewSessionId), frameSeq: "2" };
+    preview.pushFrame(newer);
+    const newerUiFrame = {
+      frame: newer,
+      frameToken: preview.frameTokenFor(newer),
+      handle: preview.handle,
+    };
+    deps.previewFrame.set(newerUiFrame);
+    acknowledgeFrame(deps, newerUiFrame);
+
+    expect(deps.interaction.elementRects()).toBeNull();
+    expect(deps.interaction.pendingElementRects()).toBeNull();
+  });
+
+  test("a refused query clears the lane so the next render retries", async () => {
+    const { deps, kernel, uiFrame } = harness();
+    acknowledgeFrame(deps, uiFrame);
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      status: "rejected",
+      currentRevision: "1",
+      code: "OPERATION_BUSY",
+      reasons: [{ code: "OPERATION_BUSY" }],
+    });
+
+    requestElementRects(deps);
+    await tick();
+    expect(deps.interaction.pendingElementRects()).toBeNull();
+
+    requestElementRects(deps);
+
+    expect(kernel.dispatched).toHaveLength(2);
   });
 });
 

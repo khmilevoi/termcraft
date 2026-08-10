@@ -1306,6 +1306,230 @@ describe("Workspace halted-preview chat notice", () => {
   });
 });
 
+describe("Workspace new-pin input placement (design wsPinInput, spec §3.2)", () => {
+  const readyDescriptor = (slug: string, title: string): PageDescriptorV1 => ({
+    status: "ready",
+    pageSlug: slug,
+    entry: `pages/${slug}.tsx`,
+    sourceHash: TEST_SHA,
+    title,
+    minSize: { w: 60, h: 20 },
+    theme: "dark-default",
+    kitApiVersion: 1,
+  });
+
+  const blankFrame = (width: number, height: number) => ({
+    sessionId: uuidv7(),
+    sourceHash: TEST_SHA,
+    frameSeq: "1",
+    width,
+    height,
+    rows: Array.from({ length: height }, () => [
+      { text: " ".repeat(width), fg: "default" as const, bg: "default" as const, attrs: 0 },
+    ]),
+  });
+
+  /** A workspace showing a 70×24 frame with a pin pending at the given frame-local cell. */
+  const pendingPinAt = async (point: { x: number; y: number }) => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "dashboard",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [readyDescriptor("dashboard", "Дашборд")],
+      }),
+    );
+    const fake = createFakePreviewSession();
+    deps.previewFrame.set({
+      frame: blankFrame(70, 24),
+      frameToken: uuidv7() as never,
+      handle: fake.handle,
+    });
+    const handle = await createHeadlessRenderer({ w: 120, h: 34 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay="pin-input" />);
+    // The real order, and the only one `acknowledgeFrame` allows: the frame is displayed and
+    // acknowledged FIRST (which clears any pending pin), and only then does a right click land.
+    await handle.render();
+    deps.interaction.pendingPin.set({ geometryToken: uuidv7() as never, point });
+    await handle.render();
+    return handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
+  };
+
+  // `previewFrameOrigin({w:120,h:34}, false)` puts the canvas at absolute (45, 4), so a click on
+  // frame-local (6, 5) is the terminal cell (51, 9).
+  test("opens the box beside the badge on the clicked row, not centred on the screen", async () => {
+    const lines = await pendingPinAt({ x: 6, y: 5 });
+
+    const clickedRow = lines[9];
+    expect(clickedRow).toBeDefined();
+    // The badge marks the clicked cell itself…
+    expect(clickedRow?.[51]).toBe("1");
+    // …and design `wsPinInput`'s `pxs = cx + 2` puts the box's left border two cells right of it.
+    expect(clickedRow?.indexOf("╭")).toBe(53);
+    expect(clickedRow).toContain("new pin");
+    // The pre-fix centred modal layer drew the box on the vertical middle of the screen
+    // (`app-modal-layer`'s `justifyContent="center"`), rows away from the click.
+    expect(lines[16]).not.toContain("new pin");
+  });
+
+  test("slides the box left of a click near the frame's right edge rather than clipping it", async () => {
+    // Frame-local x = 65 of a 70-wide canvas: `65 + 2 + 40` overruns it by 37 columns.
+    const lines = await pendingPinAt({ x: 65, y: 5 });
+
+    // Canvas-local 30 (= 70 - 40) → absolute 45 + 30 = 75, and the box's right edge lands on the
+    // canvas' own last column (absolute 114) instead of being cut off by `overflow: hidden`.
+    expect(lines[9]?.indexOf("╭")).toBe(75);
+    expect(lines[9]?.indexOf("╮")).toBe(114);
+  });
+});
+
+describe("Workspace saved-pin badge placement (spec §3.2, the 2026-08-10 live-run defect)", () => {
+  const readyDescriptor = (slug: string): PageDescriptorV1 => ({
+    status: "ready",
+    pageSlug: slug,
+    entry: `pages/${slug}.tsx`,
+    sourceHash: TEST_SHA,
+    title: "Дашборд",
+    minSize: { w: 60, h: 20 },
+    theme: "dark-default",
+    kitApiVersion: 1,
+  });
+
+  const savedPin = (overrides: Partial<PinDtoV1>): PinDtoV1 => ({
+    pinId: uuidv7(),
+    pageSlug: "dashboard",
+    elementId: "digital-time",
+    // The real anchor the live run stored for a right click on the clock's digital time.
+    fx: 0.375,
+    fy: 0,
+    text: "совмести дату и время в одну строку",
+    status: "open",
+    createdRecordId: uuidv7(),
+    latestRecordId: uuidv7(),
+    updatedAt: TEST_TS,
+    ...overrides,
+  });
+
+  test("draws the badge inside the anchored element, not at that fraction of the whole frame", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "dashboard",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [readyDescriptor("dashboard")],
+      }),
+    );
+    deps.mirror.apply(
+      event("pins.changed", {
+        pageSlug: "dashboard",
+        affectedPins: [savedPin({})],
+        affectedRecordIds: [],
+        causeId: uuidv7(),
+      }),
+    );
+    const fake = createFakePreviewSession();
+    const frameToken = uuidv7() as never;
+    deps.previewFrame.set({
+      frame: {
+        sessionId: uuidv7(),
+        sourceHash: TEST_SHA,
+        frameSeq: "1",
+        width: 70,
+        height: 24,
+        rows: Array.from({ length: 24 }, () => [
+          { text: " ".repeat(70), fg: "default" as const, bg: "default" as const, attrs: 0 },
+        ]),
+      },
+      frameToken,
+      handle: fake.handle,
+    });
+
+    const handle = await createHeadlessRenderer({ w: 120, h: 34 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    // First render acknowledges the frame; the layout reply for it lands next.
+    await handle.render();
+    deps.interaction.elementRects.set({
+      frameToken: deps.interaction.displayedFrameToken() ?? frameToken,
+      rects: new Map([["digital-time", { x: 6, y: 3, width: 17, height: 1 }]]),
+    });
+    await handle.render();
+
+    const lines = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
+    // The canvas sits at absolute (45, 4); the element at frame-local (6, 3); and `fx: 0.375`
+    // of its 17 columns is +6. So the badge belongs at 45+6+6 = 57, 4+3 = 7.
+    expect(lines[7]?.at(57)).toBe("1");
+    // The pre-fix placement read the fraction against the FRAME: 45 + round(0.375·69) = 71 on
+    // row 4. Nothing may be drawn there.
+    expect(lines[4]?.at(71)).not.toBe("1");
+  });
+
+  test("leaves an orphaned pin off the preview and marks it in the chat list instead", async () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 34 });
+    deps.mirror.apply(
+      snapshot({
+        projectId: uuidv7(),
+        activePageSlug: "dashboard",
+        activeChatId: uuidv7(),
+        trust: "trusted",
+        pageDescriptors: [readyDescriptor("dashboard")],
+      }),
+    );
+    deps.mirror.apply(
+      event("pins.changed", {
+        pageSlug: "dashboard",
+        affectedPins: [savedPin({ elementId: "removed-block", text: "gone with the element" })],
+        affectedRecordIds: [],
+        causeId: uuidv7(),
+      }),
+    );
+    const fake = createFakePreviewSession();
+    const frameToken = uuidv7() as never;
+    deps.previewFrame.set({
+      frame: {
+        sessionId: uuidv7(),
+        sourceHash: TEST_SHA,
+        frameSeq: "1",
+        width: 70,
+        height: 24,
+        rows: Array.from({ length: 24 }, () => [
+          { text: " ".repeat(70), fg: "default" as const, bg: "default" as const, attrs: 0 },
+        ]),
+      },
+      frameToken,
+      handle: fake.handle,
+    });
+
+    const handle = await createHeadlessRenderer({ w: 120, h: 34 });
+    open = handle;
+    handle.mount(<Workspace deps={deps} readOnly={false} activeOverlay={null} />);
+    await handle.render();
+    deps.interaction.elementRects.set({
+      frameToken: deps.interaction.displayedFrameToken() ?? frameToken,
+      rects: new Map([["digital-time", { x: 6, y: 3, width: 17, height: 1 }]]),
+    });
+    await handle.render();
+
+    const rows = handle.capture().rows;
+    // The marker wraps inside the narrow chat column, so match it in the two pieces the
+    // column actually renders rather than as one string.
+    const text = allText(rows);
+    expect(text).toContain("not visible in");
+    expect(text).toContain("(hidden or removed)");
+    expect(findRun(rows, "⚠")).toBeDefined();
+    // No amber badge anywhere: the one open pin does not resolve in this render.
+    const badge = rows
+      .flat()
+      .find((run) => run.text === "1" && extractRgb(run.bg) === SHELL_PALETTE.amber);
+    expect(badge).toBeUndefined();
+  });
+});
+
 describe("Workspace preview clipping", () => {
   const readyDescriptor = (slug: string, title: string): PageDescriptorV1 => ({
     status: "ready",
@@ -1478,7 +1702,7 @@ describe("Workspace preview pane header", () => {
         trust: "trusted",
       }),
     );
-    // `ui.local.focus`'s own default is "composer" (`src/ui/app/model/deps.ts:736`) — no
+    // `ui.local.focus`'s own default is "chat" (`src/ui/app/model/deps.ts:736`) — no
     // override needed to exercise the composer-focused branch.
     const handle = await createHeadlessRenderer({ w: 120, h: 34 });
     open = handle;
@@ -2017,7 +2241,7 @@ describe("Workspace agent-health badge (design 30 · the long-lived badge)", () 
     // composer, so it is the fact this test needs to check — design 30 §"The long-lived badge":
     // "the composer is not gated on it." Idle plus focused (this test's own state) is exactly the
     // one combination where the `ws-chat` panel's own left border is ALSO amber
-    // (`composerFocused ? amber : line`, above), so the row-capture coalesces the border cell and
+    // (`chatFocused ? amber : line`, above), so the row-capture coalesces the border cell and
     // the caret into one run, `"│❯ "` — `endsWith`, not an exact match, and not `findRun`'s
     // `.includes` either: the chat panel's own focused title starts with "❯ chat ", which would
     // match a bare `.includes("❯")` first.

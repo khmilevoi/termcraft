@@ -1,5 +1,6 @@
 import type { PinDtoV1 } from "core/protocol";
 import type { PinListRow } from "ui/chat";
+import type { ElementRectIndex } from "ui/preview";
 
 /**
  * Builds `PinList`'s rows from the active page's pins (open + resolved). Numbers each open
@@ -9,12 +10,16 @@ import type { PinListRow } from "ui/chat";
  * one in mirror order must not shift the open pin's badge number — `PinListRow.index`'s own
  * JSDoc already documents this contract; this is the derivation that keeps it true.
  *
- * DIVERGENCE (M12 data-source gap, unchanged from the Task 3 wiring): the mirror carries
- * `PinDtoV1` but no per-pin anchor-resolution signal, so `visible` is `true` for every pin here
- * — dormant until a render-resolved element-id set reaches the mirror (see `Workspace.tsx`'s
- * call site for the full divergence note).
+ * `visible` is the anchor-resolution signal spec §3.2 turns the "not visible in the current
+ * render (hidden or removed)" row on: a pin is visible exactly when the displayed frame's own
+ * render contains its element (`elementRects`, the flattened `layoutTree` reply). Passing
+ * `null` — no reply yet for this frame — claims nothing either way and keeps every row in its
+ * ordinary state, which is also what the preview draws while it waits.
  */
-export function derivePinListRows(pins: readonly PinDtoV1[]): readonly PinListRow[] {
+export function derivePinListRows(
+  pins: readonly PinDtoV1[],
+  elementRects: ElementRectIndex | null,
+): readonly PinListRow[] {
   const openIndexByPinId = new Map(
     pins.filter((pin) => pin.status === "open").map((pin, index) => [pin.pinId, index] as const),
   );
@@ -22,6 +27,6 @@ export function derivePinListRows(pins: readonly PinDtoV1[]): readonly PinListRo
     pin,
     // -1 for resolved pins: PinList never reads `index` for a resolved row (it renders `✓`).
     index: openIndexByPinId.get(pin.pinId) ?? -1,
-    visible: true,
+    visible: elementRects === null || elementRects.has(pin.elementId),
   }));
 }
