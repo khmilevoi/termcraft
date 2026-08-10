@@ -68,7 +68,7 @@ export interface UiLocalState {
   readonly prompt: Atom<string>;
   /** The Workspace composer input text. */
   readonly composer: Atom<string>;
-  /** The widget that owns focus (composer <-> preview). */
+  /** The zone that owns focus (chat <-> preview). */
   readonly focus: Atom<FocusTarget>;
   /** Whether the preview is fullscreen (F2). */
   readonly fullscreen: Atom<boolean>;

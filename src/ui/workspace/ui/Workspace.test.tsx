@@ -2017,7 +2017,7 @@ describe("Workspace agent-health badge (design 30 · the long-lived badge)", () 
     // composer, so it is the fact this test needs to check — design 30 §"The long-lived badge":
     // "the composer is not gated on it." Idle plus focused (this test's own state) is exactly the
     // one combination where the `ws-chat` panel's own left border is ALSO amber
-    // (`composerFocused ? amber : line`, above), so the row-capture coalesces the border cell and
+    // (`chatFocused ? amber : line`, above), so the row-capture coalesces the border cell and
     // the caret into one run, `"│❯ "` — `endsWith`, not an exact match, and not `findRun`'s
     // `.includes` either: the chat panel's own focused title starts with "❯ chat ", which would
     // match a bare `.includes("❯")` first.
