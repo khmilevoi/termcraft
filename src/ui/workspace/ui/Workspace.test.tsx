@@ -1478,7 +1478,7 @@ describe("Workspace preview pane header", () => {
         trust: "trusted",
       }),
     );
-    // `ui.local.focus`'s own default is "composer" (`src/ui/app/model/deps.ts:736`) — no
+    // `ui.local.focus`'s own default is "chat" (`src/ui/app/model/deps.ts:736`) — no
     // override needed to exercise the composer-focused branch.
     const handle = await createHeadlessRenderer({ w: 120, h: 34 });
     open = handle;

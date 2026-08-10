@@ -1020,7 +1020,7 @@ export function createUiDeps(
   const local: UiLocalState = {
     prompt,
     composer,
-    focus: atom<FocusTarget>("composer", "ui.local.focus"),
+    focus: atom<FocusTarget>("chat", "ui.local.focus"),
     fullscreen,
     overlay: atom<OverlayKind | null>(null, "ui.local.overlay"),
     slashSelection,

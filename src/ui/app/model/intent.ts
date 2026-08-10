@@ -510,7 +510,7 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     // that multi-line composer content is normal (§7.4).
     const draft = deps.local.composer();
     setPrimaryInput(deps, draft.length === 0 ? text : `${draft}\n\n${text}`);
-    deps.local.focus.set("composer");
+    deps.local.focus.set("chat");
     return;
   }
   const chats = deps.mirror.chats();
@@ -535,7 +535,7 @@ function applyEsc(deps: UiDeps): void {
     selection !== null && selection.pageSlug === deps.mirror.project().activePageSlug;
   const outcome = resolveEsc({
     overlayOpen: deps.local.overlay(),
-    focusAwayFromComposer: deps.local.focus() !== "composer",
+    focusAwayFromComposer: deps.local.focus() !== "chat",
     historicalBrowse: false,
     generationRunning: turn.phase === "running",
     hasSelection,
@@ -546,7 +546,7 @@ function applyEsc(deps: UiDeps): void {
       deps.local.overlay.set(null);
       return;
     case "unfocus-to-composer":
-      deps.local.focus.set("composer");
+      deps.local.focus.set("chat");
       return;
     case "cancel-generation":
       if (turn.phase === "running")

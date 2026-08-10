@@ -226,14 +226,14 @@ describe("applyIntent — text inputs", () => {
 });
 
 describe("applyIntent — local toggles", () => {
-  test("tab cycles focus composer <-> preview", () => {
+  test("tab cycles focus chat <-> preview", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
-    expect(deps.local.focus()).toBe("composer");
+    expect(deps.local.focus()).toBe("chat");
     applyIntent({ kind: "tab" }, deps);
     expect(deps.local.focus()).toBe("preview");
     applyIntent({ kind: "tab" }, deps);
-    expect(deps.local.focus()).toBe("composer");
+    expect(deps.local.focus()).toBe("chat");
   });
 
   test("fullscreen toggles the fullscreen atom", () => {
@@ -445,7 +445,7 @@ describe("applyIntent — F6 compose-repair", () => {
     expect(deps.local.composer()).toContain(CRASH);
     // The page's REAL file, resolved from its descriptor `entry` — not a slug-derived path.
     expect(deps.local.composer()).toContain(".termcraft/design/pages/main.tsx");
-    expect(deps.local.focus()).toBe("composer");
+    expect(deps.local.focus()).toBe("chat");
     // Nothing is sent — the design says so on the frame ("nothing is sent — you press ⏎").
     expect(kernel.dispatched).toHaveLength(0);
     // §7.4: the repair fill is an external write and must land on both sides — the mounted
@@ -959,7 +959,7 @@ describe("applyIntent — Esc layers", () => {
       event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
     );
     applyIntent({ kind: "esc" }, deps);
-    expect(deps.local.focus()).toBe("composer");
+    expect(deps.local.focus()).toBe("chat");
     expect(kernel.dispatched).toHaveLength(0);
   });
 

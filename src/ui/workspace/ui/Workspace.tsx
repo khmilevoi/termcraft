@@ -557,7 +557,7 @@ export const Workspace = reatomComponent<{
   // list, the composer attach line and the status bar all name the same page.
   const activePageSlug = props.deps.activePageSlug();
   const uiFrame = previewFrame();
-  const composerFocused = local.focus() === "composer";
+  const chatFocused = local.focus() === "chat";
   const fullscreen = local.fullscreen();
   const composerValue = local.composer();
   const slashOpen = !props.readOnly && props.activeOverlay === "slash-menu";
@@ -606,7 +606,7 @@ export const Workspace = reatomComponent<{
   // composer-focus switch this codebase already applies to the pane's `borderColor` below).
   // Computed once here, not inlined twice, so the rule and the border can never drift apart.
   const previewBorderColor =
-    composerFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber;
+    chatFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber;
   const frameH = previewPaneHeight(size);
   const ghostSlug = turn.phase === "running" && descriptors.length === 0 ? activePageSlug : null;
   const tabs = deriveTabs(descriptors, activePageSlug, ghostSlug);
@@ -946,7 +946,7 @@ export const Workspace = reatomComponent<{
       ? opening.composerPlaceholder
       : turn.phase === "running"
         ? "generating… esc to cancel"
-        : composerFocused
+        : chatFocused
           ? "Ask for changes…"
           : "tab → focus composer";
   // §7.5's focus table. The composer keeps the keys while the slash menu is open — the filter IS
@@ -955,7 +955,7 @@ export const Workspace = reatomComponent<{
   // than a coincidence: the terminal has one hardware cursor.
   const composerEditorFocused =
     !props.readOnly &&
-    composerFocused &&
+    chatFocused &&
     (props.activeOverlay === null || props.activeOverlay === "slash-menu");
 
   return (
@@ -978,7 +978,7 @@ export const Workspace = reatomComponent<{
             borderColor={
               turn.phase === "running"
                 ? SHELL_PALETTE.amberDim
-                : composerFocused
+                : chatFocused
                   ? SHELL_PALETTE.amber
                   : SHELL_PALETTE.line
             }
@@ -990,14 +990,14 @@ export const Workspace = reatomComponent<{
             title={
               turn.phase === "running"
                 ? " ❯ chat · working "
-                : composerFocused
+                : chatFocused
                   ? ` ❯ chat${chatTitleSuffix} `
                   : ` chat${chatTitleSuffix} `
             }
             titleColor={
               turn.phase === "running"
                 ? SHELL_PALETTE.amber
-                : composerFocused
+                : chatFocused
                   ? SHELL_PALETTE.amberHi
                   : SHELL_PALETTE.faint
             }
@@ -1156,7 +1156,7 @@ export const Workspace = reatomComponent<{
               // (`design/termcraft-engine.js:259-277`) exactly.
               disabled={
                 props.readOnly ||
-                !composerFocused ||
+                !chatFocused ||
                 (turn.phase === "running" && composerValue.length === 0)
               }
               placeholder={composerPlaceholder}

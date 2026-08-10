@@ -16,7 +16,7 @@ const key = (over: Partial<KeyLike>): KeyLike => ({
 const READY_HEALTH: AgentHealth = { kind: "ready", agent: "claude" };
 const ctx = (over: Partial<KeyContext>): KeyContext => ({
   screen: "workspace",
-  focus: "composer",
+  focus: "chat",
   overlay: null,
   composerValue: "",
   agentHealth: READY_HEALTH,
@@ -34,7 +34,7 @@ describe("resolveKey — global keys (design §3.8)", () => {
   });
 
   test("F2 -> fullscreen even while the composer is focused", () => {
-    expect(resolveKey(key({ name: "f2" }), ctx({ focus: "composer" }))).toEqual({
+    expect(resolveKey(key({ name: "f2" }), ctx({ focus: "chat" }))).toEqual({
       kind: "action-execute",
       actionId: "preview.fullscreen",
     });
@@ -44,13 +44,13 @@ describe("resolveKey — global keys (design §3.8)", () => {
     // C0 control bytes (0x02 / 0x0E) — a single byte no terminal can fail to deliver, unlike a
     // CSI-encoded ctrl+arrow chord (HANDOFF Finding 3).
     expect(
-      resolveKey(key({ name: "b", ctrl: true, sequence: "\x02" }), ctx({ focus: "composer" })),
+      resolveKey(key({ name: "b", ctrl: true, sequence: "\x02" }), ctx({ focus: "chat" })),
     ).toEqual({
       kind: "action-execute",
       actionId: "page.prev",
     });
     expect(
-      resolveKey(key({ name: "n", ctrl: true, sequence: "\x0e" }), ctx({ focus: "composer" })),
+      resolveKey(key({ name: "n", ctrl: true, sequence: "\x0e" }), ctx({ focus: "chat" })),
     ).toEqual({
       kind: "action-execute",
       actionId: "page.next",
@@ -63,17 +63,17 @@ describe("resolveKey — global keys (design §3.8)", () => {
     // byte, no encoding to get wrong"), and neither arrow chord is drawn anywhere — both entries
     // carry `hint: false`. Keeping them would have made Ctrl+Left switch pages inside a text
     // editor, which is the "advertised but wrong" trap this codebase has already fixed twice.
-    expect(resolveKey(key({ name: "left", ctrl: true }), ctx({ focus: "composer" }))).toEqual({
+    expect(resolveKey(key({ name: "left", ctrl: true }), ctx({ focus: "chat" }))).toEqual({
       kind: "none",
     });
-    expect(resolveKey(key({ name: "right", ctrl: true }), ctx({ focus: "composer" }))).toEqual({
+    expect(resolveKey(key({ name: "right", ctrl: true }), ctx({ focus: "chat" }))).toEqual({
       kind: "none",
     });
   });
 
   test("unmodified arrows are NOT page switches — they stay free for in-surface navigation", () => {
-    expect(resolveKey(key({ name: "left" }), ctx({ focus: "composer" }))).toEqual({ kind: "none" });
-    expect(resolveKey(key({ name: "right" }), ctx({ focus: "composer" }))).toEqual({
+    expect(resolveKey(key({ name: "left" }), ctx({ focus: "chat" }))).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "right" }), ctx({ focus: "chat" }))).toEqual({
       kind: "none",
     });
   });
@@ -447,7 +447,7 @@ describe("the Workspace's opening state (spec 2026-08-02)", () => {
     expect(
       resolveKey(
         key({ name: "return" }),
-        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+        ctx({ screen: "workspace", focus: "chat", projectOpen: false }),
       ),
     ).toEqual({ kind: "none" });
   });
@@ -456,13 +456,13 @@ describe("the Workspace's opening state (spec 2026-08-02)", () => {
     expect(
       resolveKey(
         key({ name: "a", sequence: "a" }),
-        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+        ctx({ screen: "workspace", focus: "chat", projectOpen: false }),
       ),
     ).toEqual({ kind: "none" });
     expect(
       resolveKey(
         key({ name: "backspace" }),
-        ctx({ screen: "workspace", focus: "composer", projectOpen: false }),
+        ctx({ screen: "workspace", focus: "chat", projectOpen: false }),
       ),
     ).toEqual({ kind: "none" });
   });
@@ -471,7 +471,7 @@ describe("the Workspace's opening state (spec 2026-08-02)", () => {
     expect(
       resolveKey(
         key({ name: "return" }),
-        ctx({ screen: "workspace", focus: "composer", projectOpen: true }),
+        ctx({ screen: "workspace", focus: "chat", projectOpen: true }),
       ),
     ).toEqual({ kind: "composer-submit" });
   });

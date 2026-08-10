@@ -263,7 +263,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
   // rejects, discarding the draft) is closed at its real source instead: `applyIntent`'s
   // `composer-submit` no longer clears the composer, and no-ops while a turn runs.
   const composerActive =
-    context.screen === "workspace" && context.focus === "composer" && context.overlay === null;
+    context.screen === "workspace" && context.focus === "chat" && context.overlay === null;
 
   if (context.screen === "home") {
     // The missing-CLI panel has no prompt input at all, so every key but the two the design's

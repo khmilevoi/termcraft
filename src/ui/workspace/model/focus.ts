@@ -2,7 +2,7 @@
  * Focus and the layered `Esc` stack (design §3.8, phase-7 plan GAP decision on focus).
  *
  * OpenTUI exposes no `tabIndex`, so focus is driven declaratively: exactly one widget owns
- * focus (`FocusTarget`), `Tab` toggles composer <-> preview, and a single global `Esc`
+ * focus (`FocusTarget`), `Tab` toggles chat <-> preview, and a single global `Esc`
  * handler pops the topmost active layer. This file is the pure logic; the App drives it via
  * a `focusTargetAtom` mapped to the React `focused` prop and a `useKeyboard` handler.
  */
@@ -17,8 +17,16 @@ export type OverlayKind =
   | "tab-menu"
   | "history";
 
-/** The single widget that owns focus in the workspace. */
-export type FocusTarget = "composer" | "preview";
+/**
+ * The single widget that owns focus in the workspace.
+ *
+ * `"chat"` NAMES A ZONE, NOT A WIDGET (focus-scoped-hotkeys §11). It was `"composer"` until
+ * click-to-focus made that name false: a click on the scrollback or the pin list sets this same
+ * value, and neither is the composer. The composer is simply the one thing INSIDE the zone that
+ * takes a caret, which is why `Workspace.tsx` still derives the editor's own `focused` prop from
+ * this value rather than from a second piece of state.
+ */
+export type FocusTarget = "chat" | "preview";
 
 /** The live UI state one `Esc` press is resolved against (design §3.8's five layers). */
 export interface EscState {
@@ -58,9 +66,9 @@ export function resolveEsc(state: EscState): EscOutcome {
   return { kind: "none" };
 }
 
-/** `Tab` toggles focus between the composer and the preview (design §3.8). */
+/** `Tab` toggles focus between the chat zone and the preview (design §3.8). */
 export function nextFocus(current: FocusTarget): FocusTarget {
-  return current === "composer" ? "preview" : "composer";
+  return current === "chat" ? "preview" : "chat";
 }
 
 /**

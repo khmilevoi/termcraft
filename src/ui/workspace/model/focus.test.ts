@@ -70,16 +70,16 @@ describe("resolveEsc — layered priority (design §3.8)", () => {
 });
 
 describe("nextFocus", () => {
-  test("Tab toggles composer <-> preview", () => {
-    expect(nextFocus("composer")).toBe("preview");
-    expect(nextFocus("preview")).toBe("composer");
+  test("Tab toggles chat <-> preview", () => {
+    expect(nextFocus("chat")).toBe("preview");
+    expect(nextFocus("preview")).toBe("chat");
   });
 });
 
 describe("singleCharKeysActive", () => {
   test("live only when the preview is focused and no overlay is open", () => {
     expect(singleCharKeysActive("preview", null)).toBe(true);
-    expect(singleCharKeysActive("composer", null)).toBe(false);
+    expect(singleCharKeysActive("chat", null)).toBe(false);
     expect(singleCharKeysActive("preview", "slash-menu")).toBe(false);
   });
 });
