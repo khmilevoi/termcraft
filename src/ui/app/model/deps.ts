@@ -68,7 +68,7 @@ export interface UiLocalState {
   readonly prompt: Atom<string>;
   /** The Workspace composer input text. */
   readonly composer: Atom<string>;
-  /** The widget that owns focus (composer <-> preview). */
+  /** The zone that owns focus (chat <-> preview). */
   readonly focus: Atom<FocusTarget>;
   /** Whether the preview is fullscreen (F2). */
   readonly fullscreen: Atom<boolean>;
@@ -1020,7 +1020,7 @@ export function createUiDeps(
   const local: UiLocalState = {
     prompt,
     composer,
-    focus: atom<FocusTarget>("composer", "ui.local.focus"),
+    focus: atom<FocusTarget>("chat", "ui.local.focus"),
     fullscreen,
     overlay: atom<OverlayKind | null>(null, "ui.local.overlay"),
     slashSelection,

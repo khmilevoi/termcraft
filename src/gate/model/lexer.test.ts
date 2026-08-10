@@ -368,11 +368,13 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // that is already wrong makes every later bump unverifiable. Task 12 then adds ten:
     // `agent/checks/`'s six (`types.ts`, `index.ts`, `model/render.ts`, `model/run-check.ts` and
     // the two tests beside them), `agent/claude/tools/model/check-design-tool.ts` with its test,
-    // and `entrypoint/model/design-checker.ts` with its test — taking it to 943. The pin-anchor
-    // fix adds `ui/preview/model/element-rects.ts` and its test, taking it to 945
+    // and `entrypoint/model/design-checker.ts` with its test — taking it to 943.
+    // focus-scoped-hotkeys Task 6 adds `ui/workspace/model/hint-keys.ts` and its own
+    // `hint-keys.test.ts`, and the pin-anchor fix adds `ui/preview/model/element-rects.ts` and
+    // its test — two branches, two files each, taking it to 947
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(945);
+    expect(files.length).toBe(947);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

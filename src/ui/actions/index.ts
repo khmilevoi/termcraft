@@ -8,6 +8,8 @@ export type {
   ActionContext,
   ActionRowState,
   HotkeyAction,
+  HotkeyScope,
+  HotkeyZone,
   ScoredSlashRow,
   SlashCommand,
   UiActionEntry,

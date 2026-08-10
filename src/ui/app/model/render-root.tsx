@@ -56,7 +56,24 @@ export class UiRootError extends errore.createTaggedError({
  * would render into a footer strip with scrollback above it instead of owning the screen, which
  * is not the design; and it captures `stdout` only, so `warn`/`error` would still tear the frame.
  */
-export const UI_RENDERER_CONFIG = { exitOnCtrlC: false, consoleMode: "disabled" } as const;
+export const UI_RENDERER_CONFIG = {
+  exitOnCtrlC: false,
+  consoleMode: "disabled",
+  // FOCUS IS DRIVEN DECLARATIVELY, SO THE RENDERER MUST NOT DRIVE IT TOO (focus-scoped-hotkeys
+  // §7, branch B, path 1). `dispatchMouseEvent` otherwise walks up from the hit target on every
+  // left click and focuses the first `focusable` ancestor it finds (`@opentui/core`
+  // `dispatchMouseEvent`, `chunk-bun-tkm837n2.js:8885-8897`), which routes through
+  // `focusRenderable` and BLURS whatever held focus (`:7392-7405`). `@opentui/react`'s reconciler
+  // applies the `focused` prop only when the prop CHANGES, so a blur that React did not cause is
+  // never undone — the caret vanishes and keystrokes stop reaching the editor until the user Tabs
+  // away and back. Confirmed empirically: a left click on the chat's own `<scrollbox
+  // id="ws-chat-scroll">` (itself `focusable` by default, `ScrollBoxRenderable`) fired
+  // `focused_renderable` naming that scrollbox as `next` and the composer's editor as `previous`,
+  // and `App.test.tsx`'s characterization test went from failing to passing once this line was
+  // added. The shell decides focus from `ui.local.focus` alone; `ui/workspace/ui/Workspace.tsx`'s
+  // own mouse handlers write that atom, which is the supported way to reach the same behaviour.
+  autoFocus: false,
+} as const;
 
 export const defaultAdapters: UiRootAdapters = {
   createRenderer: () => createCliRenderer(UI_RENDERER_CONFIG),

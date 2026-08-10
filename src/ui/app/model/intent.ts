@@ -113,10 +113,11 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
         return;
       }
-      // §3.2/finding §2.5: keymap.ts's `composerActive` no longer excludes `turnRunning`, so
-      // Enter keeps resolving to `composer-submit` for the whole duration of a turn — refusing
-      // it HERE, before `local.composer` is ever touched, is what keeps the draft in place
-      // instead of firing a second `turn.start` the Kernel would reject anyway
+      // §3.2/finding §2.5: keymap.ts's chat-zone inline-key branch (`resolveKey`'s
+      // `zone === "chat" && context.screen === "workspace"` check) no longer excludes
+      // `turnRunning`, so Enter keeps resolving to `composer-submit` for the whole duration of a
+      // turn — refusing it HERE, before `local.composer` is ever touched, is what keeps the
+      // draft in place instead of firing a second `turn.start` the Kernel would reject anyway
       // (`TURN_ALREADY_ACTIVE`), which used to be the very reason the composer had to freeze.
       // Design's own copy for this state, `⏎ send disabled — draft kept`
       // (`design/termcraft-engine.js:259-277` `wsGenTyping`, `:268`'s `attach` line — see
@@ -510,7 +511,7 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     // that multi-line composer content is normal (§7.4).
     const draft = deps.local.composer();
     setPrimaryInput(deps, draft.length === 0 ? text : `${draft}\n\n${text}`);
-    deps.local.focus.set("composer");
+    deps.local.focus.set("chat");
     return;
   }
   const chats = deps.mirror.chats();
@@ -535,7 +536,7 @@ function applyEsc(deps: UiDeps): void {
     selection !== null && selection.pageSlug === deps.mirror.project().activePageSlug;
   const outcome = resolveEsc({
     overlayOpen: deps.local.overlay(),
-    focusAwayFromComposer: deps.local.focus() !== "composer",
+    focusAwayFromComposer: deps.local.focus() !== "chat",
     historicalBrowse: false,
     generationRunning: turn.phase === "running",
     hasSelection,
@@ -546,7 +547,7 @@ function applyEsc(deps: UiDeps): void {
       deps.local.overlay.set(null);
       return;
     case "unfocus-to-composer":
-      deps.local.focus.set("composer");
+      deps.local.focus.set("chat");
       return;
     case "cancel-generation":
       if (turn.phase === "running")

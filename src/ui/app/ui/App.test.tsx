@@ -23,6 +23,7 @@ import {
 } from "ui/testing";
 
 import { createUiDeps } from "../model/deps";
+import { UI_RENDERER_CONFIG } from "../model/render-root";
 import { App } from "./App";
 
 let open: ReactTestRenderer | null = null;
@@ -232,6 +233,113 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       { kind: "hit", x: 5, y: 4 },
       { kind: "pin-anchor", x: 6, y: 5 },
     ]);
+  });
+
+  // §7. The task-1 brief's own literal click target (x50/y8, "the preview column") does NOT
+  // reproduce this defect: `ws-preview`'s own subtree contains no `<scrollbox>`, `<select>`,
+  // `<tabselect>`, or `focusable={true}` box — none of `@opentui/core`'s focusable-by-default
+  // classes (at least `EditBufferRenderable`, `ScrollBoxRenderable`, `ScrollBarRenderable`,
+  // `SelectRenderable`, `TabSelectRenderable` — not necessarily an exhaustive list) appear there —
+  // so `dispatchMouseEvent`'s autoFocus walk finds no ancestor to steal focus for and the click is
+  // a no-op. The chat pane's OWN scrollback,
+  // `<scrollbox id="ws-chat-scroll">` (`Workspace.tsx:1035`), IS focusable by default — a fact the
+  // plan's C1 correction missed (it names only `EditBufferRenderable` as focusable-by-default) —
+  // so a click there is what actually exercises path 1. Confirmed by instrumenting a
+  // `focused_renderable` listener during diagnosis: this exact click fired
+  // `focus moved ws-chat-scroll <- ws-composer-input-editor` before the fix below.
+  test("a left click in the chat's own scrollback leaves the composer able to receive typing (§7)", async () => {
+    const kernel = createFakeKernel();
+    const preview = createFakePreviewSession();
+    kernel.setPreview(preview.handle);
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // Spreads the SAME renderer config production actually boots with (`UI_RENDERER_CONFIG`),
+    // rather than hardcoding `autoFocus: false` here independently of it — a regression that
+    // reverted or dropped the production flag must fail this test too, not just the narrower
+    // `root.test.tsx` field assertion.
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      ...UI_RENDERER_CONFIG,
+      width: 120,
+      height: 36,
+      useMouse: true,
+    });
+    open = renderer;
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+
+    // Typing works before any mouse involvement — this half must pass even on a broken build, so a
+    // failure here means the fixture is wrong, not that the defect reproduced.
+    await renderer.act(() => renderer.mockInput.typeText("a"));
+    expect(deps.local.composer()).toBe("a");
+
+    // A left click inside the chat pane's scrollback, well clear of the composer itself and below
+    // the tab/title row — lands inside `ws-chat-scroll`.
+    await renderer.act(() => renderer.mockMouse.pressDown(10, 8, MouseButtons.LEFT));
+    await renderer.act(() => renderer.mockInput.typeText("b"));
+
+    expect(deps.local.composer()).toBe("ab");
+  });
+
+  test("clicking a pane focuses that pane's zone (§6)", async () => {
+    const kernel = createFakeKernel();
+    const preview = createFakePreviewSession();
+    kernel.setPreview(preview.handle);
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+      useMouse: true,
+    });
+    open = renderer;
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+    expect(deps.local.focus()).toBe("chat");
+
+    // x45+ is the preview column at 120 cols; y8 is inside the design area.
+    await renderer.act(() => renderer.mockMouse.pressDown(50, 8, MouseButtons.LEFT));
+    expect(deps.local.focus()).toBe("preview");
+
+    // Anywhere in the chat column — the scrollback, not the composer.
+    await renderer.act(() => renderer.mockMouse.pressDown(10, 8, MouseButtons.LEFT));
+    expect(deps.local.focus()).toBe("chat");
+  });
+
+  // The tab strip carries its own per-tab handler and sits INSIDE ws-preview. OpenTUI bubbles a
+  // mouse event to every ancestor that did not stop propagation, so the pane's handler covers it
+  // without a second copy that could drift from the first (plan C3).
+  test("clicking a page tab focuses the preview zone as well as switching (§6)", async () => {
+    const kernel = createFakeKernel();
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+      useMouse: true,
+    });
+    open = renderer;
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+    expect(deps.local.focus()).toBe("chat");
+
+    // The strip is the first row inside the preview box: y1, one cell past its left border.
+    await renderer.act(() => renderer.mockMouse.pressDown(48, 1, MouseButtons.LEFT));
+    expect(deps.local.focus()).toBe("preview");
   });
 
   test("mounts Home when no project is open", async () => {

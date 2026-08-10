@@ -195,6 +195,9 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
     const context = {
       screen: deps.screen(),
       focus: deps.local.focus(),
+      // §4: the zone is DERIVED from these two, never stored. Read here, next to `focus`, so the
+      // key context and the drawn workspace can never disagree about which pane is on screen.
+      fullscreen: deps.local.fullscreen(),
       // The SAME precedence call `renderOverlay` makes above — one source of truth for which
       // surface owns the keys, not a second independently derived export-popup check (M14 fix).
       overlay: resolveActiveOverlay(deps.local.overlay(), exportPopupShowing(deps)),

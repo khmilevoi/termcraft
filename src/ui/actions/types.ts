@@ -62,12 +62,38 @@ export interface SlashCommand {
   readonly screens: readonly ScreenKind[];
 }
 
+/**
+ * Which focus zone a hotkey acts in (focus-scoped-hotkeys design §4). Replaces design §3.8's two
+ * tiers: `global` is the old global tier, and `preview` IS the old single-char tier — "keys that
+ * work only when no text input is focused" is precisely "keys scoped to the preview zone", now
+ * with a mechanism instead of a description.
+ */
+export type HotkeyScope = "global" | "chat" | "preview";
+
+/**
+ * The two scopes focus can actually BE in. `global` is excluded on purpose: it is what both zones
+ * share, not a place the user can put the caret, so a function taking a zone must not accept it.
+ *
+ * Structurally identical to `ui/workspace`'s `FocusTarget`, and deliberately so — `ui/actions` must
+ * not import `ui/workspace` (the workspace's barrel pulls in the whole component tree, and the
+ * dependency runs the other way: `Workspace.tsx` imports this module). The two unions being the
+ * same means `keymap.ts` can hand a `FocusTarget` straight to `resolveHotkey` with no cast; a test
+ * in `keymap.test.ts` pins that they stay identical.
+ */
+export type HotkeyZone = Exclude<HotkeyScope, "global">;
+
 /** A hotkey-bound action (design §3.8 hotkey tiers). */
 export interface HotkeyAction {
   /** Stable action id. */
   readonly id: string;
   /** Canonical key spelling, lowercase: `"f2"`, `"f3"`, `"ctrl+e"`, … */
   readonly key: string;
+  /**
+   * The focus zone this key acts in. REQUIRED on every row — there is no default, because a
+   * silently-global default is exactly the bug this design removes: a key assumed global shadows
+   * whatever the focused editor wanted it for, and the editor loses with no way to tell.
+   */
+  readonly scope: HotkeyScope;
   /**
    * Extra key spellings that resolve to this same action, lowercase.
    *
