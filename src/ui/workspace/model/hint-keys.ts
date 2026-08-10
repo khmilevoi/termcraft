@@ -114,9 +114,18 @@ export function hintKeys(
       // Both no-retry variants mark F5 `dis` in the key row.
       return [hotkeyGlyph(action.key), action.label, "dis"];
     // design/termcraft-engine.js:1505-1506 / `ChatScrollback`'s own "PgUp retries" row copy:
-    // the SAME gesture that requested the failed page retries it.
-    if (action.id === "chat.scroll-up" && chat.olderPageFailed)
-      return [hotkeyGlyph(action.key), "retries"];
+    // the SAME gesture that requested the failed page retries it. CORRECTED (final-review
+    // Finding 3, focus-scoped-hotkeys, 2026-08-10): this branch used to return its custom
+    // label directly, bypassing `hotkeyHint` and the zone-mismatch `dis` state it applies —
+    // so "PgUp retries" stayed live even in the preview zone, where `chat.scroll-up` (`chat`
+    // scope) does not actually act. Keep the custom label, but compute the state the exact same
+    // way `hotkeyHint` does.
+    if (action.id === "chat.scroll-up" && chat.olderPageFailed) {
+      const foreignZone = action.scope !== "global" && action.scope !== zone;
+      return foreignZone
+        ? [hotkeyGlyph(action.key), "retries", "dis"]
+        : [hotkeyGlyph(action.key), "retries"];
+    }
     return hotkeyHint(action, zone);
   });
 }

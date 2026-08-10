@@ -57,6 +57,22 @@ describe("hintKeys — the row does not reflow, only its states change (§8)", (
     expect(hintKeys(IDLE, true, null, LIVE_CHAT, "preview")).toEqual([["F2", "windowed"]]);
   });
 
+  // CORRECTED (final-review Finding 3, focus-scoped-hotkeys, 2026-08-10): the "PgUp retries"
+  // relabel used to bypass the zone-mismatch `dis` state entirely, so it stayed live in the
+  // preview zone even though `chat.scroll-up` is `chat`-scoped and does not act there.
+  test("a failed older-page load's PgUp/retries hint is still dis'd by zone like any other chat-scoped hint", () => {
+    const olderPageFailed = { following: true, atStart: false, olderPageFailed: true } as const;
+    const chat = hintKeys(IDLE, false, null, olderPageFailed, "chat");
+    const chatEntry = chat.find((entry) => entry[0] === "PgUp");
+    expect(chatEntry?.[1]).toBe("retries");
+    expect(chatEntry?.[2]).toBeUndefined();
+
+    const preview = hintKeys(IDLE, false, null, olderPageFailed, "preview");
+    const previewEntry = preview.find((entry) => entry[0] === "PgUp");
+    expect(previewEntry?.[1]).toBe("retries");
+    expect(previewEntry?.[2]).toBe("dis");
+  });
+
   test("a running turn scrolled away keeps the scroll trio, dis'd by zone like any other", () => {
     const scrolled = { following: false, atStart: false, olderPageFailed: false } as const;
     const running: TurnMirror = {
