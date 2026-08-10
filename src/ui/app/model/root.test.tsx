@@ -288,4 +288,13 @@ describe("UI_RENDERER_CONFIG", () => {
   test("keeps ctrl+c under the app's own control", () => {
     expect(UI_RENDERER_CONFIG.exitOnCtrlC).toBe(false);
   });
+
+  // focus-scoped-hotkeys §7 (Task 1): without this, `dispatchMouseEvent` walks up from every left
+  // click's hit target and focuses the first `focusable` ancestor it finds — on this app's own
+  // `<scrollbox id="ws-chat-scroll">` that blurs the composer's editor behind React's back, and the
+  // caret never comes back until the user Tabs away and back. See `App.test.tsx`'s "a left click in
+  // the chat's own scrollback leaves the composer able to receive typing" for the regression test.
+  test("leaves focus entirely to the shell — the renderer never focuses on click", () => {
+    expect(UI_RENDERER_CONFIG.autoFocus).toBe(false);
+  });
 });
