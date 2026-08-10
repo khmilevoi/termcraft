@@ -4,7 +4,6 @@ import {
   atom,
   action,
   wrap,
-  Panel,
   Column,
   Row,
   Box,
@@ -13,6 +12,7 @@ import {
   Separator,
 } from "@termcraft/runtime"
 import { pad2, SEEDED_NOW } from "../lib/time"
+import { PageShell } from "../components/PageShell"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -118,69 +118,65 @@ export default reatomComponent(function Page() {
   const weeks = buildMonthGrid(displayed.year, displayed.month, today)
 
   return (
-    <Box id="app-bg" direction="column" grow={1} background="background">
-      <Panel id="root" title="Календарь" padding={1}>
-        <Column id="layout" gap={1} align="stretch">
-          <Row id="nav-row" gap={1} align="center" justify="between">
-            <Button id="btn-prev" onPress={wrap(() => shiftMonth(-1))}>
-              {"◀ Пред"}
-            </Button>
-            <Text id="month-label" bold color="accent">
-              {`${MONTHS_RU[displayed.month]} ${displayed.year}`}
+    <PageShell title="Календарь">
+      <Row id="nav-row" gap={1} align="center" justify="between">
+        <Button id="btn-prev" onPress={wrap(() => shiftMonth(-1))}>
+          {"◀ Пред"}
+        </Button>
+        <Text id="month-label" bold color="accent">
+          {`${MONTHS_RU[displayed.month]} ${displayed.year}`}
+        </Text>
+        <Button id="btn-next" onPress={wrap(() => shiftMonth(1))}>
+          {"След ▶"}
+        </Button>
+      </Row>
+
+      <Row id="today-row" justify="center">
+        <Button id="btn-today" onPress={wrap(() => resetToToday())}>
+          Сегодня
+        </Button>
+      </Row>
+
+      <Separator id="sep-header" />
+
+      <Row id="weekday-header" gap={1} justify="between">
+        {WEEKDAYS_SHORT_RU.map((label, i) => (
+          <Box id={`weekday-${i}`} width={4} justify="center">
+            <Text id={`weekday-label-${i}`} dim color="foregroundMuted">
+              {label}
             </Text>
-            <Button id="btn-next" onPress={wrap(() => shiftMonth(1))}>
-              {"След ▶"}
-            </Button>
-          </Row>
+          </Box>
+        ))}
+      </Row>
 
-          <Row id="today-row" justify="center">
-            <Button id="btn-today" onPress={wrap(() => resetToToday())}>
-              Сегодня
-            </Button>
-          </Row>
-
-          <Separator id="sep-header" />
-
-          <Row id="weekday-header" gap={1} justify="between">
-            {WEEKDAYS_SHORT_RU.map((label, i) => (
-              <Box id={`weekday-${i}`} width={4} justify="center">
-                <Text id={`weekday-label-${i}`} dim color="foregroundMuted">
-                  {label}
+      <Column id="weeks-col" gap={0} align="stretch">
+        {weeks.map((week, w) => (
+          <Row id={`week-${w}`} gap={1} justify="between">
+            {week.map((cell, d) => (
+              <Box
+                id={`day-${w}-${d}`}
+                width={4}
+                justify="center"
+                background={cell.isToday ? "selection" : undefined}
+              >
+                <Text
+                  id={`day-label-${w}-${d}`}
+                  color={cell.isToday ? "selectionFg" : cell.inMonth ? "foreground" : "foregroundFaint"}
+                  bold={cell.isToday}
+                >
+                  {pad2(cell.day)}
                 </Text>
               </Box>
             ))}
           </Row>
+        ))}
+      </Column>
 
-          <Column id="weeks-col" gap={0} align="stretch">
-            {weeks.map((week, w) => (
-              <Row id={`week-${w}`} gap={1} justify="between">
-                {week.map((cell, d) => (
-                  <Box
-                    id={`day-${w}-${d}`}
-                    width={4}
-                    justify="center"
-                    background={cell.isToday ? "selection" : undefined}
-                  >
-                    <Text
-                      id={`day-label-${w}-${d}`}
-                      color={cell.isToday ? "selectionFg" : cell.inMonth ? "foreground" : "foregroundFaint"}
-                      bold={cell.isToday}
-                    >
-                      {pad2(cell.day)}
-                    </Text>
-                  </Box>
-                ))}
-              </Row>
-            ))}
-          </Column>
+      <Separator id="sep-footer" />
 
-          <Separator id="sep-footer" />
-
-          <Text id="today-line" dim color="foregroundMuted">
-            {`Сегодня: ${pad2(today.day)}.${pad2(today.month + 1)}.${today.year}`}
-          </Text>
-        </Column>
-      </Panel>
-    </Box>
+      <Text id="today-line" dim color="foregroundMuted">
+        {`Сегодня: ${pad2(today.day)}.${pad2(today.month + 1)}.${today.year}`}
+      </Text>
+    </PageShell>
   )
 })

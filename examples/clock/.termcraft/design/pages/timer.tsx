@@ -4,10 +4,7 @@ import {
   atom,
   action,
   wrap,
-  Panel,
-  Column,
   Row,
-  Box,
   Text,
   Button,
   Separator,
@@ -15,6 +12,7 @@ import {
 } from "@termcraft/runtime"
 import { pad2 } from "../lib/time"
 import { makeTick } from "../lib/elapsed"
+import { PageShell } from "../components/PageShell"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -97,51 +95,47 @@ export default reatomComponent(function Page() {
   const accentToken = finished ? "danger" : running ? "success" : "accent"
 
   return (
-    <Box id="app-bg" direction="column" grow={1} background="background">
-      <Panel id="root" title="Таймер" padding={1} borderColor={accentToken}>
-        <Column id="layout" gap={1} align="center">
-          <Row id="preset-row" gap={1} justify="center">
-            {DURATION_PRESETS.map((preset) => (
-              <Button
-                id={`preset-${preset.id}`}
-                onPress={wrap(() => selectDuration(preset.ms))}
-                disabled={running}
-              >
-                {preset.id === activePresetId ? `[ ${preset.label} ]` : preset.label}
-              </Button>
-            ))}
-          </Row>
+    <PageShell title="Таймер" borderColor={accentToken} align="center">
+      <Row id="preset-row" gap={1} justify="center">
+        {DURATION_PRESETS.map((preset) => (
+          <Button
+            id={`preset-${preset.id}`}
+            onPress={wrap(() => selectDuration(preset.ms))}
+            disabled={running}
+          >
+            {preset.id === activePresetId ? `[ ${preset.label} ]` : preset.label}
+          </Button>
+        ))}
+      </Row>
 
-          <Text id="status-line" dim color="foregroundMuted">
-            {finished ? "Время вышло" : running ? "Идёт отсчёт" : "На паузе"}
-          </Text>
+      <Text id="status-line" dim color="foregroundMuted">
+        {finished ? "Время вышло" : running ? "Идёт отсчёт" : "На паузе"}
+      </Text>
 
-          <Text id="countdown-time" bold color={accentToken}>
-            {formatCountdown(remaining)}
-          </Text>
+      <Text id="countdown-time" bold color={accentToken}>
+        {formatCountdown(remaining)}
+      </Text>
 
-          <Gauge id="progress-gauge" value={fraction} width={30} label={`${Math.round(fraction * 100)}%`} />
+      <Gauge id="progress-gauge" value={fraction} width={30} label={`${Math.round(fraction * 100)}%`} />
 
-          <Row id="controls-row" gap={1} justify="center">
-            <Button
-              id="btn-start-pause"
-              onPress={wrap(() => (running ? pause() : start()))}
-              disabled={finished && !running}
-            >
-              {running ? "Пауза" : elapsed > 0 ? "Продолжить" : "Старт"}
-            </Button>
-            <Button id="btn-reset" onPress={wrap(() => reset())} disabled={!running && elapsed === 0}>
-              Сброс
-            </Button>
-          </Row>
+      <Row id="controls-row" gap={1} justify="center">
+        <Button
+          id="btn-start-pause"
+          onPress={wrap(() => (running ? pause() : start()))}
+          disabled={finished && !running}
+        >
+          {running ? "Пауза" : elapsed > 0 ? "Продолжить" : "Старт"}
+        </Button>
+        <Button id="btn-reset" onPress={wrap(() => reset())} disabled={!running && elapsed === 0}>
+          Сброс
+        </Button>
+      </Row>
 
-          <Separator id="sep-footer" />
+      <Separator id="sep-footer" />
 
-          <Text id="duration-line" dim color="foregroundMuted">
-            {`Длительность: ${formatCountdown(duration)}`}
-          </Text>
-        </Column>
-      </Panel>
-    </Box>
+      <Text id="duration-line" dim color="foregroundMuted">
+        {`Длительность: ${formatCountdown(duration)}`}
+      </Text>
+    </PageShell>
   )
 })

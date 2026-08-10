@@ -6,12 +6,12 @@ import {
   Panel,
   Column,
   Row,
-  Box,
   Text,
   Separator,
   Tabs,
 } from "@termcraft/runtime"
 import { pad2, WEEKDAYS_RU, fullTime, SEEDED_NOW } from "../lib/time"
+import { PageShell } from "../components/PageShell"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -55,6 +55,8 @@ const PALETTE_OPTIONS = [
   { id: "green", label: "Зелёный", token: "success" } as const,
   { id: "amber", label: "Янтарный", token: "accent" } as const,
   { id: "red", label: "Красный", token: "danger" } as const,
+  // Theme has no true blue hue — `border` is the closest neutral, cool-toned token.
+  { id: "blue", label: "Синий", token: "border" } as const,
 ]
 
 const paletteIdAtom = atom("green", "paletteIdAtom")
@@ -142,39 +144,35 @@ export default reatomComponent(function Page() {
   const accentToken = selectedPalette.token
 
   return (
-    <Box id="app-bg" direction="column" grow={1} background="background">
-      <Panel id="root" title="Часы" padding={1} borderColor={accentToken}>
-        <Column id="layout" gap={1} align="center">
-          <Row id="palette-row" gap={1} align="center">
-            <Text id="palette-label" dim color="foregroundMuted">
-              Палитра:
-            </Text>
-            <Tabs
-              id="palette-menu"
-              tabs={PALETTE_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
-              activeId={paletteId}
-              onSelect={wrap((id: string) => paletteIdAtom.set(id))}
-            />
-          </Row>
+    <PageShell title="Часы" borderColor={accentToken} align="center">
+      <Row id="palette-row" gap={1} align="center">
+        <Text id="palette-label" dim color="foregroundMuted">
+          Палитра:
+        </Text>
+        <Tabs
+          id="palette-menu"
+          tabs={PALETTE_OPTIONS.map((o) => ({ id: o.id, label: o.label }))}
+          activeId={paletteId}
+          onSelect={wrap((id: string) => paletteIdAtom.set(id))}
+        />
+      </Row>
 
-          <Text id="digital-time" bold color={accentToken}>
-            {fullTime(now)}
+      <Text id="digital-time" bold color={accentToken}>
+        {fullTime(now)}
+      </Text>
+      <Text id="date-line" dim color="foregroundMuted">
+        {`${weekday(now)}, ${fullDate(now)}`}
+      </Text>
+
+      <Separator id="sep-header" color={accentToken} />
+
+      <Panel id="panel-analog" title="Аналоговые часы" padding={1} borderColor={accentToken} titleColor={accentToken}>
+        <Column id="analog-col" gap={0} align="center">
+          <Text id="analog-face" color={accentToken}>
+            {analogFace}
           </Text>
-          <Text id="date-line" dim color="foregroundMuted">
-            {`${weekday(now)}, ${fullDate(now)}`}
-          </Text>
-
-          <Separator id="sep-header" color={accentToken} />
-
-          <Panel id="panel-analog" title="Аналоговые часы" padding={1} borderColor={accentToken} titleColor={accentToken}>
-            <Column id="analog-col" gap={0} align="center">
-              <Text id="analog-face" color={accentToken}>
-                {analogFace}
-              </Text>
-            </Column>
-          </Panel>
         </Column>
       </Panel>
-    </Box>
+    </PageShell>
   )
 })

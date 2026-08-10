@@ -4,16 +4,15 @@ import {
   atom,
   action,
   wrap,
-  Panel,
   Column,
   Row,
-  Box,
   Text,
   Button,
   Input,
   Separator,
 } from "@termcraft/runtime"
 import { pad2, WEEKDAYS_RU, fullTime, SEEDED_NOW } from "../lib/time"
+import { PageShell } from "../components/PageShell"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -110,93 +109,89 @@ export default reatomComponent(function Page() {
   const draftLabel = draftLabelAtom()
 
   return (
-    <Box id="app-bg" direction="column" grow={1} background="background">
-      <Panel id="root" title="Будильник" padding={1}>
-        <Column id="layout" gap={1} align="stretch">
-          <Row id="clock-row" gap={1} justify="between" align="center">
-            <Text id="current-time" bold color="accent">
-              {fullTime(now)}
+    <PageShell title="Будильник">
+      <Row id="clock-row" gap={1} justify="between" align="center">
+        <Text id="current-time" bold color="accent">
+          {fullTime(now)}
+        </Text>
+        <Text id="current-weekday" dim color="foregroundMuted">
+          {WEEKDAYS_RU[now.getDay()]}
+        </Text>
+      </Row>
+
+      <Text id="next-alarm-line" color={nextAlarm ? "success" : "foregroundFaint"}>
+        {nextAlarm
+          ? `Ближайший будильник: ${pad2(nextAlarm.hour)}:${pad2(nextAlarm.minute)} — ${nextAlarm.label}`
+          : "Нет активных будильников"}
+      </Text>
+
+      <Separator id="sep-header" />
+
+      <Column id="alarms-col" gap={0} align="stretch">
+        <Text id="alarms-title" dim color="foregroundMuted">
+          {`Будильники (${alarms.length}):`}
+        </Text>
+        {alarms.map((a) => (
+          <Row id={`alarm-row-${a.id}`} gap={1} align="center" justify="between">
+            <Text id={`alarm-time-${a.id}`} bold color={a.enabled ? "accent" : "foregroundFaint"}>
+              {`${pad2(a.hour)}:${pad2(a.minute)}`}
             </Text>
-            <Text id="current-weekday" dim color="foregroundMuted">
-              {WEEKDAYS_RU[now.getDay()]}
+            <Text id={`alarm-label-${a.id}`} color={a.enabled ? "foreground" : "foregroundFaint"}>
+              {a.label}
             </Text>
+            <Row id={`alarm-actions-${a.id}`} gap={1}>
+              <Button id={`alarm-toggle-${a.id}`} onPress={wrap(() => toggleAlarm(a.id))}>
+                {a.enabled ? "Выкл" : "Вкл"}
+              </Button>
+              <Button id={`alarm-remove-${a.id}`} onPress={wrap(() => removeAlarm(a.id))}>
+                Удалить
+              </Button>
+            </Row>
           </Row>
+        ))}
+      </Column>
 
-          <Text id="next-alarm-line" color={nextAlarm ? "success" : "foregroundFaint"}>
-            {nextAlarm
-              ? `Ближайший будильник: ${pad2(nextAlarm.hour)}:${pad2(nextAlarm.minute)} — ${nextAlarm.label}`
-              : "Нет активных будильников"}
+      <Separator id="sep-add" />
+
+      <Column id="add-alarm-col" gap={1} align="stretch">
+        <Text id="add-title" dim color="foregroundMuted">
+          Новый будильник:
+        </Text>
+        <Row id="time-picker-row" gap={1} align="center" justify="center">
+          <Button id="btn-hour-down" onPress={wrap(() => adjustDraftHour(-1))}>
+            {"−"}
+          </Button>
+          <Text id="draft-hour" bold color="accent">
+            {pad2(draftHour)}
           </Text>
-
-          <Separator id="sep-header" />
-
-          <Column id="alarms-col" gap={0} align="stretch">
-            <Text id="alarms-title" dim color="foregroundMuted">
-              {`Будильники (${alarms.length}):`}
-            </Text>
-            {alarms.map((a) => (
-              <Row id={`alarm-row-${a.id}`} gap={1} align="center" justify="between">
-                <Text id={`alarm-time-${a.id}`} bold color={a.enabled ? "accent" : "foregroundFaint"}>
-                  {`${pad2(a.hour)}:${pad2(a.minute)}`}
-                </Text>
-                <Text id={`alarm-label-${a.id}`} color={a.enabled ? "foreground" : "foregroundFaint"}>
-                  {a.label}
-                </Text>
-                <Row id={`alarm-actions-${a.id}`} gap={1}>
-                  <Button id={`alarm-toggle-${a.id}`} onPress={wrap(() => toggleAlarm(a.id))}>
-                    {a.enabled ? "Выкл" : "Вкл"}
-                  </Button>
-                  <Button id={`alarm-remove-${a.id}`} onPress={wrap(() => removeAlarm(a.id))}>
-                    Удалить
-                  </Button>
-                </Row>
-              </Row>
-            ))}
-          </Column>
-
-          <Separator id="sep-add" />
-
-          <Column id="add-alarm-col" gap={1} align="stretch">
-            <Text id="add-title" dim color="foregroundMuted">
-              Новый будильник:
-            </Text>
-            <Row id="time-picker-row" gap={1} align="center" justify="center">
-              <Button id="btn-hour-down" onPress={wrap(() => adjustDraftHour(-1))}>
-                {"−"}
-              </Button>
-              <Text id="draft-hour" bold color="accent">
-                {pad2(draftHour)}
-              </Text>
-              <Button id="btn-hour-up" onPress={wrap(() => adjustDraftHour(1))}>
-                {"+"}
-              </Button>
-              <Text id="time-picker-colon" color="foregroundMuted">
-                {":"}
-              </Text>
-              <Button id="btn-minute-down" onPress={wrap(() => adjustDraftMinute(-1))}>
-                {"−"}
-              </Button>
-              <Text id="draft-minute" bold color="accent">
-                {pad2(draftMinute)}
-              </Text>
-              <Button id="btn-minute-up" onPress={wrap(() => adjustDraftMinute(1))}>
-                {"+"}
-              </Button>
-            </Row>
-            <Input
-              id="draft-label-input"
-              value={draftLabel}
-              placeholder="Название будильника"
-              onChange={wrap((value: string) => draftLabelAtom.set(value))}
-            />
-            <Row id="add-row" justify="center">
-              <Button id="btn-add-alarm" onPress={wrap(() => addAlarm())}>
-                Добавить будильник
-              </Button>
-            </Row>
-          </Column>
-        </Column>
-      </Panel>
-    </Box>
+          <Button id="btn-hour-up" onPress={wrap(() => adjustDraftHour(1))}>
+            {"+"}
+          </Button>
+          <Text id="time-picker-colon" color="foregroundMuted">
+            {":"}
+          </Text>
+          <Button id="btn-minute-down" onPress={wrap(() => adjustDraftMinute(-1))}>
+            {"−"}
+          </Button>
+          <Text id="draft-minute" bold color="accent">
+            {pad2(draftMinute)}
+          </Text>
+          <Button id="btn-minute-up" onPress={wrap(() => adjustDraftMinute(1))}>
+            {"+"}
+          </Button>
+        </Row>
+        <Input
+          id="draft-label-input"
+          value={draftLabel}
+          placeholder="Название будильника"
+          onChange={wrap((value: string) => draftLabelAtom.set(value))}
+        />
+        <Row id="add-row" justify="center">
+          <Button id="btn-add-alarm" onPress={wrap(() => addAlarm())}>
+            Добавить будильник
+          </Button>
+        </Row>
+      </Column>
+    </PageShell>
   )
 })

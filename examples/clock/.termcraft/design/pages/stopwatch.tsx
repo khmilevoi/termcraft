@@ -4,16 +4,15 @@ import {
   atom,
   action,
   wrap,
-  Panel,
   Column,
   Row,
-  Box,
   Text,
   Button,
   Separator,
 } from "@termcraft/runtime"
 import { pad2 } from "../lib/time"
 import { makeTick } from "../lib/elapsed"
+import { PageShell } from "../components/PageShell"
 
 export const meta = definePage({
   kitApiVersion: 1,
@@ -76,55 +75,51 @@ export default reatomComponent(function Page() {
   const laps = lapsAtom()
 
   return (
-    <Box id="app-bg" direction="column" grow={1} background="background">
-      <Panel id="root" title="Секундомер" padding={1} borderColor={running ? "success" : "border"}>
-        <Column id="layout" gap={1} align="center">
-          <Text id="status-line" dim color="foregroundMuted">
-            {running ? "Идёт отсчёт" : elapsed > 0 ? "Остановлен" : "Готов"}
-          </Text>
+    <PageShell title="Секундомер" borderColor={running ? "success" : "border"} align="center">
+      <Text id="status-line" dim color="foregroundMuted">
+        {running ? "Идёт отсчёт" : elapsed > 0 ? "Остановлен" : "Готов"}
+      </Text>
 
-          <Text id="elapsed-time" bold color={running ? "success" : "accent"}>
-            {formatStopwatch(elapsed)}
-          </Text>
+      <Text id="elapsed-time" bold color={running ? "success" : "accent"}>
+        {formatStopwatch(elapsed)}
+      </Text>
 
-          <Row id="controls-row" gap={1} justify="center">
-            <Button id="btn-start-stop" onPress={wrap(() => (running ? stop() : start()))}>
-              {running ? "Стоп" : elapsed > 0 ? "Продолжить" : "Старт"}
-            </Button>
-            <Button id="btn-lap" onPress={wrap(() => recordLap())} disabled={!running}>
-              Круг
-            </Button>
-            <Button
-              id="btn-reset"
-              onPress={wrap(() => reset())}
-              disabled={running || (elapsed === 0 && laps.length === 0)}
-            >
-              Сброс
-            </Button>
-          </Row>
+      <Row id="controls-row" gap={1} justify="center">
+        <Button id="btn-start-stop" onPress={wrap(() => (running ? stop() : start()))}>
+          {running ? "Стоп" : elapsed > 0 ? "Продолжить" : "Старт"}
+        </Button>
+        <Button id="btn-lap" onPress={wrap(() => recordLap())} disabled={!running}>
+          Круг
+        </Button>
+        <Button
+          id="btn-reset"
+          onPress={wrap(() => reset())}
+          disabled={running || (elapsed === 0 && laps.length === 0)}
+        >
+          Сброс
+        </Button>
+      </Row>
 
-          <Separator id="sep-laps" />
+      <Separator id="sep-laps" />
 
-          <Column id="laps-col" gap={0} align="stretch">
-            <Text id="laps-title" dim color="foregroundMuted">
-              {laps.length > 0 ? `Круги (${laps.length}):` : "Кругов пока нет"}
-            </Text>
-            {laps.map((lapMs: number, i: number) => {
-              const lapNumber = laps.length - i
-              return (
-                <Row id={`lap-row-${lapNumber}`} gap={1} justify="between">
-                  <Text id={`lap-index-${lapNumber}`} dim color="foregroundFaint">
-                    {`Круг ${lapNumber}`}
-                  </Text>
-                  <Text id={`lap-time-${lapNumber}`} color="foreground">
-                    {formatStopwatch(lapMs)}
-                  </Text>
-                </Row>
-              )
-            })}
-          </Column>
-        </Column>
-      </Panel>
-    </Box>
+      <Column id="laps-col" gap={0} align="stretch">
+        <Text id="laps-title" dim color="foregroundMuted">
+          {laps.length > 0 ? `Круги (${laps.length}):` : "Кругов пока нет"}
+        </Text>
+        {laps.map((lapMs: number, i: number) => {
+          const lapNumber = laps.length - i
+          return (
+            <Row id={`lap-row-${lapNumber}`} gap={1} justify="between">
+              <Text id={`lap-index-${lapNumber}`} dim color="foregroundFaint">
+                {`Круг ${lapNumber}`}
+              </Text>
+              <Text id={`lap-time-${lapNumber}`} color="foreground">
+                {formatStopwatch(lapMs)}
+              </Text>
+            </Row>
+          )
+        })}
+      </Column>
+    </PageShell>
   )
 })
