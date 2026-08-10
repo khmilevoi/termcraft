@@ -32,7 +32,15 @@ export type FocusTarget = "chat" | "preview";
 export interface EscState {
   /** An open popup or the slash menu (layer 1), or `null`. */
   readonly overlayOpen: OverlayKind | null;
-  /** A non-composer text input, or the preview focused in interactive mode, holds focus (layer 2). */
+  /**
+   * A non-composer text input, or the preview focused in interactive mode, holds focus (layer 2).
+   *
+   * CORRECTED (final-review Finding 1, focus-scoped-hotkeys, 2026-08-10): this used to name only a
+   * deliberate `Tab` gesture. Since Task 5 of this same plan, `Workspace.tsx` ALSO sets `local.focus`
+   * to `"preview"` as a side effect of an ordinary click that selects an element or hits a page tab —
+   * so this field no longer implies "the user explicitly asked to leave the composer." See
+   * {@link resolveEsc}'s own doc comment for how layer 2 now accounts for that.
+   */
   readonly focusAwayFromComposer: boolean;
   /** A historical browse view is active (layer 3). */
   readonly historicalBrowse: boolean;
@@ -56,10 +64,23 @@ export type EscOutcome =
  * 1 open popup / slash menu -> close it; 2 non-composer input or interactive preview ->
  * unfocus to composer; 3 historical browse -> return to Current; 4 running generation ->
  * cancel; 5 selected element -> deselect. Pure and total — `"none"` when no layer is active.
+ *
+ * CORRECTED (final-review Finding 1, focus-scoped-hotkeys, 2026-08-10): layer 2 no longer wins
+ * outright. Before this branch, `focus` only ever changed via a deliberate `Tab`, so "focus away
+ * from chat" reliably meant "the user explicitly asked to leave the composer, and `Esc` should
+ * bring them back." Since Task 5, `Workspace.tsx` also sets `local.focus` to `"preview"` as a mere
+ * SIDE EFFECT of a click that selects an element or hits a page tab — so a click that both selects
+ * something and moves focus made the first `Esc` after it return focus to chat instead of
+ * deselecting, and a click into the preview while a turn ran made it swallow "esc cancel" instead
+ * of cancelling. Layer 2 now yields to a more urgent reason to be there: while a generation is
+ * running or a selection is active, `Esc` addresses THAT first, falling through to layer 4/5 as if
+ * focus were still on chat. A plain `Tab`-away with nothing else active is unaffected — layer 2
+ * still wins there, exactly as before.
  */
 export function resolveEsc(state: EscState): EscOutcome {
   if (state.overlayOpen !== null) return { kind: "close-overlay", overlay: state.overlayOpen };
-  if (state.focusAwayFromComposer) return { kind: "unfocus-to-composer" };
+  if (state.focusAwayFromComposer && !state.generationRunning && !state.hasSelection)
+    return { kind: "unfocus-to-composer" };
   if (state.historicalBrowse) return { kind: "leave-history" };
   if (state.generationRunning) return { kind: "cancel-generation" };
   if (state.hasSelection) return { kind: "deselect" };

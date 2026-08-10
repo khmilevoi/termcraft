@@ -149,7 +149,8 @@ describe("applyIntent — text inputs", () => {
   });
 
   // finding §2.5 (phase-8 Task 16): the composer stays live for the whole turn, so Enter keeps
-  // resolving to `composer-submit` (keymap.ts's `composerActive` no longer excludes
+  // resolving to `composer-submit` (keymap.ts's chat-zone inline-key branch, `resolveKey`'s
+  // `zone === "chat" && context.screen === "workspace"` check, no longer excludes
   // `turnRunning`) — the refusal now happens here, before a second `turn.start` is ever
   // dispatched, so the Kernel's `TURN_ALREADY_ACTIVE` rejection path is never exercised at all
   // and the draft is never at risk. Design's own copy: `⏎ send disabled — draft kept`
@@ -951,13 +952,35 @@ describe("applyIntent — Esc layers", () => {
     expect((kernel.dispatched[0] as { payload: { turnId: string } }).payload.turnId).toBe(turnId);
   });
 
-  test("esc with focus on preview returns focus to the composer before cancelling", () => {
+  // CORRECTED (final-review Finding 1, focus-scoped-hotkeys, 2026-08-10): this used to assert the
+  // OLD, buggy behavior — that focus being on preview made the first `Esc` return focus to chat
+  // instead of cancelling, even while a generation ran. Since Task 5 of this plan, a click into the
+  // preview that ALSO selects an element or hits a tab sets `local.focus` to `"preview"` as a mere
+  // side effect (not a deliberate `Tab`), so this exact state — focus on preview, a turn running —
+  // became reachable by an ordinary click. The status bar's own "esc cancel" hint renders live for
+  // it, so the first `Esc` must actually cancel, not silently eat the press unfocusing instead. See
+  // `resolveEsc`'s own doc comment (`workspace/model/focus.ts`) for the layer-2-yields-to-layer-4
+  // fix this test now pins.
+  test("esc with focus on preview cancels a running generation rather than returning focus first", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const turnId = uuidv7();
+    deps.local.focus.set("preview");
+    deps.mirror.apply(event("turn.started", { turnId, chatId: uuidv7(), deadline: TEST_TS }));
+    applyIntent({ kind: "esc" }, deps);
+    expect(dispatchedKinds(kernel)).toEqual(["turn.cancel"]);
+    expect((kernel.dispatched[0] as { payload: { turnId: string } }).payload.turnId).toBe(turnId);
+    // Focus is untouched by this press — a SECOND `Esc`, once nothing more urgent remains, is what
+    // returns it to chat (layer 2 still fires, just not ahead of layer 4 for the SAME press).
+    expect(deps.local.focus()).toBe("preview");
+  });
+
+  // The plain `Tab`-away case, with nothing more urgent active, is unaffected by the fix above —
+  // focus alone still returns to chat on the first `Esc`, exactly as before Task 5.
+  test("esc with focus on preview and no running generation or selection still returns focus to chat", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.local.focus.set("preview");
-    deps.mirror.apply(
-      event("turn.started", { turnId: uuidv7(), chatId: uuidv7(), deadline: TEST_TS }),
-    );
     applyIntent({ kind: "esc" }, deps);
     expect(deps.local.focus()).toBe("chat");
     expect(kernel.dispatched).toHaveLength(0);

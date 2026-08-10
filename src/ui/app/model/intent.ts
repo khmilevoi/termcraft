@@ -113,10 +113,11 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         trace("ui.composerSubmit.refused", { reason: "screen is read-only" });
         return;
       }
-      // §3.2/finding §2.5: keymap.ts's `composerActive` no longer excludes `turnRunning`, so
-      // Enter keeps resolving to `composer-submit` for the whole duration of a turn — refusing
-      // it HERE, before `local.composer` is ever touched, is what keeps the draft in place
-      // instead of firing a second `turn.start` the Kernel would reject anyway
+      // §3.2/finding §2.5: keymap.ts's chat-zone inline-key branch (`resolveKey`'s
+      // `zone === "chat" && context.screen === "workspace"` check) no longer excludes
+      // `turnRunning`, so Enter keeps resolving to `composer-submit` for the whole duration of a
+      // turn — refusing it HERE, before `local.composer` is ever touched, is what keeps the
+      // draft in place instead of firing a second `turn.start` the Kernel would reject anyway
       // (`TURN_ALREADY_ACTIVE`), which used to be the very reason the composer had to freeze.
       // Design's own copy for this state, `⏎ send disabled — draft kept`
       // (`design/termcraft-engine.js:259-277` `wsGenTyping`, `:268`'s `attach` line — see
