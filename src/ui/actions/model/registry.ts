@@ -6,6 +6,7 @@ import type {
   ActionContext,
   ActionRowState,
   HotkeyAction,
+  HotkeyScope,
   ScoredSlashRow,
   SlashCommand,
   UiActionEntry,
@@ -52,7 +53,13 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
   {
     id: "preview.fullscreen",
     execution: { kind: "local", effect: "fullscreen" },
-    hotkey: { id: "preview.fullscreen", key: "f2", label: "fullscreen", capability: null },
+    hotkey: {
+      id: "preview.fullscreen",
+      key: "f2",
+      scope: "global",
+      label: "fullscreen",
+      capability: null,
+    },
   },
   {
     // THE MISSING PRODUCER (defect fix, 2026-07-26). `Workspace.tsx`'s circuit-open ErrorPanel
@@ -69,7 +76,13 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     // now design-named; this is history, not an open divergence.
     id: "preview.retry",
     execution: { kind: "command", command: "preview.retry" },
-    hotkey: { id: "preview.retry", key: "f5", label: "retry", capability: "preview.retry" },
+    hotkey: {
+      id: "preview.retry",
+      key: "f5",
+      scope: "global",
+      label: "retry",
+      capability: "preview.retry",
+    },
   },
   {
     // The design's second route out of a halted preview (`termcraft-engine.js`'s `wsHostCrash`:
@@ -81,7 +94,13 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     // offer, because no edit to the page could fix it (spec §3.2.1).
     id: "preview.repair",
     execution: { kind: "local", effect: "compose-repair" },
-    hotkey: { id: "preview.repair", key: "f6", label: "repair", capability: null },
+    hotkey: {
+      id: "preview.repair",
+      key: "f6",
+      scope: "global",
+      label: "repair",
+      capability: null,
+    },
   },
   {
     // PAGE SWITCHING FROM THE KEYBOARD — A DELIBERATE DESIGN EXTENSION (2026-07-27, maintainer
@@ -91,31 +110,34 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     // `f5`/`f6` below, this key is NOT design-named and is recorded here as an extension rather
     // than presented as design.
     //
-    // WHY `ctrl+b`/`ctrl+n` CANONICAL, ARROWS AS ALIASES (CORRECTED 2026-07-27, HANDOFF Finding 3):
-    //   - it must be GLOBAL tier: the composer owns focus by default, so a single-char key
-    //     (§3.8's other tier) would steal characters from ordinary typing — exactly the bug
-    //     `keymap.ts`'s own `home-recheck` comment records for bare `r`;
-    //   - `ctrl+left`/`ctrl+right` were the original binding and were DEAD on the maintainer's
-    //     terminal: a ctrl+arrow reaches the app only when the terminal encodes the modifier into
-    //     a CSI sequence (`\x1b[1;5C`), and this one delivered a bare `\x1b[C`. `ctrl+b`/`ctrl+n`
-    //     are C0 control bytes (0x02 / 0x0E) — one byte, no encoding to get wrong;
-    //   - neither can be typed into the composer: `printableChar` rejects every code below 0x20;
-    //   - the ctrl+arrow aliases were DROPPED when the composer became a real editor
-    //     (2026-08-03): `ctrl+left`/`ctrl+right` are OpenTUI's own `word-backward`/`word-forward`
-    //     bindings, and `resolveHotkey` runs ahead of every input branch, so keeping them would
-    //     have made Ctrl+Left switch pages from inside a text field. Neither alias was ever drawn
-    //     — both entries carry `hint: false` — so nothing on screen named them;
-    //   - `ctrl+e` (export) and `ctrl+p` (preview) already establish the ctrl+letter vocabulary.
-    // NOT hinted in the status bar: `Workspace.tsx`'s `hintKeys` renders the design's own key
-    // rows verbatim, and adding a key the design never drew there would diverge from every
-    // screen in `design/*.dc.html`.
+    // WHY `ctrl+left`/`ctrl+right` CANONICAL AND `ctrl+b`/`ctrl+n` ALIASED (RE-SPELLED 2026-08-10,
+    // focus-scoped-hotkeys §5.1 — this pair has now been spelled three ways, so the history is
+    // kept rather than rewritten):
+    //   - the arrows were the ORIGINAL binding, and were dropped on 2026-08-03 because
+    //     `resolveHotkey` ran ahead of every input branch, so Ctrl+Left switched pages from inside
+    //     a text field, shadowing OpenTUI's own `word-backward`/`word-forward`;
+    //   - scopes remove that collision at the root: this row is `preview`, so in the chat zone the
+    //     chord is not looked up here at all and reaches the editor unchanged. The arrows are the
+    //     intuitive spelling and can now be afforded;
+    //   - the ALIASES ARE MANDATORY, not decorative. A ctrl+arrow reaches the app only when the
+    //     terminal encodes the modifier into a CSI sequence (`\x1b[1;5C`); the maintainer's own
+    //     terminal delivers a bare `\x1b[C` with the modifier dropped. `ctrl+b`/`ctrl+n` are C0
+    //     control bytes (0x02 / 0x0E) — one byte, no encoding to get wrong — so the guaranteed
+    //     spelling stays bound wherever the chord is not delivered. This is exactly what
+    //     `HotkeyAction.aliases` was introduced for;
+    //   - neither spelling can be typed into the composer: `printableChar` rejects every code
+    //     below 0x20, and a CSI sequence fails on length alone.
+    // NOT hinted in the status bar: `hintKeys` renders the design's own key rows verbatim, and the
+    // design draws no page-step key anywhere — both entries keep `hint: false`.
     id: "page.prev",
     execution: { kind: "local", effect: "page-prev" },
     hotkey: {
       id: "page.prev",
-      key: "ctrl+b",
+      key: "ctrl+left",
+      aliases: ["ctrl+b"],
       label: "prev page",
       capability: null,
+      scope: "preview",
       hint: false,
     },
   },
@@ -124,9 +146,11 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     execution: { kind: "local", effect: "page-next" },
     hotkey: {
       id: "page.next",
-      key: "ctrl+n",
+      key: "ctrl+right",
+      aliases: ["ctrl+n"],
       label: "next page",
       capability: null,
+      scope: "preview",
       hint: false,
     },
   },
@@ -157,15 +181,14 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
     // `pageup`/`pagedown` as `PgUp`/`PgDn`, review finding I5), rather than the design's one
     // `PgUp/PgDn scroll`.
     //
-    // WHY `PgUp`/`PgDn` CANONICAL, `ctrl+u` AN ALIAS:
-    //   - it must be GLOBAL tier: the composer owns focus by default, so a bare letter would
-    //     be swallowed as text — the same hazard `keymap.ts`'s `home-recheck` note records;
-    //   - `PgUp`/`PgDn` arrive as multi-character CSI sequences, which `printableChar`
-    //     rejects on length alone, so they can never reach the composer as input;
-    //   - `ctrl+u` is a C0 control byte (0x15): one byte, no encoding to get wrong, and below
-    //     0x20 so `printableChar` rejects it too;
-    //   - `ctrl+`-arrows are deliberately NOT bound — they were dead on the maintainer's
-    //     terminal, which is exactly why `page.prev`/`page.next` are `ctrl+b`/`ctrl+n`.
+    // WHY `chat` SCOPE, NOT GLOBAL (CORRECTED 2026-08-10, focus-scoped-hotkeys §5.2): the original
+    // reasoning here was "it must be GLOBAL tier, because the composer owns focus by default and a
+    // bare letter would be swallowed as text". Read closely, that argues for the SPELLING, not for
+    // the tier — and the spelling still holds: `PgUp`/`PgDn` arrive as multi-character CSI
+    // sequences that `printableChar` rejects on length, and `ctrl+u` is a C0 byte below 0x20.
+    // Scoping to `chat` reintroduces none of that hazard: the keys still cannot be typed, and the
+    // chat zone is where they already did their work. In the preview zone they now go inert, which
+    // is the intended change.
     //
     // NO `ctrl+d` ALIAS HERE (review finding I3, fix round 1) — an earlier version of this row
     // gave `chat.scroll-down` the same C0-byte alias treatment as `chat.scroll-up`'s `ctrl+u`,
@@ -182,6 +205,7 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       aliases: ["ctrl+u"],
       label: "scroll up",
       capability: null,
+      scope: "chat",
     },
   },
   {
@@ -192,17 +216,25 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       key: "pagedown",
       label: "scroll down",
       capability: null,
+      scope: "chat",
     },
   },
   {
     // FOLLOW LATEST (design iteration 10 answers 2/6, review finding I2/I3): `^D`,
-    // `design/termcraft-engine.js:1525,1557,1602`. Bound GLOBAL tier and unconditionally
-    // resolvable — same reasoning as the scroll pair above — so it always jumps the chat
-    // viewport to its tail; `Workspace.tsx`'s `hintKeys()` decides when to DRAW it (only while
-    // `!following`, matching every mockup that shows it), not `resolveKey`.
+    // `design/termcraft-engine.js:1525,1557,1602`. Scoped to `chat` (CORRECTED 2026-08-10,
+    // focus-scoped-hotkeys §5.2 — it read "Bound GLOBAL tier and unconditionally resolvable"): the
+    // viewport it jumps is the chat's own, so in the preview zone there is nothing for it to do.
+    // `hintKeys` still decides when to DRAW it (only while `!following`, matching every mockup that
+    // shows it) — the scope decides where it ACTS.
     id: "chat.follow-latest",
     execution: { kind: "local", effect: "chat-follow-latest" },
-    hotkey: { id: "chat.follow-latest", key: "ctrl+d", label: "follow", capability: null },
+    hotkey: {
+      id: "chat.follow-latest",
+      key: "ctrl+d",
+      label: "follow",
+      capability: null,
+      scope: "chat",
+    },
   },
   {
     id: "preview.tweaks",
@@ -212,6 +244,7 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       key: "f3",
       label: "tweaks",
       capability: null,
+      scope: "global",
       inert: true,
     },
   },
@@ -223,6 +256,7 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       key: "f4",
       label: "interact",
       capability: null,
+      scope: "global",
       inert: true,
     },
   },
@@ -236,7 +270,13 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       capability: "export.start",
       screens: ["workspace"],
     },
-    hotkey: { id: "export.start", key: "ctrl+e", label: "export", capability: "export.start" },
+    hotkey: {
+      id: "export.start",
+      key: "ctrl+e",
+      label: "export",
+      capability: "export.start",
+      scope: "global",
+    },
   },
   {
     id: "model.select",
@@ -295,6 +335,7 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       key: "ctrl+p",
       label: "preview",
       capability: null,
+      scope: "global",
       inert: true,
     },
   },
@@ -342,16 +383,33 @@ const ACTION_BY_SLASH: ReadonlyMap<string, UiActionEntry> = new Map(
   UI_ACTIONS.flatMap((entry) => (entry.slash ? [[entry.slash.cmd, entry] as const] : [])),
 );
 
-const HOTKEY_BY_KEY: ReadonlyMap<string, HotkeyAction> = new Map(
-  HOTKEYS.flatMap((h) => [
-    [h.key, h] as const,
-    ...(h.aliases ?? []).map((alias) => [alias, h] as const),
-  ]),
+/**
+ * The one lookup key: a scope and a spelling, never one without the other. A space separates them
+ * safely because no scope and no key spelling contains one — every spelling is a lowercase key
+ * name, optionally `ctrl+`-prefixed (`hotkeyName` in `ui/app/model/keymap.ts` builds exactly that).
+ */
+function scopedKey(scope: HotkeyScope, key: string): string {
+  return `${scope} ${key.toLowerCase()}`;
+}
+
+const HOTKEY_BY_SCOPED_KEY: ReadonlyMap<string, HotkeyAction> = new Map(
+  HOTKEYS.flatMap((action) =>
+    [action.key, ...(action.aliases ?? [])].map(
+      (spelling) => [scopedKey(action.scope, spelling), action] as const,
+    ),
+  ),
 );
 
-/** Resolves a canonical (lowercase) key spelling to its hotkey action, or `null`. */
-export function resolveHotkey(key: string): HotkeyAction | null {
-  return HOTKEY_BY_KEY.get(key.toLowerCase()) ?? null;
+/**
+ * Resolves an EXACT `(key, scope)` pair to its hotkey action, or `null`.
+ *
+ * STRICT BY CONSTRUCTION (focus-scoped-hotkeys §4): asked for a zone, this never falls back to
+ * `global`, and asked for `global` it never reaches into a zone. A caller that wants both asks
+ * twice, in the order it wants them — which is exactly what `resolveKey` does, and why the
+ * ordering lives there, visible, instead of hidden in a fallback chain here.
+ */
+export function resolveHotkey(key: string, scope: HotkeyScope): HotkeyAction | null {
+  return HOTKEY_BY_SCOPED_KEY.get(scopedKey(scope, key)) ?? null;
 }
 
 /** Resolves a stable action id against the one registry. */

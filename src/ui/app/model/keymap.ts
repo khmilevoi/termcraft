@@ -254,7 +254,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
 
   // Global keys resolve through the one action registry regardless of focus.
   if (key.name === "escape") return { kind: "esc" };
-  const hotkey = resolveHotkey(hotkeyName(key));
+  const hotkey = resolveHotkey(hotkeyName(key), "global");
   if (hotkey?.inert === true) return { kind: "none" };
   if (hotkey !== null) return { kind: "action-execute", actionId: hotkey.id };
 

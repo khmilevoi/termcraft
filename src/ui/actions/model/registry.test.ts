@@ -409,29 +409,84 @@ describe("filterSlashRows — Home scope (§3.10, phase-8 Task 17)", () => {
   });
 });
 
-describe("resolveHotkey", () => {
-  test("resolves canonical keys case-insensitively", () => {
-    expect(resolveHotkey("F2")?.id).toBe("preview.fullscreen");
-    expect(resolveHotkey("ctrl+e")?.capability).toBe("export.start");
+describe("resolveHotkey — exact (key, scope) resolution", () => {
+  test("resolves canonical global keys case-insensitively", () => {
+    expect(resolveHotkey("F2", "global")?.id).toBe("preview.fullscreen");
+    expect(resolveHotkey("ctrl+e", "global")?.capability).toBe("export.start");
   });
 
-  test("F3/F4/Ctrl+P are inert", () => {
-    expect(resolveHotkey("f3")?.inert).toBe(true);
-    expect(resolveHotkey("f4")?.inert).toBe(true);
-    expect(resolveHotkey("ctrl+p")?.inert).toBe(true);
+  test("F3/F4/Ctrl+P are global and inert", () => {
+    expect(resolveHotkey("f3", "global")?.inert).toBe(true);
+    expect(resolveHotkey("f4", "global")?.inert).toBe(true);
+    expect(resolveHotkey("ctrl+p", "global")?.inert).toBe(true);
   });
 
-  test("an unknown key resolves to null", () => {
-    expect(resolveHotkey("x")).toBeNull();
+  test("an unknown key resolves to null in every scope", () => {
+    expect(resolveHotkey("x", "global")).toBeNull();
+    expect(resolveHotkey("x", "chat")).toBeNull();
+    expect(resolveHotkey("x", "preview")).toBeNull();
   });
 
-  // G1: the ctrl+arrow aliases were dropped when the composer became a real editor — keeping them
-  // would have made Ctrl+Left/Ctrl+Right switch pages from inside a text field, shadowing the
-  // editor's own word-movement bindings. `ctrl+b`/`ctrl+n` remain the sole canonical page steps.
-  test("the page steps are ctrl+b / ctrl+n only — the arrow aliases belong to the editor now", () => {
-    expect(resolveHotkey("ctrl+b")?.id).toBe("page.prev");
-    expect(resolveHotkey("ctrl+n")?.id).toBe("page.next");
-    expect(resolveHotkey("ctrl+left")).toBeNull();
-    expect(resolveHotkey("ctrl+right")).toBeNull();
+  test("the page steps are preview-scoped, arrows canonical and ctrl+b/n aliased", () => {
+    expect(resolveHotkey("ctrl+left", "preview")?.id).toBe("page.prev");
+    expect(resolveHotkey("ctrl+right", "preview")?.id).toBe("page.next");
+    expect(resolveHotkey("ctrl+b", "preview")?.id).toBe("page.prev");
+    expect(resolveHotkey("ctrl+n", "preview")?.id).toBe("page.next");
+  });
+
+  // The whole point of the design: the SAME chord means different things in the two zones, and
+  // never leaks across. No fallback, automatic or declared.
+  test("a foreign-scope key resolves to null, in both directions", () => {
+    expect(resolveHotkey("ctrl+left", "chat")).toBeNull();
+    expect(resolveHotkey("ctrl+b", "chat")).toBeNull();
+    expect(resolveHotkey("pageup", "preview")).toBeNull();
+    expect(resolveHotkey("ctrl+d", "preview")).toBeNull();
+  });
+
+  test("a global key is not reachable through a zone lookup", () => {
+    expect(resolveHotkey("f2", "chat")).toBeNull();
+    expect(resolveHotkey("f2", "preview")).toBeNull();
+    expect(resolveHotkey("ctrl+e", "chat")).toBeNull();
+  });
+
+  test("the chat keys are chat-scoped, PgUp/PgDn canonical and ctrl+u aliased", () => {
+    expect(resolveHotkey("pageup", "chat")?.id).toBe("chat.scroll-up");
+    expect(resolveHotkey("ctrl+u", "chat")?.id).toBe("chat.scroll-up");
+    expect(resolveHotkey("pagedown", "chat")?.id).toBe("chat.scroll-down");
+    expect(resolveHotkey("ctrl+d", "chat")?.id).toBe("chat.follow-latest");
+  });
+});
+
+describe("the hotkey table's own invariants", () => {
+  test("every row declares a scope", () => {
+    for (const action of HOTKEYS) {
+      expect(["global", "chat", "preview"]).toContain(action.scope);
+    }
+  });
+
+  // The guard that makes the exact lookup safe: two rows sharing a spelling in ONE scope would
+  // make resolution depend on table order, which nothing else in this file depends on.
+  test("no two entries share a (key, scope) pair — aliases included", () => {
+    const pairs = HOTKEYS.flatMap((action) =>
+      [action.key, ...(action.aliases ?? [])].map((spelling) => `${action.scope}/${spelling}`),
+    );
+    expect(new Set(pairs).size).toBe(pairs.length);
+  });
+
+  test("the scope assignment is exactly the design's table (§5)", () => {
+    expect(HOTKEYS.map((action) => [action.id, action.scope])).toEqual([
+      ["preview.fullscreen", "global"],
+      ["preview.retry", "global"],
+      ["preview.repair", "global"],
+      ["page.prev", "preview"],
+      ["page.next", "preview"],
+      ["chat.scroll-up", "chat"],
+      ["chat.scroll-down", "chat"],
+      ["chat.follow-latest", "chat"],
+      ["preview.tweaks", "global"],
+      ["preview.interact", "global"],
+      ["export.start", "global"],
+      ["preview.controls", "global"],
+    ]);
   });
 });
