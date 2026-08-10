@@ -103,15 +103,16 @@ export interface KeyContext {
   readonly projectOpening: boolean;
   /**
    * Whether a turn is currently `running` (mirror's `TurnMirror.phase`). CORRECTED (finding
-   * §2.5, phase-8 Task 16): this used to also gate `composerActive` below, freezing the whole
-   * composer — no character, no backspace, no `/` — for the entire duration of a turn. Master
-   * §3.2 only refuses *sending*: "Typing the next message while a turn runs is allowed, but
-   * sending is disabled." `resolveKey` no longer reads this field at all; the real hazard it
-   * used to guard against (a second `turn.start` the Kernel rejects, discarding the draft) is
-   * closed at its actual source instead — `applyIntent`'s `composer-submit` no-ops while a turn
-   * runs rather than dispatching. The field stays on `KeyContext` because `App.tsx`'s `onKey`
-   * still records it in every `trace("ui.onKey", ...)` call, which is genuinely useful context
-   * for diagnosing a key resolution captured during a running turn.
+   * §2.5, phase-8 Task 16): this used to also gate the chat-zone inline-key branch below (`zone
+   * === "chat" && context.screen === "workspace"`, then still a local `composerActive` const),
+   * freezing the whole composer — no character, no backspace, no `/` — for the entire duration
+   * of a turn. Master §3.2 only refuses *sending*: "Typing the next message while a turn runs
+   * is allowed, but sending is disabled." `resolveKey` no longer reads this field at all; the
+   * real hazard it used to guard against (a second `turn.start` the Kernel rejects, discarding
+   * the draft) is closed at its actual source instead — `applyIntent`'s `composer-submit` no-ops
+   * while a turn runs rather than dispatching. The field stays on `KeyContext` because
+   * `App.tsx`'s `onKey` still records it in every `trace("ui.onKey", ...)` call, which is
+   * genuinely useful context for diagnosing a key resolution captured during a running turn.
    */
   readonly turnRunning: boolean;
   /**
