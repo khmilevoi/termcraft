@@ -1,9 +1,10 @@
 import { log } from "infrastructure/debug-log";
 
 import { PROTOCOL_HARD_LIMITS } from "../../protocol";
-import type { FrameIdentity, ProtocolError } from "../../protocol";
+import type { ProtocolError } from "../../protocol";
 import type { HostSessionSpec, InteractionMode, Size } from "../../types";
 import type {
+  FrameCoordinates,
   GeometryQuery,
   GeometryQueryResult,
   HostSession,
@@ -488,7 +489,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         });
       },
       query(
-        frameIdentity: FrameIdentity,
+        frame: FrameCoordinates,
         query: GeometryQuery,
       ): Promise<ProtocolError | SupervisorError | GeometryQueryResult> {
         const current = ks.current;
@@ -500,7 +501,18 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
             }),
           );
         }
-        return current.query(frameIdentity, query);
+        // Completed from `ks.current` read FRESH on every call, exactly like `resize`/`setMode`
+        // above — so a restart rebinds the query to the new incarnation's own sessionId/nonce
+        // instead of asking the child about a frame from a process that no longer exists.
+        return current.query(
+          {
+            sessionId: current.identity.sessionId,
+            nonce: current.identity.nonce,
+            sourceHash: frame.sourceHash,
+            frameSeq: frame.frameSeq,
+          },
+          query,
+        );
       },
       state: () => ks.state,
       retry: () => retry(ks),

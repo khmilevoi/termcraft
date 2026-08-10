@@ -1,7 +1,6 @@
 import type {
   CommandPayloadByKindV1,
   FailureDtoV1,
-  FrameTokenV1,
   GeometryQueryResultV1,
   Sha256Hex,
 } from "core/protocol";
@@ -20,7 +19,10 @@ import type { Size } from "entities/page";
  * never be minted and `pin.create` is unimplementable... Resolution: add the wire query
  * kind plus `query()` to `host` in 6D." Declaring `query` here — before `host` implements
  * it — is how that requirement becomes visible to the sibling agent closing B1 in this same
- * slice, per the task brief's own instruction.
+ * slice, per the task brief's own instruction. B1 IS NOW CLOSED end to end; what the
+ * closure changed about this declaration is its first parameter — see
+ * {@link PreviewFrameCoordinatesV1}, which records why an opaque `FrameTokenV1` could never
+ * have crossed this boundary in either direction.
  *
  * Every method returns `FailureDtoV1` rather than `host`'s `ProtocolError`/`SupervisorError`
  * (mapped at the composition-root adapter boundary, the same principle decision C1 applies
@@ -90,6 +92,37 @@ export interface PreviewGeometryQueryResultV1 {
   }> | null;
 }
 
+/**
+ * The coordinates of the frame a geometry query is ABOUT — the half of host-supervision
+ * §7.1's `FrameIdentity` the Kernel genuinely owns and has already verified.
+ *
+ * WHY THIS IS NOT A `FrameTokenV1`, AND NOT A FULL `FrameIdentityV1` (blocker B1's last
+ * mile, closed 2026-08-10 after a live run found every right-click dying here). The host's
+ * child validates a query against all four fields of its own currently-sealed frame —
+ * `sessionId`, `nonce`, `sourceHash`, `frameSeq` (`host/session/model/host-state-machine.ts`'s
+ * `handleQuery`) — and refuses anything else with `STALE_FRAME`. Of those four the Kernel can
+ * supply exactly two: `sourceHash` and `frameSeq` travel on every frame and are real. The
+ * other two it structurally cannot know —
+ *
+ * - `nonce` is the per-incarnation value `host/types.ts`'s `PreviewFrame` DELIBERATELY drops
+ *   ("the facade's stable identity intentionally omits it so automatic restart does not
+ *   replace the facade"), so it never reaches `core` on any path; and
+ * - the Kernel's own `FrameIdentityV1.previewSessionId` is a Kernel-minted `uuidv7`
+ *   (`core/preview/model/session-commands.ts`'s `noteSessionEstablished`), a DIFFERENT value
+ *   from the host's `sessionId` — passing it would be refused as a forged frame.
+ *
+ * So the identity is completed on the side that owns the missing half: the host facade fills
+ * in whichever incarnation is live at call time (`host/supervisor/model/supervisor.ts`'s
+ * `sessionFor`). This adapter boundary is the ONLY honest split — the earlier attempt to hand
+ * the host an opaque `FrameTokenV1` could never work, because resolving it needs a ledger that
+ * lives in `core` while completing it needs a nonce that never leaves `host`.
+ */
+export interface PreviewFrameCoordinatesV1 {
+  readonly sourceHash: Sha256Hex;
+  /** The incarnation-local monotonic decimal-uint64 string, verbatim from the frame. */
+  readonly frameSeq: string;
+}
+
 export interface PreviewSession {
   readonly identity: PreviewIdentityV1;
   readonly mode: "preview" | "historical";
@@ -104,13 +137,16 @@ export interface PreviewSession {
   retry(): Promise<FailureDtoV1 | undefined>;
   close(): Promise<void>;
   /**
-   * TODO(blocker B1): not implemented by `host` at the time this port is declared — see
-   * this file's header. `frameToken` is opaque and query-authorizing only after the UI's
-   * typed display acknowledgement (kernel-command-contract §8.1); this method resolves and
-   * verifies it as the broker's current displayed frame before forwarding the bounded query.
+   * Forwards one bounded geometry query about an already-verified frame (blocker B1, closed).
+   *
+   * The CALLER resolves the UI's opaque `FrameTokenV1` — query-authorizing only after the
+   * typed display acknowledgement (kernel-command-contract §8.1) — through
+   * `FrameTokenLedger.verifyCurrent` and passes the resulting {@link PreviewFrameCoordinatesV1}
+   * here; see that type's own doc for why the token itself cannot cross this boundary and why
+   * the remaining identity fields are completed on the host side.
    */
   query(
-    frameToken: FrameTokenV1,
+    frame: PreviewFrameCoordinatesV1,
     query: CommandPayloadByKindV1["preview.queryGeometry"]["query"],
   ): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1>;
 }

@@ -1,7 +1,5 @@
 import { wrap } from "@reatom/core";
 
-import { log, trace } from "infrastructure/debug-log";
-
 import {
   type CaptureExportSnapshotDeps,
   type ExportClosureV1,
@@ -45,6 +43,7 @@ import {
 } from "core/protocol";
 import type { DesignFileEntryV1 } from "entities/design-tree";
 import type { PageMeta, PageSlug, Size } from "entities/page";
+import { log, trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import { designTreeRoot } from "./page-descriptors";
@@ -1010,9 +1009,7 @@ async function runSimpleLiveCommand(
 ): Promise<readonly PublishableEventV1[]> {
   const outcome = await wrap(call());
   if (outcome.kind === "rejected") {
-    log.warn(
-      `core/kernel/handlers/preview-export: ${label} was rejected (${outcome.reason.code})`,
-    );
+    log.warn(`core/kernel/handlers/preview-export: ${label} was rejected (${outcome.reason.code})`);
     return [];
   }
   if (outcome.kind === "failed") {
@@ -1281,8 +1278,14 @@ function handleQueryGeometry(
   trace("kernel.queryGeometry", {
     step: "entry",
     queryKind: payload.query.kind,
-    x: payload.query.kind === "hit" || payload.query.kind === "pin-anchor" ? payload.query.x : undefined,
-    y: payload.query.kind === "hit" || payload.query.kind === "pin-anchor" ? payload.query.y : undefined,
+    x:
+      payload.query.kind === "hit" || payload.query.kind === "pin-anchor"
+        ? payload.query.x
+        : undefined,
+    y:
+      payload.query.kind === "hit" || payload.query.kind === "pin-anchor"
+        ? payload.query.y
+        : undefined,
   });
   context.launchOperation("kernel.preview.queryGeometry", async () => {
     const verification = context.frameTokenLedger.verifyCurrent(payload.frameToken);
@@ -1303,9 +1306,7 @@ function handleQueryGeometry(
       context.previewSessionCommands.queryGeometry(payload.frameToken, payload.query),
     );
     if (outcome.kind !== "resolved") {
-      log.warn(
-        `core/kernel/handlers/preview-export: preview.queryGeometry was ${outcome.kind}`,
-      );
+      log.warn(`core/kernel/handlers/preview-export: preview.queryGeometry was ${outcome.kind}`);
       trace("kernel.queryGeometry", {
         step: "refused",
         queryKind: payload.query.kind,

@@ -1,4 +1,9 @@
-import type { PreviewFrameV1, PreviewGeometryQueryResultV1, PreviewSession } from "core/ports";
+import type {
+  PreviewFrameCoordinatesV1,
+  PreviewFrameV1,
+  PreviewGeometryQueryResultV1,
+  PreviewSession,
+} from "core/ports";
 import type { FailureDtoV1, FrameIdentityV1, FrameTokenV1, UUIDv7 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import type { PreviewSessionHandle, UiPreviewFrame } from "ui/kernel";
@@ -21,7 +26,7 @@ export interface FakePreviewSession {
   /** Closes the `frames` stream. */
   end(): void;
   /** Raw geometry-query calls the session received. */
-  readonly queries: readonly { frameToken: FrameTokenV1; query: unknown }[];
+  readonly queries: readonly { frame: PreviewFrameCoordinatesV1; query: unknown }[];
   /** Exact frame tokens acknowledged by the UI, in call order. */
   readonly acknowledgements: readonly FrameTokenV1[];
 }
@@ -36,7 +41,7 @@ export interface FakePreviewOptions {
 export function createFakePreviewSession(options: FakePreviewOptions = {}): FakePreviewSession {
   const previewSessionId = options.previewSessionId ?? uuidv7();
   const pageSlug = options.pageSlug ?? "main";
-  const queries: { frameToken: FrameTokenV1; query: unknown }[] = [];
+  const queries: { frame: PreviewFrameCoordinatesV1; query: unknown }[] = [];
   const acknowledgements: FrameTokenV1[] = [];
 
   const sourceFrames = createAsyncQueue<PreviewFrameV1>();
@@ -88,8 +93,8 @@ export function createFakePreviewSession(options: FakePreviewOptions = {}): Fake
       end();
       return Promise.resolve();
     },
-    query(frameToken, query): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1> {
-      queries.push({ frameToken, query });
+    query(frame, query): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1> {
+      queries.push({ frame, query });
       // Default "nothing resolved" answer: an unresolved `checkHit` (M21's closed
       // `GeometryQueryResultV1`, `core/protocol`) — `options.geometryResult` overrides it.
       return Promise.resolve(

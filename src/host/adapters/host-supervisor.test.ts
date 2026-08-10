@@ -3,7 +3,12 @@ import { describe, expect, test } from "bun:test";
 import { createFakeHostSupervisorPort } from "core/ports/fakes";
 
 import { PROTOCOL_HARD_LIMITS } from "../protocol";
-import type { ControlEnvelope, ProtocolError, RuntimeDeclarationBundleV1 } from "../protocol";
+import type {
+  ControlEnvelope,
+  FrameIdentity,
+  ProtocolError,
+  RuntimeDeclarationBundleV1,
+} from "../protocol";
 import { SupervisorError, createManualClock } from "../supervisor";
 import type {
   HostSession,
@@ -40,8 +45,20 @@ function specFor(overrides: Partial<HostSessionSpec> = {}): HostSessionSpec {
   };
 }
 
+/**
+ * What the fake child answers a geometry query with, plus the `FrameIdentity` it was ASKED
+ * about. That recorded identity is the point of the blocker-B1 tests below: the Kernel cannot
+ * know the incarnation `nonce` (`host/types.ts`'s `PreviewFrame` drops it deliberately), so
+ * the facade must complete it — and only a recorded, asserted identity proves it did.
+ */
+interface GeometryScript {
+  readonly hitElementId?: string | null;
+  readonly rect?: { x: number; y: number; width: number; height: number } | null;
+  readonly asked?: FrameIdentity[];
+}
+
 /** A one-incarnation-per-key immediate-ready `createSession` test seam, mirroring `supervisor.test.ts`'s own fake factory. */
-function fakeFactory() {
+function fakeFactory(geometry: GeometryScript = {}) {
   let nonceSeq = 0;
   return (spec: HostSessionSpec, deps: HostSessionDeps): HostSession => {
     nonceSeq += 1;
@@ -83,12 +100,27 @@ function fakeFactory() {
       async ping() {
         return ready;
       },
-      async query() {
-        return {
-          ok: true,
-          frameIdentity: { sessionId, nonce, sourceHash: spec.sourceHash, frameSeq: "1" },
-          result: {},
-        };
+      async query(frameIdentity, geometryQuery) {
+        geometry.asked?.push(frameIdentity);
+        // The real child's own per-kind reply records (`host/session/model/host-state-machine.ts`'s
+        // `resolveGeometry`) — reproduced verbatim so the adapter's decoding is tested against
+        // the shape the wire actually carries, not a convenient stand-in.
+        const result =
+          geometryQuery.kind === "hit"
+            ? { elementId: geometry.hitElementId ?? null }
+            : geometryQuery.kind === "rect"
+              ? { found: geometry.rect != null, rect: geometry.rect ?? null }
+              : geometryQuery.kind === "describe"
+                ? { found: true, kind: "BoxRenderable" }
+                : {
+                    tree: {
+                      id: "root",
+                      kind: "BoxRenderable",
+                      box: { x: 0, y: 0, width: 80, height: 24 },
+                      children: [],
+                    },
+                  };
+        return { ok: true, frameIdentity, result };
       },
       async mount() {
         return ready;
@@ -249,7 +281,7 @@ describe("createHostSupervisorAdapter", () => {
     expect(result.code).toBe("HOST_PROTOCOL_FAILED");
   });
 
-  test("setTheme() and query() report the documented not-yet-wired gap as a FailureDtoV1, never a fabricated success", async () => {
+  test("setTheme() reports the documented not-yet-wired gap as a FailureDtoV1, never a fabricated success", async () => {
     const adapter = createHostSupervisorAdapter(depsFor());
     const session = await adapter.preview(specFor());
     if ("code" in session) throw session;
@@ -257,11 +289,106 @@ describe("createHostSupervisorAdapter", () => {
     expect(themeResult).toBeDefined();
     if (themeResult === undefined) throw new Error("expected a FailureDtoV1");
     expect(themeResult.code).toBe("HOST_PROTOCOL_FAILED");
-    const queryResult = await session.query("00000000-0000-7000-8000-000000000000", {
-      kind: "layout",
+  });
+
+  // BLOCKER B1's LAST MILE, and the defect it caused in a live run (2026-08-10): this adapter's
+  // `query` was a stub returning `HOST_PROTOCOL_FAILED` unconditionally, so every right-click
+  // died at `kernel.queryGeometry step:"refused"` and no pin could ever be placed. The wire-level
+  // `query()` in `host/supervisor/model/session.ts` was already built and tested; only the
+  // adapter leg was missing.
+  describe("query() — the real geometry leg", () => {
+    const FRAME = { sourceHash: "a".repeat(64), frameSeq: "1" } as const;
+
+    test("resolves a hit into core's closed checkHit result", async () => {
+      const adapter = createHostSupervisorAdapter(
+        depsFor({ createSession: fakeFactory({ hitElementId: "btn-submit" }) }),
+      );
+      const session = await adapter.preview(specFor());
+      if ("code" in session) throw session;
+
+      const result = await session.query(FRAME, { kind: "hit", x: 15, y: 6 });
+      if ("code" in result) throw new Error(`expected a resolved query, got ${result.safeMessage}`);
+      expect(result.result).toEqual({ kind: "checkHit", hit: { id: "btn-submit" } });
     });
-    if (!("code" in queryResult)) throw new Error("expected a FailureDtoV1");
-    expect(queryResult.code).toBe("HOST_PROTOCOL_FAILED");
+
+    test("completes the incarnation identity the Kernel cannot know (sessionId + nonce)", async () => {
+      const asked: FrameIdentity[] = [];
+      const adapter = createHostSupervisorAdapter(
+        depsFor({ createSession: fakeFactory({ hitElementId: "btn-submit", asked }) }),
+      );
+      const session = await adapter.preview(specFor());
+      if ("code" in session) throw session;
+
+      await session.query(FRAME, { kind: "hit", x: 15, y: 6 });
+
+      expect(asked[0]).toEqual({
+        sessionId: "session-1",
+        nonce: "1".padStart(32, "0"),
+        sourceHash: FRAME.sourceHash,
+        frameSeq: FRAME.frameSeq,
+      });
+    });
+
+    test("resolves a pin-anchor's fractional point inside the hit element's own rect", async () => {
+      const adapter = createHostSupervisorAdapter(
+        depsFor({
+          createSession: fakeFactory({
+            hitElementId: "btn-submit",
+            rect: { x: 10, y: 5, width: 20, height: 4 },
+          }),
+        }),
+      );
+      const session = await adapter.preview(specFor());
+      if ("code" in session) throw session;
+
+      const result = await session.query(FRAME, { kind: "pin-anchor", x: 15, y: 6 });
+      if ("code" in result) throw new Error(`expected a resolved query, got ${result.safeMessage}`);
+      expect(result.resolvedAnchor).toEqual({
+        pageSlug: "dash",
+        elementId: "btn-submit",
+        fx: 0.25, // (15 - 10) / 20
+        fy: 0.25, // (6 - 5) / 4
+      });
+    });
+
+    test("resolves no anchor when the point hits nothing", async () => {
+      const adapter = createHostSupervisorAdapter(
+        depsFor({ createSession: fakeFactory({ hitElementId: null }) }),
+      );
+      const session = await adapter.preview(specFor());
+      if ("code" in session) throw session;
+
+      const result = await session.query(FRAME, { kind: "pin-anchor", x: 1, y: 1 });
+      if ("code" in result) throw new Error(`expected a resolved query, got ${result.safeMessage}`);
+      expect(result.result).toEqual({ kind: "checkHit", hit: null });
+      expect(result.resolvedAnchor).toBeNull();
+    });
+
+    test("surfaces the host's typed STALE_FRAME refusal as a retryable failure, never a fabricated miss", async () => {
+      const factory = fakeFactory();
+      const adapter = createHostSupervisorAdapter(
+        depsFor({
+          createSession: (spec, sessionDeps) => ({
+            ...factory(spec, sessionDeps),
+            async query() {
+              return {
+                ok: false as const,
+                code: "STALE_FRAME" as const,
+                reason: "frame 1 is not current",
+              };
+            },
+          }),
+        }),
+      );
+      const session = await adapter.preview(specFor());
+      if ("code" in session) throw session;
+
+      const result = await session.query(FRAME, { kind: "hit", x: 1, y: 1 });
+      if (!("code" in result)) throw new Error("expected a FailureDtoV1");
+      expect(result.code).toBe("HOST_PROTOCOL_FAILED");
+      expect(result.retryable).toBe(true);
+      expect(result.details.hostRefusal).toBe("STALE_FRAME");
+    });
   });
 
   test("close() delegates to the underlying session close", async () => {

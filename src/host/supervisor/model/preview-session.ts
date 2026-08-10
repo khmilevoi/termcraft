@@ -1,8 +1,7 @@
 import { log } from "infrastructure/debug-log";
 
-import type { FrameIdentity } from "../../protocol";
 import type { HostSessionSpec, InteractionMode, PreviewIdentity, Size } from "../../types";
-import type { GeometryQuery, HostSessionDeps, PreviewSession } from "../types";
+import type { FrameCoordinates, GeometryQuery, HostSessionDeps, PreviewSession } from "../types";
 import { createHostSession } from "./session";
 
 /**
@@ -63,8 +62,7 @@ export function createPreviewSession(spec: HostSessionSpec, deps: HostSessionDep
       // Fire-and-forget dispatch; the response is diagnostic-only in 2D-2 (no queue/
       // backpressure surface until 2D-3) but a dropped error is LOGGED, never swallowed.
       void session.resize(size).then((result) => {
-        if (result instanceof Error)
-          log.warn("preview-session: resize failed:", result.message);
+        if (result instanceof Error) log.warn("preview-session: resize failed:", result.message);
       });
     },
     setMode(next: InteractionMode) {
@@ -76,8 +74,18 @@ export function createPreviewSession(spec: HostSessionSpec, deps: HostSessionDep
         if (result.body.interactionMode === next) interactionMode = next;
       });
     },
-    query(frameIdentity: FrameIdentity, query: GeometryQuery) {
-      return session.query(frameIdentity, query);
+    query(frame: FrameCoordinates, query: GeometryQuery) {
+      // The caller named the frame with the only two fields it can see; the incarnation half
+      // is completed here, from THIS session's live identity (see `FrameCoordinates`' doc).
+      return session.query(
+        {
+          sessionId: session.identity.sessionId,
+          nonce: session.identity.nonce,
+          sourceHash: frame.sourceHash,
+          frameSeq: frame.frameSeq,
+        },
+        query,
+      );
     },
     retry() {
       // 2D-2 stub — the restart budget/circuit that acts on this lands in 2D-3.

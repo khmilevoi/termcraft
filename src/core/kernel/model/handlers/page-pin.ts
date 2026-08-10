@@ -365,9 +365,7 @@ async function runPinSetStatus(
     return [];
   }
   if (result.kind === "not-found") {
-    log.warn(
-      `core/kernel: pin.setStatus found no pin "${payload.pinId}" on page "${pageSlug}"`,
-    );
+    log.warn(`core/kernel: pin.setStatus found no pin "${payload.pinId}" on page "${pageSlug}"`);
     return [];
   }
 

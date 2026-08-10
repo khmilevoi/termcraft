@@ -477,11 +477,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     // pump the await would deadlock; inbound.return() settles it regardless.
     await teardown(true);
     if (deps.onFatal) deps.onFatal(error);
-    else
-      log.warn(
-        "host-supervisor: post-ready fatal outcome with no onFatal sink:",
-        error.message,
-      );
+    else log.warn("host-supervisor: post-ready fatal outcome with no onFatal sink:", error.message);
   }
 
   // Await the correlated `ready` (§6.6) AND the initial full frame under ONE total

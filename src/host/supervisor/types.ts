@@ -132,6 +132,24 @@ export type GeometryQuery =
   | { readonly kind: "layout" };
 
 /**
+ * The half of a {@link FrameIdentity} a caller ABOVE this facade can actually supply.
+ *
+ * `sessionId` and `nonce` identify the INCARNATION, and the facade deliberately hides both:
+ * `PreviewIdentity` is "the incarnation identity minus the volatile nonce" precisely so an
+ * automatic restart does not replace the facade (`host/types.ts`), and `PreviewFrame` drops
+ * the nonce for the same reason. A caller therefore never sees them and cannot name the frame
+ * in full — but `sourceHash`/`frameSeq` travel on every frame it DOES see.
+ *
+ * So the facade's `query` takes these two and completes the other two from whichever
+ * incarnation is live at call time. That split is what closed blocker B1's last mile: the
+ * Kernel's own identity carries a Kernel-minted `previewSessionId` and a placeholder nonce
+ * (`core/preview/model/session-commands.ts`), so forwarding it verbatim was refused by the
+ * child as a forged frame — see `core/ports/preview-session.ts`'s
+ * `PreviewFrameCoordinatesV1`, the Kernel-side mirror of this type.
+ */
+export type FrameCoordinates = Omit<FrameIdentity, "sessionId" | "nonce">;
+
+/**
  * One geometry-query outcome (§7.1): the identity of the frame the host actually answered
  * against (so a caller can detect staleness itself) plus a closed, per-kind result record;
  * or the typed `STALE_FRAME` refusal when the requested frame is no longer the host's
@@ -209,9 +227,14 @@ export interface PreviewSession {
   readonly frames: AsyncIterable<PreviewFrame>;
   resize(size: Size): void;
   setMode(mode: InteractionMode): void;
-  /** Blocker B1 — see `HostSession.query`'s doc comment; forwarded verbatim. */
+  /**
+   * Blocker B1 — see `HostSession.query`'s doc comment for the wire half. Unlike that
+   * method this facade takes only {@link FrameCoordinates}: a caller here cannot see the
+   * incarnation's `sessionId`/`nonce`, so the facade completes them from the live
+   * incarnation before forwarding.
+   */
   query(
-    frameIdentity: FrameIdentity,
+    frame: FrameCoordinates,
     query: GeometryQuery,
   ): Promise<ProtocolError | SupervisorError | GeometryQueryResult>;
   retry(): void;

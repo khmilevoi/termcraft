@@ -1,6 +1,5 @@
-import { createRequire } from "node:module";
-
 import { afterEach, describe, expect, test } from "bun:test";
+import { createRequire } from "node:module";
 
 import type { ScrollBoxRenderable } from "@opentui/core";
 

@@ -47,6 +47,7 @@ export type {
   ExportTaskOutcome,
   FloodMonitor,
   FrameBroker,
+  FrameCoordinates,
   GeometryQuery,
   GeometryQueryResult,
   HeartbeatWatchdog,

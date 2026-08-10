@@ -7,10 +7,19 @@ import type {
   PreviewSession,
   SupervisorEventV1,
 } from "core/ports";
-import type { FailureDtoV1 } from "core/protocol";
+import { geometryQueryResultV1Schema } from "core/protocol";
+import type { CommandPayloadByKindV1, FailureDtoV1, GeometryQueryResultV1 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
+import { ProtocolError } from "../protocol";
 import { SupervisorError, createHostSupervisor } from "../supervisor";
-import type { HostSupervisorDeps, PreviewFrame, SupervisedPreviewSession } from "../supervisor";
+import type {
+  FrameCoordinates,
+  GeometryQuery,
+  HostSupervisorDeps,
+  PreviewFrame,
+  SupervisedPreviewSession,
+} from "../supervisor";
 import type { HostSessionSpec } from "../types";
 
 /**
@@ -47,13 +56,18 @@ import type { HostSessionSpec } from "../types";
  * - ONE WRAPPER PER SUPERVISED SESSION — see {@link createHostSupervisorAdapter}'s own
  *   `wrappers` cache. This is NOT a divergence but the opposite: without it this adapter broke
  *   an invariant the Kernel depends on.
- * - `query` needs a Kernel-side `FrameTokenV1` → `FrameIdentity` ledger (the port's own header:
- *   "TODO(blocker B1): ... this method resolves and verifies it as the broker's current
- *   displayed frame"). That ledger is Kernel/composition-root state this adapter has no
- *   access to — host's own wire-level `query(frameIdentity, query)` already works
- *   (`host/supervisor/model/session.ts`), but resolving an opaque `FrameTokenV1` into a
- *   `FrameIdentity` is out of this adapter's scope. Returns the same documented
- *   `HOST_PROTOCOL_FAILED` FailureDtoV1 until that ledger exists.
+ * - `query` USED TO be in this divergence list, returning a flat `HOST_PROTOCOL_FAILED`
+ *   ("resolving an opaque frameToken into a host FrameIdentity needs a Kernel-side ledger this
+ *   adapter has no access to"). A live run on 2026-08-10 found what that cost: every
+ *   right-click died at `kernel.queryGeometry step:"refused"`, so NO PIN COULD EVER BE PLACED.
+ *   The stated reason was also half wrong — the ledger exists and already runs
+ *   (`core/preview/model/session-commands.ts` calls `frameTokenLedger.verifyCurrent` before
+ *   this port is ever reached); what was genuinely missing is that the Kernel cannot know the
+ *   incarnation's `sessionId`/`nonce`, which the facade drops by design. Both halves now meet
+ *   where each is knowable: the Kernel passes the frame coordinates it verified
+ *   (`PreviewFrameCoordinatesV1`), `host/supervisor` completes the incarnation half
+ *   (`FrameCoordinates`), and this adapter translates the two geometry vocabularies and
+ *   resolves the pin anchor. See {@link resolveAnchor} for the one real cost that closure has.
  */
 
 function toHostSessionSpec(spec: HostSessionSpecV1): HostSessionSpec {
@@ -102,14 +116,6 @@ function toHostFailureDto(error: SupervisorError): FailureDtoV1 {
   return { code: "HOST_PROTOCOL_FAILED", retryable: true, safeMessage: error.message, details };
 }
 
-const QUERY_NOT_WIRED: FailureDtoV1 = {
-  code: "HOST_PROTOCOL_FAILED",
-  retryable: false,
-  safeMessage:
-    "preview.query is not wired: resolving an opaque frameToken into a host FrameIdentity needs a Kernel-side ledger this adapter has no access to (blocker B1)",
-  details: {},
-};
-
 const SET_THEME_NOT_WIRED: FailureDtoV1 = {
   code: "HOST_PROTOCOL_FAILED",
   retryable: false,
@@ -131,6 +137,157 @@ async function* toPreviewFrames(
       rows: frame.rows,
     };
   }
+}
+
+// -------------------------------------------------------------------------------------
+// Geometry queries — the two vocabularies this adapter translates between (blocker B1)
+// -------------------------------------------------------------------------------------
+
+type KernelGeometryQueryV1 = CommandPayloadByKindV1["preview.queryGeometry"]["query"];
+
+/**
+ * §7.1: "the Kernel-level `pin-anchor` refinement travels AS `query-hit` on the wire" — the
+ * host's closed query families have no fifth member, so the two Kernel point-queries collapse
+ * onto one wire kind here. Only the Kernel distinguishes them, which is why the reply is
+ * decoded back against the ORIGINAL Kernel kind, not this one.
+ */
+function toHostGeometryQuery(query: KernelGeometryQueryV1): GeometryQuery {
+  if (query.kind === "hit" || query.kind === "pin-anchor") {
+    return { kind: "hit", x: query.x, y: query.y };
+  }
+  if (query.kind === "layout") return { kind: "layout" };
+  return { kind: query.kind, elementId: query.elementId };
+}
+
+/** A `ProtocolError` is a schema violation (never retryable); a `SupervisorError` reuses the shared bucketing. */
+function toQueryFailureDto(error: ProtocolError | SupervisorError): FailureDtoV1 {
+  if (error instanceof SupervisorError) return toHostFailureDto(error);
+  return {
+    code: "HOST_PROTOCOL_FAILED",
+    retryable: false,
+    safeMessage: error.message,
+    details: { protocolViolationCode: String(error.code) },
+  };
+}
+
+/**
+ * §7.1's typed refusal: "If the requested frame is no longer the host's current sealed frame,
+ * the host returns STALE_FRAME without geometry" — a normal outcome, not a protocol fault, and
+ * genuinely retryable once the UI acknowledges the newer frame. Reported as a real failure
+ * rather than decoded into a `hit: null`, which would fabricate "nothing is there" out of
+ * "ask again" (CLAUDE.md: never silently substitute an invented value).
+ */
+function staleFrameFailure(reason: string): FailureDtoV1 {
+  return {
+    code: "HOST_PROTOCOL_FAILED",
+    retryable: true,
+    safeMessage: `the host is no longer displaying the queried frame: ${reason}`,
+    details: { hostRefusal: "STALE_FRAME" },
+  };
+}
+
+/**
+ * The child's own per-kind reply record (`host/session/model/host-state-machine.ts`'s
+ * `resolveGeometry`) reshaped into a candidate for `core/protocol`'s closed
+ * `GeometryQueryResultV1` union, which is keyed by design §4.2's FUNCTION names
+ * (`checkHit`/`rectOf`/`describe`/`layoutTree`) rather than the wire's request-family names.
+ *
+ * `describe`'s `id` is the elementId THIS REQUEST named: the wire reply carries only
+ * `{found, kind}` (the child answers about the element it was asked about), while
+ * `DescribedElementV1` needs `{id, kind}`. Echoing the requested id is reporting what was
+ * asked, not inventing an identifier — and it is the only id in play.
+ */
+function toGeometryResultCandidate(
+  query: KernelGeometryQueryV1,
+  raw: Readonly<Record<string, unknown>>,
+): unknown {
+  if (query.kind === "hit" || query.kind === "pin-anchor") {
+    const elementId = raw.elementId ?? null;
+    return { kind: "checkHit", hit: elementId === null ? null : { id: elementId } };
+  }
+  if (query.kind === "rect") return { kind: "rectOf", rect: raw.rect ?? null };
+  if (query.kind === "describe") {
+    return {
+      kind: "describe",
+      element: raw.found === true ? { id: query.elementId, kind: raw.kind } : null,
+    };
+  }
+  return { kind: "layoutTree", tree: raw.tree };
+}
+
+/** Validated through `core/protocol`'s own exported schema — no hand-rolled field checks. */
+function decodeGeometryResult(
+  query: KernelGeometryQueryV1,
+  raw: Readonly<Record<string, unknown>>,
+): ProtocolError | GeometryQueryResultV1 {
+  const parsed = geometryQueryResultV1Schema.safeParse(toGeometryResultCandidate(query, raw));
+  if (!parsed.success) {
+    return new ProtocolError({
+      code: "MALFORMED_PROTOCOL",
+      reason: `query-${query.kind} reply did not decode: ${parsed.error.issues[0]?.message ?? "unknown issue"}`,
+    });
+  }
+  return parsed.data;
+}
+
+function clampFraction(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * The SECOND round trip a resolving point-query costs, and why it is not avoidable here:
+ * §8.1 binds a geometry token to `(FrameIdentityV1, pageSlug, elementId, fx, fy)`, but the
+ * wire's `query-hit` reply carries only the element id — the fractional point is defined
+ * relative to that element's own rectangle, which only `query-rect` returns. So a resolving
+ * hit is followed by a `rect` query for the very element it just resolved.
+ *
+ * A failure to resolve the rect is NOT a failure of the query: the hit result is real and is
+ * still returned, only without an anchor (so no geometry token is minted, so no pin can be
+ * placed on it). Logged rather than propagated, per errore rule 21.
+ */
+async function resolveAnchor(
+  supervised: SupervisedPreviewSession,
+  frame: FrameCoordinates,
+  point: Readonly<{ x: number; y: number }>,
+  elementId: string,
+): Promise<PreviewGeometryQueryResultV1["resolvedAnchor"]> {
+  const rectQuery: KernelGeometryQueryV1 = { kind: "rect", elementId };
+  const reply = await supervised.query(frame, toHostGeometryQuery(rectQuery));
+  if (reply instanceof Error) {
+    log.warn(
+      `host/adapters/host-supervisor: no anchor for "${elementId}" — its rect query failed: ${reply.message}`,
+    );
+    return null;
+  }
+  if (!reply.ok) {
+    log.warn(
+      `host/adapters/host-supervisor: no anchor for "${elementId}" — its rect query was refused: ${reply.reason}`,
+    );
+    return null;
+  }
+  const decoded = decodeGeometryResult(rectQuery, reply.result);
+  if (decoded instanceof ProtocolError) {
+    log.warn(
+      `host/adapters/host-supervisor: no anchor for "${elementId}" — its rect reply did not decode: ${decoded.message}`,
+    );
+    return null;
+  }
+  if (decoded.kind !== "rectOf" || decoded.rect === null) return null;
+
+  const { x, y, width, height } = decoded.rect;
+  if (width <= 0 || height <= 0) return null;
+  const fx = (point.x - x) / width;
+  const fy = (point.y - y) / height;
+  // §8.1's "exact page, element, and FINITE fractional point" — defensive, since the schema
+  // already fixed every input as a non-negative integer and both extents are positive here.
+  if (!Number.isFinite(fx) || !Number.isFinite(fy)) return null;
+
+  return {
+    pageSlug: supervised.identity.pageSlug,
+    elementId,
+    fx: clampFraction(fx),
+    fy: clampFraction(fy),
+  };
 }
 
 function toPreviewSession(supervised: SupervisedPreviewSession): PreviewSession {
@@ -167,8 +324,26 @@ function toPreviewSession(supervised: SupervisedPreviewSession): PreviewSession 
     async close() {
       await supervised.close();
     },
-    async query(_frameToken, _query): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1> {
-      return QUERY_NOT_WIRED;
+    async query(frame, query): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1> {
+      const reply = await supervised.query(frame, toHostGeometryQuery(query));
+      if (reply instanceof Error) return toQueryFailureDto(reply);
+      if (!reply.ok) return staleFrameFailure(reply.reason);
+
+      const decoded = decodeGeometryResult(query, reply.result);
+      if (decoded instanceof ProtocolError) return toQueryFailureDto(decoded);
+
+      // An anchor exists only for a RESOLVING point query — `checkHit` is produced by exactly
+      // the two Kernel kinds that carry a point (§8.1), which is what makes this narrowing total.
+      if (decoded.kind !== "checkHit" || decoded.hit === null) {
+        return { result: decoded, resolvedAnchor: null };
+      }
+      if (query.kind !== "hit" && query.kind !== "pin-anchor") {
+        return { result: decoded, resolvedAnchor: null };
+      }
+      return {
+        result: decoded,
+        resolvedAnchor: await resolveAnchor(supervised, frame, query, decoded.hit.id),
+      };
     },
   };
 }

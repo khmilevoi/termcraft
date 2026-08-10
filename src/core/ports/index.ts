@@ -149,6 +149,7 @@ export { PAGE_META_EXTRACTOR_VERSION } from "./gate-runner";
 export type {
   ColorV1,
   InteractionModeV1,
+  PreviewFrameCoordinatesV1,
   PreviewFrameV1,
   PreviewGeometryQueryResultV1,
   PreviewIdentityV1,

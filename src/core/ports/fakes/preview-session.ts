@@ -5,6 +5,7 @@ import { log } from "infrastructure/debug-log";
 import type { AssertConforms } from "../index";
 import type {
   InteractionModeV1,
+  PreviewFrameCoordinatesV1,
   PreviewFrameV1,
   PreviewGeometryQueryResultV1,
   PreviewIdentityV1,
@@ -75,7 +76,7 @@ export type PreviewSessionCall =
     }
   | { readonly method: "retry" }
   | { readonly method: "close" }
-  | { readonly method: "query"; readonly frameToken: string };
+  | { readonly method: "query"; readonly frame: PreviewFrameCoordinatesV1 };
 
 export interface FakePreviewSession extends PreviewSession {
   readonly calls: readonly PreviewSessionCall[];
@@ -158,10 +159,10 @@ export function createFakePreviewSession(
   }
 
   async function query(
-    frameToken: string,
+    frame: PreviewFrameCoordinatesV1,
     _query: CommandPayloadByKindV1["preview.queryGeometry"]["query"],
   ): Promise<FailureDtoV1 | PreviewGeometryQueryResultV1> {
-    calls.push({ method: "query", frameToken });
+    calls.push({ method: "query", frame });
     const queuedFailure = queues.query.shift();
     if (queuedFailure !== undefined) return queuedFailure;
     // Default "nothing resolved" answer: an unresolved `checkHit` (M21's closed

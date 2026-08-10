@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 
 import type { FailureDtoV1 } from "core/protocol";
 
-import type { PreviewFrameV1, PreviewIdentityV1 } from "../preview-session";
+import type {
+  PreviewFrameCoordinatesV1,
+  PreviewFrameV1,
+  PreviewIdentityV1,
+} from "../preview-session";
 import { createFakePreviewSession } from "./preview-session";
 
 const identity: PreviewIdentityV1 = {
@@ -12,6 +16,9 @@ const identity: PreviewIdentityV1 = {
   kitApiVersion: 1,
   sessionId: "sess-1",
 };
+
+/** The verified frame coordinates a `query()` names — see `PreviewFrameCoordinatesV1`'s doc. */
+const FRAME: PreviewFrameCoordinatesV1 = { sourceHash: identity.sourceHash, frameSeq: "1" };
 
 const FAILURE: FailureDtoV1 = {
   code: "HOST_PROTOCOL_FAILED",
@@ -66,7 +73,7 @@ describe("createFakePreviewSession", () => {
 
   test("query() defaults to an unresolved geometry result", async () => {
     const session = createFakePreviewSession(identity);
-    const result = await session.query("token-1", { kind: "layout" });
+    const result = await session.query(FRAME, { kind: "layout" });
     if ("code" in result) throw new Error("unexpected failure");
     expect(result.resolvedAnchor).toBeNull();
   });
@@ -77,7 +84,7 @@ describe("createFakePreviewSession", () => {
       result: { kind: "checkHit", hit: null },
       resolvedAnchor: { pageSlug: "home", elementId: "btn-1", fx: 0.5, fy: 0.5 },
     });
-    const first = await session.query("token-1", { kind: "hit", x: 1, y: 1 });
+    const first = await session.query(FRAME, { kind: "hit", x: 1, y: 1 });
     if ("code" in first) throw new Error("unexpected failure");
     expect(first.resolvedAnchor).toEqual({
       pageSlug: "home",
@@ -85,7 +92,7 @@ describe("createFakePreviewSession", () => {
       fx: 0.5,
       fy: 0.5,
     });
-    const second = await session.query("token-1", { kind: "hit", x: 1, y: 1 });
+    const second = await session.query(FRAME, { kind: "hit", x: 1, y: 1 });
     if ("code" in second) throw new Error("unexpected failure");
     expect(second.resolvedAnchor).toBeNull();
   });

@@ -70,8 +70,7 @@ export function createExportPool(deps: ExportPoolDeps): ExportPool {
           const result = await deps.runTask(task);
           if (result instanceof Error) {
             if (failure === null) failure = result;
-            else
-              log.warn("export pool: dropping a secondary in-flight failure:", result.message);
+            else log.warn("export pool: dropping a secondary in-flight failure:", result.message);
             return;
           }
           outcomes.push({ manifestIndex: task.manifestIndex, spec: task.spec, result });
