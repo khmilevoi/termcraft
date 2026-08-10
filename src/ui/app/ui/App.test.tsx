@@ -233,9 +233,12 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
   });
 
   // §7. The task-1 brief's own literal click target (x50/y8, "the preview column") does NOT
-  // reproduce this defect: nothing in `ws-preview` is `focusable` (only `EditBufferRenderable` and
-  // `ScrollBoxRenderable` are, in `@opentui/core`), so `dispatchMouseEvent`'s autoFocus walk finds
-  // no ancestor to steal focus for and the click is a no-op. The chat pane's OWN scrollback,
+  // reproduce this defect: `ws-preview`'s own subtree contains no `<scrollbox>`, `<select>`,
+  // `<tabselect>`, or `focusable={true}` box — none of `@opentui/core`'s focusable-by-default
+  // classes (at least `EditBufferRenderable`, `ScrollBoxRenderable`, `ScrollBarRenderable`,
+  // `SelectRenderable`, `TabSelectRenderable` — not necessarily an exhaustive list) appear there —
+  // so `dispatchMouseEvent`'s autoFocus walk finds no ancestor to steal focus for and the click is
+  // a no-op. The chat pane's OWN scrollback,
   // `<scrollbox id="ws-chat-scroll">` (`Workspace.tsx:1035`), IS focusable by default — a fact the
   // plan's C1 correction missed (it names only `EditBufferRenderable` as focusable-by-default) —
   // so a click there is what actually exercises path 1. Confirmed by instrumenting a
