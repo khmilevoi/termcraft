@@ -282,6 +282,63 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(deps.local.composer()).toBe("ab");
   });
 
+  test("clicking a pane focuses that pane's zone (§6)", async () => {
+    const kernel = createFakeKernel();
+    const preview = createFakePreviewSession();
+    kernel.setPreview(preview.handle);
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+      useMouse: true,
+    });
+    open = renderer;
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+    expect(deps.local.focus()).toBe("chat");
+
+    // x45+ is the preview column at 120 cols; y8 is inside the design area.
+    await renderer.act(() => renderer.mockMouse.pressDown(50, 8, MouseButtons.LEFT));
+    expect(deps.local.focus()).toBe("preview");
+
+    // Anywhere in the chat column — the scrollback, not the composer.
+    await renderer.act(() => renderer.mockMouse.pressDown(10, 8, MouseButtons.LEFT));
+    expect(deps.local.focus()).toBe("chat");
+  });
+
+  // The tab strip carries its own per-tab handler and sits INSIDE ws-preview. OpenTUI bubbles a
+  // mouse event to every ancestor that did not stop propagation, so the pane's handler covers it
+  // without a second copy that could drift from the first (plan C3).
+  test("clicking a page tab focuses the preview zone as well as switching (§6)", async () => {
+    const kernel = createFakeKernel();
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+      useMouse: true,
+    });
+    open = renderer;
+    await renderer.act(() => kernel.emit(workspaceSnapshot()));
+    expect(deps.local.focus()).toBe("chat");
+
+    // The strip is the first row inside the preview box: y1, one cell past its left border.
+    await renderer.act(() => renderer.mockMouse.pressDown(48, 1, MouseButtons.LEFT));
+    expect(deps.local.focus()).toBe("preview");
+  });
+
   test("mounts Home when no project is open", async () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });

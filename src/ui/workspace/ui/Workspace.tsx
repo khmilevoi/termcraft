@@ -940,6 +940,22 @@ export const Workspace = reatomComponent<{
     if (event.button === MouseButton.RIGHT) return requestAtMouse("pin", event);
     if (event.button === MouseButton.LEFT) requestAtMouse("select", event);
   }, "ui.Workspace.onPreviewMouseDown");
+  // MOUSE → ZONE (focus-scoped-hotkeys §6). One handler per PANE, not per widget: OpenTUI
+  // re-dispatches a mouse event to every ancestor that did not stop propagation
+  // (`Renderable.processMouseEvent`), so these two cover the scrollback, the pin list, the
+  // composer, the tab strip, the frame view and both error panels. Deliberately not left-only:
+  // a right-click is still the user pointing at that pane, and the pin gesture (right-click in
+  // the preview) should leave the preview focused like every other click there.
+  //
+  // "Focusing the chat puts the caret in the input" needs no separate mechanism: the chat zone IS
+  // `focus === "chat"`, and `composerEditorFocused` below already derives the editor's own
+  // `focused` prop from it.
+  const onChatMouseDown = useWrap(() => {
+    local.focus.set("chat");
+  }, "ui.Workspace.onChatMouseDown");
+  const onPreviewPaneMouseDown = useWrap(() => {
+    local.focus.set("preview");
+  }, "ui.Workspace.onPreviewPaneMouseDown");
   const composerPlaceholder = props.readOnly
     ? "read-only — Send disabled"
     : filling
@@ -1002,6 +1018,7 @@ export const Workspace = reatomComponent<{
                   : SHELL_PALETTE.faint
             }
             position="relative"
+            onMouseDown={onChatMouseDown}
           >
             {/*
              * `overflow="hidden"` is the design's own clip, not a defensive extra: `chatSeq`
@@ -1198,6 +1215,7 @@ export const Workspace = reatomComponent<{
           border
           borderStyle="rounded"
           borderColor={previewBorderColor}
+          onMouseDown={onPreviewPaneMouseDown}
         >
           {renderTabs(tabs, tabStripWidth, onTabMouseDown)}
           <PreviewPaneRule
