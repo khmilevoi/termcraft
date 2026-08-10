@@ -5,6 +5,8 @@
  * windowing/formatting math gets its own unit tests independent of the render tree.
  */
 
+import { log } from "infrastructure/debug-log";
+
 /**
  * The chats popup's fixed row capacity — design `wsChats`: `const cap=6`
  * (`design/termcraft-engine.js:1042`).
@@ -83,7 +85,7 @@ export function formatChatWhen(createdAt: string, nowMs: number): string {
     // basis for — the same class of invented user-visible fact this module's own
     // {@link FRESH_CHAT_LABEL} exists to undo. An em-dash says "unknown" and says nothing else.
     // Defensive only: `ChatSummaryV1.createdAt` is validated by `rfc3339UtcSchema` on the wire.
-    console.warn(`formatChatWhen: "${createdAt}" is not a valid ISO-8601 timestamp`);
+    log.warn(`formatChatWhen: "${createdAt}" is not a valid ISO-8601 timestamp`);
     return "—";
   }
 

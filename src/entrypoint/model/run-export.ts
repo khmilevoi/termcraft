@@ -3,6 +3,7 @@ import path from "node:path";
 import * as errore from "errore";
 
 import type { CommandRejectionCode, UInt64String } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 import type { UiEnv } from "ui";
 import type { AnyEventEnvelope, EventEnvelopeV1, KernelPort } from "ui/kernel";
 import { createDispatcher } from "ui/kernel";
@@ -256,7 +257,7 @@ export async function runExport(
   if (openSettled.kind !== "kernel.stateChanged") {
     // Defensive, should be unreachable: `isProjectOpenSettled` only ever matches this kind.
     tracker.close();
-    console.warn(
+    log.warn(
       "entrypoint/run-export: the project-open waiter resolved with an unexpected event kind",
     );
     return new ExportDriverError({ reason: "project.open did not settle as expected" });
@@ -291,7 +292,7 @@ export async function runExport(
   if (terminal instanceof Error) return terminal;
   if (terminal.kind !== "export.completed" && terminal.kind !== "export.failed") {
     // Defensive, should be unreachable: `isExportTerminal` only ever matches these two kinds.
-    console.warn(
+    log.warn(
       "entrypoint/run-export: the export-terminal waiter resolved with an unexpected event kind",
     );
     return new ExportDriverError({ reason: "export.start did not settle as expected" });
@@ -306,7 +307,7 @@ export async function runExport(
   if (generationId === null) {
     // Defensive, should be unreachable: `preview-export.ts`'s own header states `generationId`
     // is non-null ONLY on `export.completed`, taken verbatim from the publish intent.
-    console.warn("entrypoint/run-export: export.completed carried a null generationId");
+    log.warn("entrypoint/run-export: export.completed carried a null generationId");
     return new ExportDriverError({ reason: "export.completed carried no generation id" });
   }
 
@@ -388,7 +389,7 @@ export async function runHeadlessExport(
 async function closeHeadlessShell(shell: AppShell): Promise<void> {
   const released = await shell.close().catch((cause) => new ExportShellCloseError({ cause }));
   if (released instanceof Error) {
-    console.warn(`entrypoint/run-export: ${released.message}`, released);
+    log.warn(`entrypoint/run-export: ${released.message}`, released);
   }
 }
 

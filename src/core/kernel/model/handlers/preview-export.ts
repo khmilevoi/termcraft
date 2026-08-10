@@ -1,5 +1,7 @@
 import { wrap } from "@reatom/core";
 
+import { log, trace } from "infrastructure/debug-log";
+
 import {
   type CaptureExportSnapshotDeps,
   type ExportClosureV1,
@@ -253,7 +255,7 @@ async function extractAndCachePageMeta(
 
   const written = await deps.pageMetaCache.put({ key, meta });
   if (written !== undefined) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: could not cache the extracted page meta for "${pageSlug}": ${written.safeMessage}`,
     );
   }
@@ -282,7 +284,7 @@ async function resolvePageMeta(
   source: { readonly bytes: Uint8Array; readonly relPath: string },
 ): Promise<FailureDtoV1 | PageMeta> {
   if (closureHash === null) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: resolvePageMeta("${pageSlug}") has no provable closureHash — the page-meta cache is skipped entirely (no get, no put) and meta is extracted directly`,
     );
     return extractPageMetaOnly(deps, pageSlug, source.bytes, source.relPath);
@@ -330,7 +332,7 @@ function warnTreePassDiagnostics(origin: string, index: CanonicalTreeIndexV1): v
         `[warning/${warning.kind}]${warning.file === undefined ? "" : ` ${warning.file}`} ${warning.message}`,
     ),
   ];
-  console.warn(
+  log.warn(
     `core/kernel/handlers/preview-export: ${origin} ran the whole-tree pass, which reported ${index.errors.length} error(s) and ${index.warnings.length} warning(s) this path has no descriptor to attribute them to: ${reported.join("; ")}`,
   );
 }
@@ -576,7 +578,7 @@ function selectCurrentSource(
       context.deps.projectStore.writeWorkspaceState({ activePageSlug: payload.pageSlug }),
     );
     if (persistFailure !== undefined) {
-      console.warn(
+      log.warn(
         `core/kernel: preview source switched to "${payload.pageSlug}" but persisting it as the active page failed: ${persistFailure.safeMessage}`,
       );
     }
@@ -651,7 +653,7 @@ function sessionLiveEvents(
   const previewSessionId = context.previewSessionCommands.currentPreviewSessionId();
   const nonce = context.previewSessionCommands.currentNonce();
   if (previewSessionId === null || !isUuidv7(previewSessionId) || nonce === null) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: ${origin} established a session but previewSessionCommands has no valid live incarnation identity — preview.sessionReady and preview.sourceChanged skipped`,
     );
     return [];
@@ -751,7 +753,7 @@ function openCircuitEvents(
     // machine to `"failed"` in this same synchronous step, and `openCircuit`'s only
     // legal source per `preview-machine.ts`'s own table IS `"failed"` — should be
     // unreachable.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: openCircuit was ${openOutcome.kind} right after sessionFailed — defensive, should be unreachable from "failed"`,
     );
     return [];
@@ -923,7 +925,7 @@ function failSession(
       // never carry this code). Should be unreachable; `openCircuit`/
       // `preview.circuitOpened` are skipped rather than built with a fabricated hash —
       // `preview.failed`'s own `sessionFailed` transition above still publishes.
-      console.warn(
+      log.warn(
         "core/kernel/handlers/preview-export: HOST_CIRCUIT_OPEN reported with no resolved sourceHash — defensive, should be unreachable; openCircuit/preview.circuitOpened skipped",
       );
     } else {
@@ -1008,13 +1010,13 @@ async function runSimpleLiveCommand(
 ): Promise<readonly PublishableEventV1[]> {
   const outcome = await wrap(call());
   if (outcome.kind === "rejected") {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: ${label} was rejected (${outcome.reason.code})`,
     );
     return [];
   }
   if (outcome.kind === "failed") {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: ${label} failed: ${outcome.failure.safeMessage}`,
     );
     return [];
@@ -1149,7 +1151,7 @@ function handleRetry(
       // `retryCircuit` itself was illegal (`OPERATION_BUSY`) — defensive only, the
       // capability guard already required `circuit-open`. Nothing moved; nothing to
       // publish.
-      console.warn(
+      log.warn(
         `core/kernel/handlers/preview-export: preview.retry was rejected (${outcome.reason.code})`,
       );
       return [];
@@ -1172,7 +1174,7 @@ function handleRetry(
       // this handler's own header, "FIX ROUND 1, FINDING 1", for why this is reachable in
       // THIS build (Task 10's documented `lastSpec` gap) and why it must recover the
       // machine rather than leave it stranded at `"starting"`.
-      console.warn(
+      log.warn(
         `core/kernel/handlers/preview-export: preview.retry had no remembered spec to reissue (${outcome.reason.code}) — recovering the preview machine to "failed" instead of leaving it stranded at "starting"`,
       );
       const recovered = context.machines.preview.apply("kernel.preview.sessionFailed");
@@ -1184,7 +1186,7 @@ function handleRetry(
         // Defensive only: `sessionFailed` is legal from `starting` per the machine's own
         // table, and `retryCircuit` just moved it there in this same synchronous run —
         // should be unreachable.
-        console.warn(
+        log.warn(
           `core/kernel/handlers/preview-export: preview.retry's recovery sessionFailed was ${recovered.kind} — defensive, should be unreachable from "starting"`,
         );
       }
@@ -1192,7 +1194,7 @@ function handleRetry(
       return events;
     }
     if (outcome.kind === "failed") {
-      console.warn(
+      log.warn(
         `core/kernel/handlers/preview-export: preview.retry's re-established session failed: ${outcome.failure.safeMessage}`,
       );
       events.push(
@@ -1227,7 +1229,7 @@ function handleRetry(
     const recoveredSpec = context.previewSessionCommands.currentSpec();
     if (recoveredSession === null || recoveredSpec === null) {
       // Defensive: `retry()` only reports `accepted` after `establishSession` stored both.
-      console.warn(
+      log.warn(
         "core/kernel/handlers/preview-export: preview.retry succeeded but the router reports no live session/spec — preview.sessionReady skipped, the UI will stay on its error panel",
       );
       return events;
@@ -1270,12 +1272,30 @@ function handleQueryGeometry(
   context: HandlerContext,
 ): CommandOutcomeV1 {
   const operationId: UUIDv7 = uuidv7();
+  // DIAGNOSTIC (infrastructure/debug-log): added while investigating "pins don't work" — the
+  // `console.warn`s below record only that a query failed, never why, and every early return
+  // here leaves the UI's `pendingGeometry` stuck forever (no `preview.geometryResult` event is
+  // ever published on a non-resolved outcome). This channel captures the failure detail
+  // (`verification.code` / `outcome.kind` + `failure.code`) the operator needs to tell a stale
+  // frame race apart from a genuine host failure.
+  trace("kernel.queryGeometry", {
+    step: "entry",
+    queryKind: payload.query.kind,
+    x: payload.query.kind === "hit" || payload.query.kind === "pin-anchor" ? payload.query.x : undefined,
+    y: payload.query.kind === "hit" || payload.query.kind === "pin-anchor" ? payload.query.y : undefined,
+  });
   context.launchOperation("kernel.preview.queryGeometry", async () => {
     const verification = context.frameTokenLedger.verifyCurrent(payload.frameToken);
     if (!verification.ok) {
-      console.warn(
+      log.warn(
         `core/kernel/handlers/preview-export: preview.queryGeometry's frame token was ${verification.code}`,
       );
+      trace("kernel.queryGeometry", {
+        step: "refused",
+        queryKind: payload.query.kind,
+        reason: "frame token verification failed",
+        code: verification.code,
+      });
       return [];
     }
 
@@ -1283,20 +1303,39 @@ function handleQueryGeometry(
       context.previewSessionCommands.queryGeometry(payload.frameToken, payload.query),
     );
     if (outcome.kind !== "resolved") {
-      console.warn(
+      log.warn(
         `core/kernel/handlers/preview-export: preview.queryGeometry was ${outcome.kind}`,
       );
+      trace("kernel.queryGeometry", {
+        step: "refused",
+        queryKind: payload.query.kind,
+        reason: "queryGeometry did not resolve",
+        outcomeKind: outcome.kind,
+        failureCode: outcome.kind === "failed" ? outcome.failure.code : undefined,
+        failureMessage: outcome.kind === "failed" ? outcome.failure.safeMessage : undefined,
+        rejectedReason: outcome.kind === "rejected" ? outcome.reason : undefined,
+      });
       return [];
     }
 
     const previewSessionId = context.previewSessionCommands.currentPreviewSessionId();
     if (previewSessionId === null || !isUuidv7(previewSessionId)) {
-      console.warn(
+      log.warn(
         "core/kernel/handlers/preview-export: preview.queryGeometry resolved but no valid live previewSessionId is registered",
       );
+      trace("kernel.queryGeometry", {
+        step: "refused",
+        queryKind: payload.query.kind,
+        reason: "no valid live previewSessionId",
+      });
       return [];
     }
 
+    trace("kernel.queryGeometry", {
+      step: "resolved",
+      queryKind: payload.query.kind,
+      geometryToken: outcome.geometryToken,
+    });
     const event: PublishableEventV1<"preview.geometryResult"> = {
       kind: "preview.geometryResult",
       payload: {
@@ -1355,7 +1394,7 @@ function handleClose(
       // Defensive only: `canApply` already confirmed `disable` was legal from `fromPhase`
       // synchronously above, and nothing else can move a single-slot preview machine
       // concurrently in a correctly-wired Kernel.
-      console.warn(
+      log.warn(
         `core/kernel/handlers/preview-export: preview.close's router call was ${outcome.kind} — defensive, should be unreachable`,
       );
       return [];
@@ -1420,7 +1459,7 @@ function exportSnapshotDigest(snapshot: ExportSnapshotV1): Sha256Hex {
     // rule against silently assuming success. Falls back to the same "64 zero hex
     // characters" placeholder `failSession` above already uses for an honestly-unavailable
     // digest, never a fabricated-looking real one.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: could not canonicalize the export snapshot digest (defensive, should be unreachable): ${digest.message}`,
     );
     return "0".repeat(64);
@@ -1511,7 +1550,7 @@ async function resolveExportClosures(
 ): Promise<readonly ExportClosureV1[]> {
   const entries = await wrap(readPageOrder(context.deps.designReader));
   if ("code" in entries) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start could not read the page order for its closure listing: ${entries.safeMessage}`,
     );
     return [];
@@ -1529,7 +1568,7 @@ async function resolveExportClosures(
     }),
   );
   if (result.errors.length > 0) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start's closure resolution reported ${result.errors.length} diagnostic(s); pages it could not resolve ship without a closure listing`,
     );
   }
@@ -1542,7 +1581,7 @@ async function resolveExportClosures(
       // Unreachable while `runTree` walks the very `pages` list above — a closure for a
       // slug that list does not name would be the port contradicting its own input. Dropped
       // rather than given a guessed entry, and logged so it is never silently absent.
-      console.warn(
+      log.warn(
         `core/kernel/handlers/preview-export: export.start dropped a closure for the unlisted slug "${closure.slug}"`,
       );
       continue;
@@ -1582,7 +1621,7 @@ function preCaptureExportFailure(failure: FailureDtoV1): PublishableEventV1<"exp
 function forceExportFail(context: HandlerContext, reason: string): void {
   const outcome = context.exportRunner.machine.apply("kernel.export.fail");
   if (outcome.kind === "illegal") {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start's post-render fail transition was illegal while handling "${reason}" — defensive, should be unreachable from "rendering"`,
     );
   }
@@ -1674,7 +1713,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
     // The export machine is still `"idle"` (this runs before `captureExportSnapshot` ever
     // applies `kernel.export.begin`) — a real, schema-valid `export.failed` with `phase:
     // "idle"`, see `preCaptureExportFailure`'s own header.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start refused — could not resolve the project's page settings: ${pages.safeMessage}`,
     );
     return [preCaptureExportFailure(pages)];
@@ -1695,7 +1734,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
     // `"illegal"` variant carries only a `CommandRejectionCode`, never a `FailureDtoV1` —
     // see `runExportStart`'s own header, "POST-MVP GAP", for why this one branch stays a
     // documented gap (an unreported refusal, but never a silent one — this warn is the trace).
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start's captureExportSnapshot was illegal (${captured.code})`,
     );
     return [];
@@ -1705,7 +1744,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
     // (`snapshot.ts`'s own `kernel.export.fail` on a page-read failure) before returning
     // this — a real, schema-valid `export.failed` with `phase: "idle"`, see
     // `preCaptureExportFailure`'s own header.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start's snapshot capture failed: ${captured.failure.safeMessage}`,
     );
     return [preCaptureExportFailure(captured.failure)];
@@ -1776,7 +1815,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
 
   const currentPages = await wrap(resolveExportPageInputs(context));
   if ("code" in currentPages) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start refused to publish — could not re-resolve current page settings: ${currentPages.safeMessage}`,
     );
     forceExportFail(context, "could not re-resolve current page settings before publish");
@@ -1831,7 +1870,7 @@ async function runExportStart(context: HandlerContext): Promise<readonly Publish
     // Defensive only: `rendering` is always a legal source for `kernel.export.
     // beginPublication` at this point — export is a single-slot operation, so nothing else
     // could have moved this machine concurrently in a correctly-wired Kernel.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/preview-export: export.start's beginPublication was illegal (${published.code})`,
     );
     return [];

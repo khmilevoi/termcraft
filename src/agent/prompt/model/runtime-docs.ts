@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { StagingRuntimeDocV1 } from "core/ports";
+import { log } from "infrastructure/debug-log";
 
 import type { RuntimeDocSourcesV1 } from "../types";
 
@@ -29,7 +30,7 @@ const SOURCES: RuntimeDocSourcesV1 = {
 /** Logs (never throws — `runtimeDocs()` has no failure channel per its fixed `AgentPromptSource` signature) when a source file is unexpectedly missing, so a broken build is at least visible instead of silently staging a dangling path. */
 function warnIfMissing(sourcePath: string): void {
   if (!fs.existsSync(sourcePath)) {
-    console.warn(
+    log.warn(
       `agent/prompt: runtime doc source "${sourcePath}" does not exist — the turn workspace ` +
         "will be staged without it",
     );

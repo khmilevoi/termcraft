@@ -10,7 +10,7 @@ import { createConfinementPolicy } from "agent/confinement";
 import { runHealthProbe } from "agent/health";
 import type { HealthProbeDeps } from "agent/health";
 import type { AgentInfo } from "agent/types";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import { CLAUDE_BACKEND_ID } from "./backend-id";
 
@@ -154,7 +154,7 @@ async function readUntilClassified(
     }
   } catch (cause) {
     if (verdict === null) throw cause;
-    console.warn(
+    log.warn(
       "agent/health: ignoring a stream-close failure that arrived after a verdict was already classified:",
       describeThrown(cause),
     );

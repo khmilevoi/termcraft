@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 import type { ProcessTree } from "infrastructure/process";
 
 /**
@@ -36,7 +36,7 @@ export function createSpawnAndAdopt(
     });
 
     if (typeof child.pid !== "number") {
-      console.warn(
+      log.warn(
         `${logLabel}: spawned CLI has no pid, cannot adopt it into the owned process tree`,
       );
       // Recording the failure on the tree is the only channel back to the
@@ -49,7 +49,7 @@ export function createSpawnAndAdopt(
 
     const adopted = processTree.adopt(child.pid);
     if (adopted instanceof Error) {
-      console.warn(
+      log.warn(
         `${logLabel}: adopt(${child.pid}) failed, the process tree may not own the CLI:`,
         adopted.message,
       );
@@ -63,7 +63,7 @@ export function createSpawnAndAdopt(
     // call above actually landed the process in the job.
     const verified = processTree.activeProcesses();
     if (verified instanceof Error) {
-      console.warn(
+      log.warn(
         `${logLabel}: activeProcesses() re-read after adopt(${child.pid}) failed:`,
         verified.message,
       );
@@ -71,7 +71,7 @@ export function createSpawnAndAdopt(
       return child;
     }
     if (verified < 1) {
-      console.warn(
+      log.warn(
         `${logLabel}: activeProcesses() re-read reported ${verified} immediately after adopt(${child.pid})`,
       );
       processTree.noteAdoptionOutcome(false);

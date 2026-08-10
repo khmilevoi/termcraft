@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { rfc3339UtcSchema } from "infrastructure/clock";
 import type { Clock } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 
 import type {
   AbsPath,
@@ -283,7 +284,7 @@ function readLockFile(lockPath: AbsPath): string | null {
       if (!stat.isFile()) return null;
       if (stat.size > MAX_ADVISORY_BYTES) {
         // Refused unread rather than buffered: §9's metadata is bounded by construction.
-        console.warn(
+        log.warn(
           "lease: advisory refused, lock file exceeds",
           MAX_ADVISORY_BYTES,
           "bytes:",
@@ -298,7 +299,7 @@ function readLockFile(lockPath: AbsPath): string | null {
   });
   if (text instanceof Error) {
     // Never propagated: an unreadable lock file only means "no advisory to show".
-    if (!isMissingFile(text.cause)) console.warn("lease: advisory read failed:", text.message);
+    if (!isMissingFile(text.cause)) log.warn("lease: advisory read failed:", text.message);
     return null;
   }
   return text;
@@ -326,13 +327,13 @@ function readAdvisoryFile(lockPath: AbsPath): LeaseAdvisory | null {
       new LeaseIoError({ path: lockPath, operation: "decode", detail: "not valid JSON", cause }),
   });
   if (parsed instanceof Error) {
-    console.warn("lease: advisory decode failed:", parsed.message);
+    log.warn("lease: advisory decode failed:", parsed.message);
     return null;
   }
 
   const decoded = advisorySchema.safeParse(parsed);
   if (!decoded.success) {
-    console.warn("lease: advisory decode failed:", `${lockPath} is not an advisory record`);
+    log.warn("lease: advisory decode failed:", `${lockPath} is not an advisory record`);
     return null;
   }
   return decoded.data;
@@ -397,7 +398,7 @@ export function createLeaseStore(deps: LeaseStoreDeps): LeaseStore {
         nonce,
       });
       // Diagnostics are advisory: failing to write them does not undo a held OS lock.
-      if (wrote instanceof Error) console.warn("lease: advisory write failed:", wrote.message);
+      if (wrote instanceof Error) log.warn("lease: advisory write failed:", wrote.message);
 
       // Release is idempotent: a second call must never drop a lock a LATER acquisition
       // took on the same path, so the lease forgets its handle after the first release.

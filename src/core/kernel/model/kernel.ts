@@ -58,7 +58,7 @@ import {
   isUuidv7,
 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { Kernel, KernelDeps } from "../types";
 import { createKernelCounters } from "./counters";
@@ -214,7 +214,7 @@ export function createKernel(deps: KernelDeps): Kernel {
         // A non-idle, non-settled turn phase with no active turn id is a broken invariant
         // (every such phase implies an active turn) — logged per the errore rule against
         // silently swallowing an unexpected condition, not silently treated as "no turn".
-        console.warn(`core/kernel: turn.phase is "${phase}" (cancelable) but activeTurnId is null`);
+        log.warn(`core/kernel: turn.phase is "${phase}" (cancelable) but activeTurnId is null`);
         return null;
       }
       return { turnId, phase, durableIntentRecorded: commitIntentRecordedAtom() };
@@ -367,7 +367,7 @@ export function createKernel(deps: KernelDeps): Kernel {
      * violated by a future change.
      */
     function warnOnGrowthPayloadMismatch(kind: EventKindV1, error: z.ZodError): void {
-      console.error(
+      log.error(
         `core/kernel: ${kind} payload failed its own schema during capability-growth tracking — ${error.message}`,
       );
     }
@@ -442,7 +442,7 @@ export function createKernel(deps: KernelDeps): Kernel {
         ) {
           const rawProjectId = parsed.data.metadata.projectId;
           if (typeof rawProjectId !== "string" || !isUuidv7(rawProjectId)) {
-            console.warn(
+            log.warn(
               `core/kernel: kernel.project.finishOpen's metadata.projectId was not a valid UUIDv7 (${JSON.stringify(rawProjectId)}) — growableProjectId left unchanged`,
             );
             return;
@@ -524,7 +524,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       };
       const growthPublished = rawEventBus.publishTransition([growthEvent]);
       if (growthPublished instanceof Error) {
-        console.error(
+        log.error(
           `core/kernel: kernel.capabilitiesChanged failed its own schema — ${growthPublished.message}`,
         );
         return published;
@@ -645,7 +645,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       // which is why the null branch above deliberately closes nothing a second time.
       if (previous !== null && previous !== session) {
         void previous.close().catch((cause: unknown) => {
-          console.warn("kernel: closing the replaced preview session failed:", cause);
+          log.warn("kernel: closing the replaced preview session failed:", cause);
         });
       }
     }
@@ -736,7 +736,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       trace("kernel.operation", { label, step: "run() resolved", eventCount: events.length });
       const published = publishOperationEvents({ counters, eventBus }, events);
       if (published instanceof Error) {
-        console.error(
+        log.error(
           `core/kernel: launchOperation "${label}" produced events that failed to publish: ${published.message}`,
         );
       }
@@ -747,7 +747,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       run: () => Promise<readonly PublishableEventV1[]>,
     ): void {
       void runLaunchedOperation(label, run).catch((cause: unknown) => {
-        console.error(
+        log.error(
           `core/kernel: launchOperation "${label}" threw unexpectedly:`,
           cause instanceof Error ? cause.message : String(cause),
         );
@@ -777,7 +777,7 @@ export function createKernel(deps: KernelDeps): Kernel {
     function publishOperationEvent(event: PublishableEventV1): void {
       const published = publishOperationEvents({ counters, eventBus }, [event]);
       if (published instanceof Error) {
-        console.error(
+        log.error(
           `core/kernel: a mid-operation "${event.kind}" event failed to publish: ${published.message}`,
         );
       }

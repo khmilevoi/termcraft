@@ -4,6 +4,7 @@ import type { EventPayloadByKindV1, FailureDtoV1, GeometryTokenV1 } from "core/p
 import { parsePageSlug } from "entities/page";
 import type { PinCreatedEvent } from "entities/pin";
 import type { Clock } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 type PinsChangedPayloadV1 = EventPayloadByKindV1["pins.changed"];
@@ -70,7 +71,7 @@ export async function createPin(
     // caller-supplied here) — this is a contract violation in whatever minted the anchor,
     // not a reachable user-input problem. Per the errore rule against silently swallowing
     // errors, it is logged before being reported as a bounded failure.
-    console.error(
+    log.error(
       `pin.create: geometry anchor pageSlug "${consumed.anchor.pageSlug}" failed to parse: ${pageSlug.message}`,
     );
     return {

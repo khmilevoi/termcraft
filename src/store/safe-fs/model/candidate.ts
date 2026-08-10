@@ -4,6 +4,8 @@ import path from "node:path";
 
 import * as errore from "errore";
 
+import { log } from "infrastructure/debug-log";
+
 import type {
   ManagedNamespace,
   ManagedRoot,
@@ -129,7 +131,7 @@ export function nodeCandidateDeps(): CandidateDeps {
             catch: (cause) => accessError("close", absPath, cause),
           });
           if (closed instanceof Error)
-            console.warn("safe-fs: source close failed:", closed.message);
+            log.warn("safe-fs: source close failed:", closed.message);
         },
       };
     },
@@ -190,7 +192,7 @@ export function nodeCandidateDeps(): CandidateDeps {
         catch: (cause) => accessError("rm", absPath, cause),
       });
       if (removed instanceof Error)
-        console.warn("safe-fs: candidate cleanup failed:", removed.message);
+        log.warn("safe-fs: candidate cleanup failed:", removed.message);
     },
   };
 }
@@ -354,7 +356,7 @@ function streamThroughHandle(input: {
 function closeThen(sink: CandidateSink, error: SafeFsError): SafeFsError {
   const closed = sink.close();
   if (closed instanceof Error)
-    console.warn("safe-fs: candidate sink close failed:", closed.message);
+    log.warn("safe-fs: candidate sink close failed:", closed.message);
   return error;
 }
 

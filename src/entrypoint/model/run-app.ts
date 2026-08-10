@@ -2,6 +2,7 @@ import * as errore from "errore";
 
 import type { AgentRegistry } from "core/ports";
 import type { UInt64String, UUIDv7 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 import { type UiRootAdapters, type UiRootHandle, createUiRoot } from "ui";
 import type { AgentHealth } from "ui/agent-health";
 import type { AnyEventEnvelope, EventEnvelopeV1, KernelPort } from "ui/kernel";
@@ -93,7 +94,7 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
       // Unreachable in practice — the UI can only issue `requestExit` after it has mounted,
       // which happens after `closeRef` below is assigned — but errore rule 21 (log a swallowed
       // error) applies to defensive branches too, not only genuine failures.
-      console.warn("termcraft: requestExit called before the shutdown path was ready");
+      log.warn("termcraft: requestExit called before the shutdown path was ready");
       return;
     }
     void closeRef();
@@ -188,7 +189,7 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
         reason: "startup-open-dispatch-failed",
         safeMessage: result.message,
       });
-      console.error(
+      log.error(
         `termcraft: the startup project.open failed to dispatch: ${result.message}`,
         result,
       );
@@ -199,7 +200,7 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
         reason: "startup-open-rejected",
         safeMessage: `request rejected (${result.code})`,
       });
-      console.error(`termcraft: the startup project.open was rejected (${result.code})`);
+      log.error(`termcraft: the startup project.open was rejected (${result.code})`);
     }
   }
 
@@ -324,12 +325,12 @@ async function cancelRunningTurnBeforeClose(shell: AppShell): Promise<void> {
   const dispatcher = createDispatcher({ port: shell.port, revision: () => peeked.stateRevision });
   const dispatched = await dispatcher.dispatch("turn.cancel", { turnId: peeked.turnId });
   if (dispatched instanceof Error) {
-    console.warn(
+    log.warn(
       `termcraft: turn.cancel dispatch failed while exiting (turn ${peeked.turnId}): ${dispatched.message}`,
       dispatched,
     );
   } else if (dispatched.status === "rejected") {
-    console.warn(
+    log.warn(
       `termcraft: turn.cancel was rejected while exiting (turn ${peeked.turnId}, code ${dispatched.code})`,
     );
   }
@@ -371,7 +372,7 @@ function peekRunningTurn(
 ): { readonly turnId: UUIDv7; readonly stateRevision: UInt64String } | null {
   const snapshot = peekSnapshotEnvelope(port);
   if (snapshot instanceof Error) {
-    console.warn(`termcraft: could not read turn state before exit: ${snapshot.message}`);
+    log.warn(`termcraft: could not read turn state before exit: ${snapshot.message}`);
     return null;
   }
   if (snapshot === null) return null;
@@ -392,13 +393,13 @@ function peekRunningTurn(
 function peekStateRevision(port: KernelPort): UInt64String {
   const snapshot = peekSnapshotEnvelope(port);
   if (snapshot instanceof Error) {
-    console.warn(
+    log.warn(
       `termcraft: could not read the Kernel's bootstrap state revision before the startup dispatch: ${snapshot.message}; falling back to "0"`,
     );
     return "0";
   }
   if (snapshot === null) {
-    console.warn(
+    log.warn(
       'termcraft: the Kernel delivered no bootstrap snapshot before the startup dispatch; falling back to "0"',
     );
     return "0";
@@ -424,14 +425,14 @@ function waitForTurnTerminal(port: KernelPort, turnId: UUIDv7, timeoutMs: number
     resolve();
   });
   if (unsubscribe instanceof Error) {
-    console.warn(
+    log.warn(
       `termcraft: could not confirm turn ${turnId} cancelled before exit: ${unsubscribe.message}`,
     );
     return Promise.resolve();
   }
 
   const timer = setTimeout(() => {
-    console.warn(
+    log.warn(
       `termcraft: timed out after ${timeoutMs}ms confirming turn ${turnId} cancelled before exit; releasing the shell anyway`,
     );
     resolve();

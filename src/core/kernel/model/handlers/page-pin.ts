@@ -14,6 +14,7 @@ import {
   reorder,
 } from "core/project/model/page-mutations";
 import type { CommandPayloadByKindV1 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
 import type { CommandOutcomeV1, FamilyHandlerMap, HandlerContext } from "./types";
 import { completedOutcome, noOpOutcome, startedOutcome } from "./types";
@@ -92,7 +93,7 @@ async function runPageRenameTitle(
   };
   const failure = await wrap(renameTitle(deps, payload.pageSlug, payload.title));
   if (failure !== undefined) {
-    console.warn(
+    log.warn(
       `core/kernel: page.renameTitle failed for "${payload.pageSlug}": ${failure.safeMessage}`,
     );
   }
@@ -123,9 +124,9 @@ async function runPageReorder(
   };
   const result = await wrap(reorder(deps, payload.pageSlugs));
   if ("code" in result) {
-    console.warn(`core/kernel: page.reorder failed: ${result.safeMessage}`);
+    log.warn(`core/kernel: page.reorder failed: ${result.safeMessage}`);
   } else if (result.kind === "invalid-permutation") {
-    console.warn("core/kernel: page.reorder rejected a non-permutation pageSlugs list");
+    log.warn("core/kernel: page.reorder rejected a non-permutation pageSlugs list");
   }
   // See this file's header — `page.descriptorsChanged` is a documented, flagged gap.
   return [];
@@ -153,14 +154,14 @@ async function runPageRemovePlan(
   // whose bytes give the plan its `sourceHash`. Reading it twice would let the two disagree.
   const pages = await wrap(readPageOrder(designReader));
   if ("code" in pages) {
-    console.warn(`core/kernel: page.removePlan could not list pages: ${pages.safeMessage}`);
+    log.warn(`core/kernel: page.removePlan could not list pages: ${pages.safeMessage}`);
     return [];
   }
   const orderedPageSlugs = pages.map((entry) => entry.slug);
 
   const source = await wrap(readPageEntrySource(designReader, payload.pageSlug, pages));
   if ("code" in source) {
-    console.warn(
+    log.warn(
       `core/kernel: page.removePlan could not read "${payload.pageSlug}": ${source.safeMessage}`,
     );
     return [];
@@ -168,7 +169,7 @@ async function runPageRemovePlan(
 
   const workspace = await wrap(projectStore.readWorkspaceState());
   if ("code" in workspace) {
-    console.warn(
+    log.warn(
       `core/kernel: page.removePlan could not read workspace state: ${workspace.safeMessage}`,
     );
     return [];
@@ -181,7 +182,7 @@ async function runPageRemovePlan(
     activePageSlug: workspace.state.activePageSlug,
   });
   if (plan instanceof Error) {
-    console.warn(`core/kernel: page.removePlan could not mint a plan: ${plan.message}`);
+    log.warn(`core/kernel: page.removePlan could not mint a plan: ${plan.message}`);
     return [];
   }
 
@@ -213,13 +214,13 @@ async function runPageRemoveConfirm(
   const result = await wrap(confirmPageRemove(deps, payload.pageRemovePlanId));
 
   if (result.kind === "failure") {
-    console.warn(`core/kernel: page.removeConfirm failed: ${result.failure.safeMessage}`);
+    log.warn(`core/kernel: page.removeConfirm failed: ${result.failure.safeMessage}`);
   } else if (result.kind === "stale") {
-    console.warn(
+    log.warn(
       `core/kernel: page.removeConfirm rejected as stale: ${result.driftedFields.join(", ")}`,
     );
   } else if (result.kind === "not-found") {
-    console.warn(
+    log.warn(
       `core/kernel: page.removeConfirm found no matching active plan for "${payload.pageRemovePlanId}"`,
     );
   }
@@ -300,11 +301,11 @@ function handlePinCreate(
     // carry a `code` field — `"code" in result` alone cannot tell them apart. `kind` exists
     // only on `CreatePinResultV1`'s two members, so it is the correct first discriminator.
     if (!("kind" in result)) {
-      console.warn(`core/kernel: pin.create failed: ${result.safeMessage}`);
+      log.warn(`core/kernel: pin.create failed: ${result.safeMessage}`);
       return [];
     }
     if (result.kind === "rejected") {
-      console.warn(`core/kernel: pin.create rejected: ${result.code}`);
+      log.warn(`core/kernel: pin.create rejected: ${result.code}`);
       return [];
     }
     return [{ kind: "pins.changed", payload: result.payload }];
@@ -334,11 +335,11 @@ async function runPinSetStatus(
 
   const resolved = await wrap(pinReader.findPageForPin(payload.pinId));
   if (resolved === null) {
-    console.warn(`core/kernel: pin.setStatus found no page for pinId "${payload.pinId}"`);
+    log.warn(`core/kernel: pin.setStatus found no page for pinId "${payload.pinId}"`);
     return [];
   }
   if (typeof resolved !== "string") {
-    console.warn(
+    log.warn(
       `core/kernel: pin.setStatus could not resolve pinId "${payload.pinId}"'s page: ${resolved.safeMessage}`,
     );
     return [];
@@ -347,7 +348,7 @@ async function runPinSetStatus(
 
   const priorEvents = await wrap(pinReader.readEvents(pageSlug));
   if ("code" in priorEvents) {
-    console.warn(
+    log.warn(
       `core/kernel: pin.setStatus could not read the pin log for "${pageSlug}": ${priorEvents.safeMessage}`,
     );
     return [];
@@ -360,11 +361,11 @@ async function runPinSetStatus(
     ),
   );
   if ("code" in result) {
-    console.warn(`core/kernel: pin.setStatus failed: ${result.safeMessage}`);
+    log.warn(`core/kernel: pin.setStatus failed: ${result.safeMessage}`);
     return [];
   }
   if (result.kind === "not-found") {
-    console.warn(
+    log.warn(
       `core/kernel: pin.setStatus found no pin "${payload.pinId}" on page "${pageSlug}"`,
     );
     return [];

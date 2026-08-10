@@ -1,3 +1,5 @@
+import { log } from "infrastructure/debug-log";
+
 import { PROTOCOL_HARD_LIMITS } from "../../protocol";
 import type { FrameIdentity, ProtocolError } from "../../protocol";
 import type { HostSessionSpec, InteractionMode, Size } from "../../types";
@@ -210,7 +212,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     ks.pendingResize = null;
     void current.resize(pending).then((result) => {
       if (result instanceof Error)
-        console.warn("host-supervisor: buffered resize flush failed:", result.message);
+        log.warn("host-supervisor: buffered resize flush failed:", result.message);
     });
   }
 
@@ -314,13 +316,13 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
           // `phase` to "failed" inside `session.ts` before this promise settled, so that case
           // still falls through below unchanged.
           if (current.phase === "ready") {
-            console.warn(
+            log.warn(
               `host-supervisor: mount(${requested}) refused, incarnation still alive:`,
               result.message,
             );
             return;
           }
-          console.warn(`host-supervisor: mount(${requested}) failed:`, result.message);
+          log.warn(`host-supervisor: mount(${requested}) failed:`, result.message);
           onIncarnationFatal(ks, result);
           return;
         }
@@ -451,7 +453,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         const current = ks.current;
         if (current === null) {
           const reason = `resize(${ks.key}) dropped — no live incarnation (state "${ks.state}")`;
-          console.warn(`host-supervisor: ${reason}`);
+          log.warn(`host-supervisor: ${reason}`);
           return Promise.resolve(new SupervisorError({ code: "TRANSPORT_ERROR", reason }));
         }
         // A dropped error is LOGGED, never swallowed (errore rule 21), AND now returned
@@ -459,7 +461,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
         // success for a resize that never reached the wire.
         return current.resize(size).then((result) => {
           if (!(result instanceof Error)) return undefined;
-          console.warn("host-supervisor: resize failed:", result.message);
+          log.warn("host-supervisor: resize failed:", result.message);
           return result instanceof SupervisorError
             ? result
             : new SupervisorError({
@@ -472,14 +474,14 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
       setMode(next: InteractionMode) {
         const current = ks.current;
         if (current === null) {
-          console.warn(
+          log.warn(
             `host-supervisor: setMode(${ks.key}) dropped — no live incarnation (state "${ks.state}")`,
           );
           return;
         }
         void current.setMode(next).then((result) => {
           if (result instanceof Error) {
-            console.warn("host-supervisor: set-mode failed:", result.message); // rejection/timeout/stale preserves the prior mode (§7)
+            log.warn("host-supervisor: set-mode failed:", result.message); // rejection/timeout/stale preserves the prior mode (§7)
             return;
           }
           if (result.body.interactionMode === next) ks.interactionMode = next;
@@ -520,7 +522,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
       }
       // Budget was already reset by policy.retry above, but there is no slot and no
       // queue room; the retry cannot proceed. Never silently drop (errore rule 21).
-      console.warn(
+      log.warn(
         `host-supervisor: retry(${ks.key}) dropped — global host limit ${maxGlobalHosts} reached and start queue full`,
       );
       return;
@@ -536,7 +538,7 @@ export function createHostSupervisor(deps: HostSupervisorDeps): HostSupervisor {
     // the caller this resize was accepted, so an abandoned value must leave a trace,
     // never vanish silently (errore rule 21).
     if (ks.pendingResize !== null) {
-      console.warn(
+      log.warn(
         `host-supervisor: close(${ks.key}) dropped a buffered resize ` +
           `(${ks.pendingResize.w}x${ks.pendingResize.h}) — the session is closing`,
       );

@@ -9,6 +9,7 @@ import {
 import type { ChatSummaryV1 } from "core/chats";
 import type { PublishableEventV1 } from "core/mailbox";
 import type { EventPayloadByKindV1, FailureDtoV1 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
 import type { CommandHandler, FamilyHandlerMap, HandlerContext } from "./types";
 import { startedOutcome } from "./types";
@@ -167,7 +168,7 @@ async function loadActiveChatTail(
 ): Promise<ActiveChatTail | null> {
   const handle = await wrap(context.deps.chatReader.open(chatId));
   if ("code" in handle) {
-    console.warn(
+    log.warn(
       `core/kernel: chat.switch could not open chatId ${chatId} to load its tail: ${handle.safeMessage}`,
     );
     return null;
@@ -175,7 +176,7 @@ async function loadActiveChatTail(
 
   const loadResult = await wrap(handle.loadTail());
   if ("code" in loadResult) {
-    console.warn(
+    log.warn(
       `core/kernel: chat.switch could not load the tail for chatId ${chatId}: ${loadResult.safeMessage}`,
     );
     return null;
@@ -188,7 +189,7 @@ async function loadActiveChatTail(
   // success side includes primitives/`null` (`core/ports/fakes/projections.ts`,
   // `store/transaction/model/plan.ts`).
   if (displayName !== null && typeof displayName === "object") {
-    console.warn(
+    log.warn(
       `core/kernel: chat.switch could not resolve chatId ${chatId}'s true first-page display name: ${displayName.safeMessage}`,
     );
     return null;
@@ -232,7 +233,7 @@ export async function mintActiveChat(
     context.deps.projectStore.writeWorkspaceState({ activeChatId: header.chatId }),
   );
   if (persistFailure !== undefined) {
-    console.warn(
+    log.warn(
       `core/kernel: mintActiveChat succeeded but persisting the active chat failed: ${persistFailure.safeMessage}`,
     );
   }
@@ -270,7 +271,7 @@ const handleChatCreate: CommandHandler<"chat.create"> = (_payload, context) => {
   context.launchOperation("kernel.chat.create", async () => {
     const minted = await wrap(mintActiveChat(context));
     if ("code" in minted) {
-      console.warn(`core/kernel: chat.create failed: ${minted.safeMessage}`);
+      log.warn(`core/kernel: chat.create failed: ${minted.safeMessage}`);
       return [];
     }
     return minted.events;
@@ -283,7 +284,7 @@ const handleChatSwitch: CommandHandler<"chat.switch"> = (payload, context) => {
   context.launchOperation("kernel.chat.switch", async () => {
     const switchFailure = await wrap(context.deps.chatMutations.switchActive(payload.chatId));
     if (switchFailure !== undefined) {
-      console.warn(`core/kernel: chat.switch failed: ${switchFailure.safeMessage}`);
+      log.warn(`core/kernel: chat.switch failed: ${switchFailure.safeMessage}`);
       return [];
     }
 
@@ -293,7 +294,7 @@ const handleChatSwitch: CommandHandler<"chat.switch"> = (payload, context) => {
       }),
     );
     if (persistFailure !== undefined) {
-      console.warn(
+      log.warn(
         `core/kernel: chat.switch succeeded but persisting the active chat failed: ${persistFailure.safeMessage}`,
       );
     }
@@ -343,7 +344,7 @@ const handleChatLoadOlder: CommandHandler<"chat.load-older"> = (payload, context
   context.launchOperation("kernel.chat.loadOlder", async () => {
     const handle = await wrap(context.deps.chatReader.open(payload.chatId));
     if ("code" in handle) {
-      console.warn(
+      log.warn(
         `core/kernel: chat.load-older could not open chatId ${payload.chatId}: ${handle.safeMessage}`,
       );
       return [chatRecordsOlderEvent(chatRecordsOlderFailurePayload(payload.chatId, handle))];
@@ -351,7 +352,7 @@ const handleChatLoadOlder: CommandHandler<"chat.load-older"> = (payload, context
 
     const loadResult = await wrap(handle.loadBefore(payload.cursor));
     if ("code" in loadResult) {
-      console.warn(
+      log.warn(
         `core/kernel: chat.load-older could not load the page before ${payload.cursor.beforeOffset} for chatId ${payload.chatId}: ${loadResult.safeMessage}`,
       );
       return [chatRecordsOlderEvent(chatRecordsOlderFailurePayload(payload.chatId, loadResult))];

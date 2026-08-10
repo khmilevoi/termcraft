@@ -12,7 +12,7 @@ import type {
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
 import type { ChatAgentRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { TurnDeadlines } from "./deadlines";
 import { toFinalizeReadSet } from "./read-set";
@@ -57,7 +57,7 @@ import { toFinalizeReadSet } from "./read-set";
  * returning `{kind:"committed"}` — never on the `{kind:"illegal"}`/`{kind:"failed"}` exits,
  * since those never reach a committed outcome (a CAS-mismatch/deadline failure instead
  * bridges into `terminalizing`, where `terminalize.ts`'s own call retires it later). A
- * retire failure is REPORTED via `console.warn`, never propagated: the turn's outcome does
+ * retire failure is REPORTED via `log.warn`, never propagated: the turn's outcome does
  * not retroactively fail over a cleanup problem (errore rule: an error that is not
  * propagated must still leave a trace). `staging` is REQUIRED (review finding #4 — an
  * optional dependency here was never actually threaded through by any real caller, silently
@@ -149,7 +149,7 @@ async function retireFinalizedCandidate(
 ): Promise<void> {
   const retired = await wrap(staging.retireCandidate(candidateRoot));
   if (retired !== undefined)
-    console.warn("finalizeTurn: candidate retirement failed:", retired.safeMessage);
+    log.warn("finalizeTurn: candidate retirement failed:", retired.safeMessage);
 }
 
 function translationFailure(reason: string): FailureDtoV1 {

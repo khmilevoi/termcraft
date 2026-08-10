@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  installConsoleTee,
-  resumeConsolePassthrough,
-  suspendConsolePassthrough,
-} from "infrastructure/debug-log";
-import type { TeeSink } from "infrastructure/debug-log";
+import { resumeConsolePassthrough, suspendConsolePassthrough } from "infrastructure/debug-log";
 
 import type { ShutdownSignal } from "../types";
 import { createProcessBoundary } from "./process-boundary";
@@ -177,38 +172,29 @@ describe("createProcessBoundary", () => {
 });
 
 /**
- * The renderer suspends the debug-log tee's console pass-through for as long as it owns the
- * terminal (`infrastructure/debug-log`'s `suspendConsolePassthrough`, engaged by
- * `ui/app/model/root.tsx`). A panic never reaches that renderer's `dispose()` — `restoreTerminal`
- * is the ONLY thing that runs — so if it did not also hand the writer back, `reportFatal`'s own
- * `console.error` would land in the trace file and the operator would be left with a restored
- * but completely blank terminal, which is a worse failure than the torn frame the suspension
- * exists to prevent.
+ * `reportFatal` reports through `log.error` (`infrastructure/debug-log`), which
+ * `suspendConsolePassthrough`/`resumeConsolePassthrough` gate for as long as the renderer owns
+ * the terminal (engaged by `ui/app/model/render-root.tsx`). A panic never reaches that
+ * renderer's `dispose()` — `restoreTerminal` is the ONLY thing that runs — so if it did not also
+ * hand the writer back (`resumeConsolePassthrough()`, called from inside `restoreTerminal`
+ * itself, before `reportFatal` prints anything), the failure would land in the trace file only
+ * and the operator would be left staring at a restored but completely blank terminal, which is a
+ * worse failure than the torn frame the suspension exists to prevent.
  *
- * Asserted through the REAL tee, not a spy: the writer double is installed BEFORE the tee, so it
- * is what the tee captured as its `original`, and reaching it is the same thing as reaching the
- * terminal in production.
+ * Asserted by suspending BEFORE the panic fires and observing that the printed line still
+ * reaches the real writer double — proof that `restoreTerminal` resumes the gate itself rather
+ * than relying on some caller further up the stack to do it.
  */
-describe("createProcessBoundary with a suspended console tee", () => {
-  function withSuspendedTee(printed: string[], run: () => void): void {
-    // All five, not just `error`: `installConsoleTee` wraps every method it covers, so restoring
-    // only the one this suite asserts on would leave four live wrappers behind it.
-    const originals = {
-      log: console.log,
-      info: console.info,
-      warn: console.warn,
-      error: console.error,
-      debug: console.debug,
-    } as const;
+describe("createProcessBoundary with a suspended log gate", () => {
+  function withSuspendedGate(printed: string[], run: () => void): void {
+    const original = console.error;
     console.error = (...args: unknown[]) => printed.push(String(args[0]));
-    const sink: TeeSink = { enabled: () => true, trace: () => undefined };
-    installConsoleTee(sink);
     suspendConsolePassthrough();
     try {
       run();
     } finally {
       resumeConsolePassthrough();
-      Object.assign(console, originals);
+      console.error = original;
     }
   }
 
@@ -216,7 +202,7 @@ describe("createProcessBoundary with a suspended console tee", () => {
     const { target, handlers } = fakeTarget();
     const printed: string[] = [];
 
-    withSuspendedTee(printed, () => {
+    withSuspendedGate(printed, () => {
       createProcessBoundary(target, fakeTerminal([]), fakeExit([]));
       handlers.get("uncaughtException")?.(new Error("boom"));
     });
@@ -228,7 +214,7 @@ describe("createProcessBoundary with a suspended console tee", () => {
     const { target } = fakeTarget();
     const printed: string[] = [];
 
-    withSuspendedTee(printed, () => {
+    withSuspendedGate(printed, () => {
       const boundary = createProcessBoundary(target, fakeTerminal([]), fakeExit([]));
       boundary.reportFatal("startup failed", null);
     });
@@ -249,7 +235,7 @@ describe("createProcessBoundary with a suspended console tee", () => {
     const printed: string[] = [];
     const exits: string[] = [];
 
-    withSuspendedTee(printed, () => {
+    withSuspendedGate(printed, () => {
       createProcessBoundary(
         target,
         {

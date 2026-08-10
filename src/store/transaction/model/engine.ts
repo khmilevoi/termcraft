@@ -4,6 +4,7 @@ import path from "node:path";
 import * as errore from "errore";
 import { z } from "zod";
 
+import { log } from "infrastructure/debug-log";
 import type { DurabilityError } from "infrastructure/durability";
 import { durableFileWrite, flushDir } from "infrastructure/durability";
 import { sha256Hex } from "store/jsonl";
@@ -724,7 +725,7 @@ export async function rollForwardTransaction(deps: TransactionFsDeps, input: Rol
           String(outcome.reason),
         );
         if (marked instanceof Error)
-          console.warn("transaction: failed to record conflict marker:", marked.message);
+          log.warn("transaction: failed to record conflict marker:", marked.message);
         return outcome;
       }
       return asPostIntentFailure(plan.transactionId, outcome);

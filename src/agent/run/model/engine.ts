@@ -2,7 +2,7 @@ import * as errore from "errore";
 
 import type { AgentRun, AgentRunOutcome } from "agent/types";
 import type { TurnFence } from "entities/turn";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { NaturalOutcome, RunDeps, RunDriver, RunSink } from "../types";
 import { createEventQueue } from "./event-queue";
@@ -98,7 +98,7 @@ export function startAgentRun(
       resolveOutcome(outcome);
       return;
     }
-    console.warn(
+    log.warn(
       `agent/run: exit not confirmed after natural ${outcome.kind}, escalating to terminate() before reporting an outcome`,
     );
     const reconfirmed = await escalateAndConfirm(deps.processTree, deps.wait, confirmTimeoutMs);
@@ -145,7 +145,7 @@ export function startAgentRun(
   async function runDriver(): Promise<void> {
     const driverPromise = driver(sink).catch((cause) => {
       // Backstop only: a driver is expected to convert its own boundary throws.
-      console.warn("agent/run: driver threw past its own boundary:", describeThrown(cause));
+      log.warn("agent/run: driver threw past its own boundary:", describeThrown(cause));
       if (latch("natural")) {
         // DIAGNOSTIC (infrastructure/debug-log): the driver threw past its own boundary -- a bug in the
         // vendor adapter, not an ordinary agent failure. This backstop path is expected to be rare.
@@ -177,7 +177,7 @@ export function startAgentRun(
       driverPromise,
       claimedSignal.then(() =>
         deps.wait(DRIVER_RETURN_GRACE_MS).catch((cause) => {
-          console.warn(
+          log.warn(
             "agent/run: injected wait() rejected during the driver-return grace period:",
             describeThrown(cause),
           );

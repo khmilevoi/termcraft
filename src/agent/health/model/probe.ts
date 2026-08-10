@@ -1,7 +1,7 @@
 import * as errore from "errore";
 
 import type { AgentInfo } from "agent/types";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { HealthProbeDeps, HealthProbeReader } from "../types";
 import { withProbeDeadline } from "./deadline";
@@ -77,7 +77,7 @@ export async function runHealthProbe(
   deps.processTree?.close();
 
   if (errore.isAbortError(result)) {
-    console.warn("agent/health: probe aborted without a confirmed verdict:", result.message);
+    log.warn("agent/health: probe aborted without a confirmed verdict:", result.message);
     const info = inconclusive(backendId);
     // DIAGNOSTIC (infrastructure/debug-log): the probe deadline aborted it before it could classify
     // anything -- recorded as its own reason, distinct from a genuine stream failure.
@@ -88,7 +88,7 @@ export async function runHealthProbe(
   if (result instanceof Error) {
     // Swallowed (the probe never throws) — logged so a broken CLI/spawn path
     // stays visible, per errore's "log what you don't propagate".
-    console.warn("agent/health: probe stream failed:", result.message);
+    log.warn("agent/health: probe stream failed:", result.message);
     const notInstalled = /ENOENT|not found|spawn/i.test(result.message);
     const info: AgentInfo = {
       backendId,
@@ -111,7 +111,7 @@ export async function runHealthProbe(
     // echo — a reader that returns a mismatched id would otherwise pass
     // straight through and misattribute this verdict to the wrong backend.
     if (result.backendId !== backendId) {
-      console.warn(
+      log.warn(
         `agent/health: probe verdict backendId mismatch (expected "${backendId}", got "${result.backendId}"); substituting the expected id`,
       );
       const info = { ...result, backendId };

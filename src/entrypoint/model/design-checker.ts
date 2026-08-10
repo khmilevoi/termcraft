@@ -16,6 +16,7 @@ import type { DesignFileEntryV1 } from "entities/design-tree";
 // IMPORTED, NEVER RE-SPELLED: `gate` owns this code, and a local literal is exactly how the memo
 // guard below would go silently dead after a rename there. See that constant's own doc.
 import { TYPE_CHECK_UNAVAILABLE_CODE } from "gate";
+import { log } from "infrastructure/debug-log";
 
 /**
  * THE COMPOSITION ROOT'S ANSWER TO `agent`'s `DesignCheckerPort` (spec WP-10, Task 12).
@@ -172,7 +173,7 @@ function readTreeFiles(treeRoot: string): DesignTreeUnreadableError | TreeReadV1
 function fingerprintTree(read: TreeReadV1): string | null {
   const inventory = createDesignTreeInventory(read.entries);
   if (inventory instanceof Error) {
-    console.warn(
+    log.warn(
       `entrypoint/design-checker: could not fingerprint the tree (${inventory.message}); running the check uncached`,
     );
     return null;

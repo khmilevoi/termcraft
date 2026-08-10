@@ -1,3 +1,5 @@
+import { log } from "infrastructure/debug-log";
+
 import type { FrameIdentity } from "../../protocol";
 import type { HostSessionSpec, InteractionMode, PreviewIdentity, Size } from "../../types";
 import type { GeometryQuery, HostSessionDeps, PreviewSession } from "../types";
@@ -38,7 +40,7 @@ export function createPreviewSession(spec: HostSessionSpec, deps: HostSessionDep
   void session.start().then((outcome) => {
     if (outcome instanceof Error) {
       if (deps.onFatal) deps.onFatal(outcome);
-      else console.warn("preview-session: startup failed:", outcome.message);
+      else log.warn("preview-session: startup failed:", outcome.message);
       return;
     }
     const echoed = outcome.ready.body.interactionMode;
@@ -62,13 +64,13 @@ export function createPreviewSession(spec: HostSessionSpec, deps: HostSessionDep
       // backpressure surface until 2D-3) but a dropped error is LOGGED, never swallowed.
       void session.resize(size).then((result) => {
         if (result instanceof Error)
-          console.warn("preview-session: resize failed:", result.message);
+          log.warn("preview-session: resize failed:", result.message);
       });
     },
     setMode(next: InteractionMode) {
       void session.setMode(next).then((result) => {
         if (result instanceof Error) {
-          console.warn("preview-session: set-mode failed:", result.message); // rejection/timeout/stale preserves the prior mode (§7)
+          log.warn("preview-session: set-mode failed:", result.message); // rejection/timeout/stale preserves the prior mode (§7)
           return;
         }
         if (result.body.interactionMode === next) interactionMode = next;

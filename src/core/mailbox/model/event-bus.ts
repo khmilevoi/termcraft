@@ -11,6 +11,7 @@ import {
   eventPayloadV1SchemaByKind,
   isEventKindV1,
 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
 /**
  * The Kernel's in-process control-event mailbox (kernel-command-contract §9, §13.3).
@@ -244,7 +245,7 @@ export function createEventBus({ counters, buildSnapshotPayload }: EventBusDeps)
       catch: (cause: Error) => new EventBusSubscriberError({ kind: envelope.kind, cause }),
     });
     if (failure instanceof Error) {
-      console.warn(`core/mailbox: subscriber threw on ${envelope.kind}:`, failure.message);
+      log.warn(`core/mailbox: subscriber threw on ${envelope.kind}:`, failure.message);
     }
   }
 

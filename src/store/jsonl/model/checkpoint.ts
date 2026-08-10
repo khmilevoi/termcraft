@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import * as errore from "errore";
 
 import type { ChatRecord } from "entities/chat";
+import { log } from "infrastructure/debug-log";
 import type { SessionCheckpoint } from "store/toml";
 
 import type { Sha256Hex } from "../types";
@@ -203,7 +204,7 @@ export function evaluateSessionResume(input: {
   if (document instanceof Error) {
     // Swallowed by design: §6.2 turns every gate failure into a `fresh` decision rather than
     // an error return. Log so the underlying corruption verdict is still diagnosable.
-    console.warn("checkpoint: resume refused, chat log unreadable:", document.message);
+    log.warn("checkpoint: resume refused, chat log unreadable:", document.message);
     return fresh("corrupt-log", emptySeed());
   }
   if (document.header === null) return fresh("corrupt-log", emptySeed());
@@ -222,7 +223,7 @@ export function evaluateSessionResume(input: {
   if (computed instanceof Error) {
     // The record-count check above already passed, so too few complete lines here means the
     // decoded record count and the physical line count disagree — worth a trace, not an error.
-    console.warn("checkpoint: resume refused, prefix not hashable:", computed.message);
+    log.warn("checkpoint: resume refused, prefix not hashable:", computed.message);
     return fresh("changed-prefix", seed());
   }
   if (computed.prefixHash !== checkpoint.prefixHash) return fresh("changed-prefix", seed());

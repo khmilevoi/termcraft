@@ -1,4 +1,5 @@
 import type { CommandKindV1, UnavailableReason } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
 import type { KernelStateSnapshot } from "../types";
 
@@ -73,7 +74,7 @@ export function turnLockedReason(
 
   const { activeTurnId } = state.turn;
   if (activeTurnId === null) {
-    console.warn(
+    log.warn(
       `turnLockedReason: turn.phase is "${state.turn.phase}" (non-idle) but activeTurnId is null; ` +
         `locking "${kind}" with CAPABILITY_UNAVAILABLE instead of a fabricated turnId`,
     );

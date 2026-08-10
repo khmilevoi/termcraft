@@ -10,6 +10,7 @@ import {
   type UUIDv7,
   isUuidv7,
 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 import type { AnyEventEnvelope } from "ui/kernel";
 import { hostFailureCodeOf, isDesignRenderFailure } from "ui/preview";
 
@@ -308,7 +309,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         (entry) => entry.kind === "step" && entry.id === content.id,
       );
       if (index === -1) {
-        console.warn(
+        log.warn(
           `ui/mirror: turn.progress tool-failed named id ${content.id}, which is not a step in the current timeline — dropped`,
         );
         return;
@@ -430,7 +431,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
           // overwritten by that later event for this same turn — see {@link seedOrPreserveClock}.
           const turnId = envelope.correlation?.turnId;
           if (turnId === undefined) {
-            console.warn(
+            log.warn(
               "ui/mirror: kernel.turn.beginAdmission carried no correlation.turnId — turn phase left unchanged",
             );
             return;
@@ -453,7 +454,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         if (p.action === "kernel.project.finishOpen") {
           const projectId = readMetadataProjectId(p.metadata);
           if (projectId === undefined) {
-            console.warn(
+            log.warn(
               "ui/mirror: kernel.project.finishOpen's metadata.projectId was not a valid UUIDv7 — project.projectId left unchanged",
             );
             return;
@@ -491,7 +492,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
           // (`project.close`, back to `closed`) so Enter works again.
           const openFailure = readMetadataOpenFailure(p.metadata);
           if (openFailure === undefined) {
-            console.warn(
+            log.warn(
               "ui/mirror: kernel.project.blockOpen carried no readable {reason, failure} metadata — project.openFailure left unchanged",
             );
             return;
@@ -502,7 +503,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         if (p.action === "kernel.project.setTrust") {
           const trust = readMetadataTrust(p.metadata);
           if (trust === undefined) {
-            console.warn(
+            log.warn(
               'ui/mirror: kernel.project.setTrust\'s metadata.trust was neither "trusted" nor "untrusted-read-only" — project.trust left unchanged',
             );
             return;

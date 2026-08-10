@@ -3,6 +3,7 @@ import type { EventPayloadByKindV1, FailureDtoV1 } from "core/protocol";
 import type { PageSlug } from "entities/page";
 import type { PinEvent, PinStatusEvent } from "entities/pin";
 import type { Clock } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import { projectPinEvents } from "./pin-projection";
@@ -89,7 +90,7 @@ export async function setPinStatus(
     // The append succeeded and `before` found this exact pinId — `after` failing to find it
     // now would mean the fold disagrees with itself between two adjacent calls, which is a
     // contract violation in this module's own fold, not a reachable input-data problem.
-    console.error(
+    log.error(
       `core/pins: pinId ${input.pinId} vanished from the fold immediately after its own status append`,
     );
     return {

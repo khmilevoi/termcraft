@@ -21,6 +21,7 @@ import path from "node:path";
 import * as errore from "errore";
 import { z } from "zod";
 
+import { log } from "infrastructure/debug-log";
 import type { DurabilityError } from "infrastructure/durability";
 
 import type { ChatIndexPage, ChatIndexPageStore, ChatIndexState } from "../types";
@@ -182,12 +183,12 @@ export function createNodeChatIndexPageStore(
         catch: (cause) => new Error("not valid JSON", { cause }),
       });
       if (parsed instanceof Error) {
-        console.warn("chat-index cache: page ignored (miss):", target, parsed.message);
+        log.warn("chat-index cache: page ignored (miss):", target, parsed.message);
         return null;
       }
       const decoded = chatIndexPageSchema.safeParse(parsed);
       if (!decoded.success) {
-        console.warn(
+        log.warn(
           "chat-index cache: page ignored (miss):",
           target,
           "does not match the page schema",
@@ -220,7 +221,7 @@ export function createNodeChatIndexStateStore(
       const target = stateJsonPath(root, chatId);
       const bytes = fs.readFile(target);
       if (bytes instanceof Error) {
-        console.warn("chat-index cache: state ignored (miss):", target, bytes.message);
+        log.warn("chat-index cache: state ignored (miss):", target, bytes.message);
         return null;
       }
       if (bytes === null) return null;
@@ -230,12 +231,12 @@ export function createNodeChatIndexStateStore(
         catch: (cause) => new Error("not valid JSON", { cause }),
       });
       if (parsed instanceof Error) {
-        console.warn("chat-index cache: state ignored (miss):", target, parsed.message);
+        log.warn("chat-index cache: state ignored (miss):", target, parsed.message);
         return null;
       }
       const decoded = chatIndexStateSchema.safeParse(parsed);
       if (!decoded.success) {
-        console.warn(
+        log.warn(
           "chat-index cache: state ignored (miss):",
           target,
           "does not match the state schema",

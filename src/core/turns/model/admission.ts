@@ -13,7 +13,7 @@ import type { ChatUserRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
 import type { Pin } from "entities/pin";
 import type { Clock } from "infrastructure/clock";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { AdmissionCandidatePinV1, AdmissionInputV1, AdmissionOutcomeV1 } from "../types";
@@ -105,7 +105,7 @@ async function resolveOpenPins(
   for (const pageSlug of pageSlugs) {
     const pins = await wrap(pinReader.fold(pageSlug));
     if ("code" in pins) {
-      console.warn(
+      log.warn(
         `admission: dropping candidate pins on page "${pageSlug}" — fold failed: ${pins.safeMessage}`,
       );
       continue;
@@ -243,7 +243,7 @@ export async function runAdmission(
     // caller reports.
     const retired = await wrap(deps.staging.retireWorkspace(workspace));
     if (retired !== undefined) {
-      console.warn(
+      log.warn(
         `admission: could not retire the staged workspace for cancelled turn ${turnId}: ${retired.safeMessage}`,
       );
     }

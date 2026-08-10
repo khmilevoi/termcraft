@@ -17,6 +17,7 @@ import {
   decodeCommandEnvelope,
   primaryReason,
 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
 import type {
   GuardRegistry,
@@ -162,7 +163,7 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
         // cannot represent in `CommandResultV1` (there is no rejection code for "the
         // handler misbehaved") — logged per the errore rule against silently swallowing
         // an error that is not otherwise propagated, then the events are discarded.
-        console.warn(
+        log.warn(
           `core/mailbox: handler for "${envelope.kind}" returned events with disposition "no-op" — discarding them`,
         );
       }
@@ -235,7 +236,7 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
       // schema — a contract violation on the PRODUCER's side, not a reachable protocol
       // outcome for a well-formed Kernel. Logged loudly rather than swallowed; the
       // accepted result still reflects the state change that genuinely occurred.
-      console.error(
+      log.error(
         `core/mailbox: publishTransition rejected "${envelope.kind}"'s events after the revision already ` +
           `advanced to ${resultingRevision}:`,
         published.message,
@@ -274,7 +275,7 @@ export function createDispatch(deps: DispatchDeps): Dispatch {
       // violation the caller cannot act on, so it is logged loudly and reported as the
       // §11.1 typed fallback rather than as a protocol-level rejection code that would
       // misattribute the failure to the command.
-      console.error(`core/mailbox: dispatch of "${envelope.kind}" threw:`, outcome.message);
+      log.error(`core/mailbox: dispatch of "${envelope.kind}" threw:`, outcome.message);
       return rejected(envelope.commandId, deps.counters.stateRevision(), "CAPABILITY_UNAVAILABLE", [
         { code: "CAPABILITY_UNAVAILABLE" },
       ]);
@@ -433,7 +434,7 @@ function buildRevisionRejectionReason(
       // keeps this module from inventing a turnId the guard itself did not report.
       const active = cancelProbe.activeTurn();
       if (active === null) {
-        console.warn(
+        log.warn(
           `core/mailbox: cancel probe reported no active turn while building a ${decision.code} reason`,
         );
         return { code: "CAPABILITY_UNAVAILABLE" };
@@ -467,7 +468,7 @@ function dedupeReasonFor(code: string | number): UnavailableReason {
   if (code === "COMMAND_ID_REUSE_MISMATCH") return { code };
   if (code === "COMMAND_ID_EXPIRED") return { code };
   if (code === "COMMAND_DEDUPE_CAPACITY") return { code };
-  console.warn(
+  log.warn(
     `core/mailbox: unexpected dedupe rejection code "${String(code)}" — falling back to CAPABILITY_UNAVAILABLE`,
   );
   return { code: "CAPABILITY_UNAVAILABLE" };

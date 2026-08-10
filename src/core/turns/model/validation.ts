@@ -20,7 +20,7 @@ import type {
 } from "core/ports";
 import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol";
 import type { DesignFileEntryV1, DesignTreeInventoryV1 } from "entities/design-tree";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import { selectChangedPages } from "./candidate";
 
@@ -514,7 +514,7 @@ export async function runTurnValidation(
   if (canRetryAfterGate(input.attempt)) {
     const retried = deps.machine.apply("retryAfterGate");
     if (retried.kind === "illegal") {
-      console.warn(
+      log.warn(
         `core/turns/validation: retryAfterGate illegal (${retried.code}) for turn ${input.turnId}`,
       );
     }

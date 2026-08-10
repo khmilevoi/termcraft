@@ -16,6 +16,7 @@ import {
 } from "entities/design-tree";
 import type { ClosureV1, DesignFileEntryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 // Relative (not `gate`'s own barrel): `gate/index.ts` re-exports this adapter (Task 6's own
 // change), so importing the barrel back from here would be a self-referencing cycle.
@@ -870,7 +871,7 @@ function lintFileDeterminism(relPath: string, source: string): readonly GateWarn
     catch: (cause) => new DeterminismLintUnreadableError({ file: relPath, cause }),
   });
   if (linted instanceof Error) {
-    console.warn(
+    log.warn(
       `gate/adapters/gate-runner: ${linted.message} — the flat allowlist scan already carries this file's own UNSCANNABLE_SOURCE fatal, so no determinism/silencing-any warning is manufactured for it`,
     );
     return [];

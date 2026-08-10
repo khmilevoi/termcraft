@@ -36,6 +36,7 @@ import path from "node:path";
 import * as errore from "errore";
 import { z } from "zod";
 
+import { log } from "infrastructure/debug-log";
 import { durableFileWrite } from "infrastructure/durability";
 import { MiB } from "store/safe-fs";
 
@@ -264,7 +265,7 @@ function scanEntries(
     if (bytes instanceof Error) {
       // A real read failure (permissions, I/O) — not the benign vanished-entry case below.
       // The sweep still proceeds over the remaining entries, so the error must leave a trace.
-      console.warn(
+      log.warn(
         "render-cache: quota sweep skipped an unreadable entry:",
         entryFile,
         bytes.message,
@@ -281,7 +282,7 @@ function scanEntries(
     if (decoded === null || !decoded.success) {
       const removed = fsDeps.remove(entryFile);
       if (removed instanceof Error)
-        console.warn("render-cache: corrupt entry cleanup failed:", removed.message);
+        log.warn("render-cache: corrupt entry cleanup failed:", removed.message);
       continue;
     }
     entries.push({
@@ -313,7 +314,7 @@ function enforceQuota(input: {
     if (remaining <= input.quotaBytes) break;
     const removed = input.fsDeps.remove(entry.path);
     if (removed instanceof Error) {
-      console.warn("render-cache: eviction failed, leaving entry in place:", removed.message);
+      log.warn("render-cache: eviction failed, leaving entry in place:", removed.message);
       continue;
     }
     remaining -= entry.byteLength;
@@ -365,13 +366,13 @@ export function createRenderCache(deps: RenderCacheDeps): RenderCache {
         catch: (cause) => new Error("not valid JSON", { cause }),
       });
       if (parsed instanceof Error) {
-        console.warn("render-cache: entry ignored (miss):", target, parsed.message);
+        log.warn("render-cache: entry ignored (miss):", target, parsed.message);
         return null;
       }
 
       const decoded = envelopeSchema.safeParse(parsed);
       if (!decoded.success) {
-        console.warn(
+        log.warn(
           "render-cache: entry ignored (miss):",
           target,
           "does not match the envelope schema",
@@ -381,7 +382,7 @@ export function createRenderCache(deps: RenderCacheDeps): RenderCache {
       const envelope = decoded.data;
 
       if (envelope.storeGeneration !== generation) {
-        console.warn(
+        log.warn(
           "render-cache: entry ignored (miss):",
           target,
           `store generation ${envelope.storeGeneration} !== ${generation}`,
@@ -389,7 +390,7 @@ export function createRenderCache(deps: RenderCacheDeps): RenderCache {
         return null;
       }
       if (!sameKey(envelope.key, key)) {
-        console.warn(
+        log.warn(
           "render-cache: entry ignored (miss):",
           target,
           "key mismatch (hash collision or tampering)",
@@ -401,7 +402,7 @@ export function createRenderCache(deps: RenderCacheDeps): RenderCache {
       const textFrame = decodeBuffer(envelope.textFrame);
       const layout = decodeBuffer(envelope.layout);
       if (styledFrame === null || textFrame === null || layout === null) {
-        console.warn(
+        log.warn(
           "render-cache: entry ignored (miss):",
           target,
           "a buffer failed its length/checksum verification",
@@ -446,7 +447,7 @@ export function createRenderCache(deps: RenderCacheDeps): RenderCache {
 
       const scanned = scanEntries(deps.root, deps.fs);
       if (scanned instanceof Error) {
-        console.warn("render-cache: quota sweep failed:", scanned.message);
+        log.warn("render-cache: quota sweep failed:", scanned.message);
         return undefined;
       }
       enforceQuota({ entries: scanned, quotaBytes, keepPath: target, isPinned, fsDeps: deps.fs });

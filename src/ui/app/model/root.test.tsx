@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { installConsoleTee, resumeConsolePassthrough } from "infrastructure/debug-log";
+import { createLogger, resumeConsolePassthrough } from "infrastructure/debug-log";
 import type { TeeSink } from "infrastructure/debug-log";
 import { createFakeKernel } from "ui/testing";
 
@@ -140,50 +140,39 @@ describe("createUiRoot", () => {
 });
 
 /**
- * The renderer's terminal ownership, observed through the REAL tee rather than a spy on a flag:
- * a `console.warn` issued while the root is alive must reach the trace sink and never the writer
- * that stands in for the terminal, and the same call after `dispose()` must reach both.
+ * The renderer's terminal ownership, observed through a real `log.*` seam rather than a spy on a
+ * flag: a `logger.warn` issued while the root is alive must reach the trace sink and never the
+ * writer that stands in for the terminal, and the same call after `dispose()` must reach both.
  *
- * `createUiRoot` calls `installConsoleTee()` with the DEFAULT sink, which is disabled under
- * `bun test` (`infrastructure/debug-log/model/sink.ts`'s test-runner exclusion). That does NOT
- * make the call a no-op — since the hold-buffer change, a disabled sink still installs, because
- * the wrapper is the gate. What keeps these tests' own tee in place is wrapper IDENTITY: each
- * case below pre-installs with an enabled fake sink through `teeInto`, and `installConsoleTee`
- * wraps ALL FIVE methods it covers and records all five in `installedWrappers`, so
- * `createUiRoot`'s own install (`console-tee.ts:186`) skips every one of them. No method ends up
- * on a default-sink wrapper here — which is exactly why the fake sink still sees the traced line
- * this suite asserts on, and why `afterEach` has to restore all five and not only `warn`.
+ * `createUiRoot`/`mountRenderRoot` no longer install anything onto `console` (2026-08-10 —
+ * `console-tee.ts`'s monkey-patch was replaced by `infrastructure/debug-log`'s `log`/
+ * `createLogger`, called directly by app code instead of intercepted). What these tests exercise
+ * is the suspend/resume gate itself: `createLogger` builds a `log`-shaped object wired to a fake
+ * sink, and `console.warn` is swapped for a recorder standing in for the real terminal — the same
+ * module-level `passthrough`/hold-buffer state `mountRenderRoot`'s own `suspendConsolePassthrough`/
+ * `resumeConsolePassthrough` calls gate underneath.
  */
 describe("createUiRoot terminal ownership", () => {
-  // All five, not just `warn`: `installConsoleTee` wraps every method it covers, so restoring
-  // only the one this suite asserts on would leave four live wrappers holding these tests'
-  // recorder closures for the rest of the runner process.
-  const ORIGINALS = {
-    log: console.log,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-  } as const;
+  const ORIGINAL_WARN = console.warn;
 
   afterEach(() => {
-    Object.assign(console, ORIGINALS);
+    console.warn = ORIGINAL_WARN;
     resumeConsolePassthrough();
   });
 
-  function teeInto(traced: string[], screen: unknown[]): void {
+  function loggerOnto(traced: string[], screen: unknown[]) {
     console.warn = (...args: unknown[]) => screen.push(...args);
     const sink: TeeSink = {
       enabled: () => true,
       trace: (channel, data) => traced.push(`${channel}:${JSON.stringify(data.args)}`),
     };
-    installConsoleTee(sink);
+    return createLogger(sink);
   }
 
-  test("suspends console pass-through while mounted and restores it on dispose", async () => {
+  test("suspends log pass-through while mounted and restores it on dispose", async () => {
     const traced: string[] = [];
     const screen: unknown[] = [];
-    teeInto(traced, screen);
+    const logger = loggerOnto(traced, screen);
 
     const result = await createUiRoot({
       port: createFakeKernel(),
@@ -194,11 +183,11 @@ describe("createUiRoot terminal ownership", () => {
     });
     if (result instanceof Error) throw result;
 
-    console.warn("mid-frame");
+    logger.warn("mid-frame");
     expect(screen).toEqual([]);
 
     result.dispose();
-    console.warn("after teardown");
+    logger.warn("after teardown");
 
     expect(screen).toEqual(["after teardown"]);
     expect(traced).toEqual(['console.warn:["mid-frame"]', 'console.warn:["after teardown"]']);
@@ -207,7 +196,7 @@ describe("createUiRoot terminal ownership", () => {
   test("restores pass-through when the renderer never comes up at all", async () => {
     const traced: string[] = [];
     const screen: unknown[] = [];
-    teeInto(traced, screen);
+    const logger = loggerOnto(traced, screen);
 
     const result = await createUiRoot({
       port: createFakeKernel(),
@@ -221,14 +210,14 @@ describe("createUiRoot terminal ownership", () => {
     // The suspension straddles `createRenderer` (OpenTUI enters raw mode and the alternate
     // screen INSIDE it), so the failure path has to hand the terminal back before `main.tsx`
     // prints why startup failed.
-    console.warn("startup diagnostic");
+    logger.warn("startup diagnostic");
     expect(screen).toEqual(["startup diagnostic"]);
   });
 
   test("resumes pass-through even when teardown itself throws", async () => {
     const traced: string[] = [];
     const screen: unknown[] = [];
-    teeInto(traced, screen);
+    const logger = loggerOnto(traced, screen);
 
     const result = await createUiRoot({
       port: createFakeKernel(),
@@ -249,14 +238,14 @@ describe("createUiRoot terminal ownership", () => {
     expect(() => result.dispose()).toThrow("destroy failed");
     // Correct by construction, not by luck: a throwing `unmount`/`destroy` must not be able to
     // strand the terminal with the gate down, leaving only the panic hook to save it.
-    console.warn("after a failed teardown");
+    logger.warn("after a failed teardown");
     expect(screen).toEqual(["after a failed teardown"]);
   });
 
   test("restores pass-through when mounting fails and the renderer is destroyed", async () => {
     const traced: string[] = [];
     const screen: unknown[] = [];
-    teeInto(traced, screen);
+    const logger = loggerOnto(traced, screen);
 
     const result = await createUiRoot({
       port: createFakeKernel(),
@@ -274,7 +263,7 @@ describe("createUiRoot terminal ownership", () => {
     expect(result).toBeInstanceOf(UiRootError);
     // The renderer is already destroyed on this branch, so the failure `main.tsx` is about to
     // print must be able to reach the terminal.
-    console.warn("startup diagnostic");
+    logger.warn("startup diagnostic");
     expect(screen).toEqual(["startup diagnostic"]);
   });
 });
@@ -282,7 +271,7 @@ describe("createUiRoot terminal ownership", () => {
 describe("UI_RENDERER_CONFIG", () => {
   // HANDOFF Finding 1: OpenTUI's default `consoleMode: "console-overlay"` replaces
   // console.log/info/warn/error/debug with an overlay writer that never calls through, which
-  // silently destroys the debug-log tee for the whole interactive run. The host renderer
+  // would blind any app reporting still routed through `console.*`. The host renderer
   // (`host/render/model/renderer.ts`) already disables it; the UI must too.
   //
   // THE OTHER HALF OF THE TRADE (2026-07-28). Turning the overlay off also removes the only
@@ -292,7 +281,7 @@ describe("UI_RENDERER_CONFIG", () => {
   // — so every warning painted raw text over the live frame. That is why this setting is paired
   // with `suspendConsolePassthrough()` in `createUiRoot` (tested above), and why neither half
   // may be changed without the other.
-  test("disables OpenTUI's console overlay so the debug-log tee survives", () => {
+  test("disables OpenTUI's console overlay so app reporting stays off the live frame", () => {
     expect(UI_RENDERER_CONFIG.consoleMode).toBe("disabled");
   });
 

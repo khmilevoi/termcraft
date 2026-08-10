@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { pageSlugSchema } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 import { uuidv7Schema } from "./ids";
 import { uint64StringSchema } from "./uint64";
@@ -272,7 +273,7 @@ const PRIORITY_RANK: ReadonlyMap<ReasonCode, number> = new Map(
 function rankOf(code: ReasonCode): number {
   const rank = PRIORITY_RANK.get(code);
   if (rank !== undefined) return rank;
-  console.warn(
+  log.warn(
     `primaryReason: no priority rank for reason code "${code}" — defaulting to lowest priority`,
   );
   return Number.POSITIVE_INFINITY;

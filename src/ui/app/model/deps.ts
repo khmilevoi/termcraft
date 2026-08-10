@@ -17,7 +17,7 @@ import * as errore from "errore";
 
 import type { UUIDv7 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 import type { ActionContext } from "ui/actions";
 import { filterSlashRows, firstEnabledIndex } from "ui/actions";
 import type { AgentHealth } from "ui/agent-health";
@@ -556,7 +556,7 @@ export function createUiDeps(
       const setPreviewFrame = bind((frame: UiPreviewFrame) => previewFrame.set(frame));
       const reportRuntimeError = bind((error: Error, message: string) => {
         runtimeError.set(error);
-        console.error(message, error);
+        log.error(message, error);
       });
       const waitForFramePoll = bind(() => wrap(sleep(FRAME_POLL_MS)));
       const nextFrame = bind((iterator: AsyncIterator<UiPreviewFrame>) => wrap(iterator.next()));
@@ -589,12 +589,12 @@ export function createUiDeps(
               if (result instanceof Error) {
                 // Logged, never swallowed (errore rule 21). A preview stuck at the previous
                 // size is a degraded view, not an unusable UI, so `runtimeError` stays clear.
-                console.warn("UI preview.resize dispatch failed:", result);
+                log.warn("UI preview.resize dispatch failed:", result);
                 lastResizeKey = null;
                 return;
               }
               if (result.status === "rejected") {
-                console.warn(`UI preview.resize was rejected (${result.code})`);
+                log.warn(`UI preview.resize was rejected (${result.code})`);
                 lastResizeKey = null;
               }
             });
@@ -617,7 +617,7 @@ export function createUiDeps(
         frameHandle = null;
         if (iterator?.return === undefined) return;
         void iterator.return().catch((cause) => {
-          console.error("UI preview frame iterator cleanup failed:", cause);
+          log.error("UI preview frame iterator cleanup failed:", cause);
         });
       };
       /**
@@ -745,7 +745,7 @@ export function createUiDeps(
           const pageSlug = parsePageSlug(rawPageSlug);
           if (pageSlug instanceof Error) {
             lastRequestedPageKey = pageKey;
-            console.warn(
+            log.warn(
               `UI preview.selectPage skipped — active page slug "${rawPageSlug}" is not a valid PageSlug:`,
               pageSlug.message,
             );
@@ -770,7 +770,7 @@ export function createUiDeps(
             if (result instanceof Error) {
               // Logged rather than swallowed (errore rule 21); `runtimeError` is reserved for
               // failures that make the UI unusable, and a preview that did not start is not one.
-              console.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
+              log.warn(`UI preview.selectPage dispatch failed for "${pageSlug}":`, result);
               lastRequestedPageKey = null;
               retirePageOverrideIfCurrent(rawPageSlug);
               return;
@@ -779,7 +779,7 @@ export function createUiDeps(
               // Not fatal — an untrusted project keeps preview `disabled` by design (spec §2.2),
               // and the refusal is the honest outcome there. Clearing the memo lets a later
               // descriptor change retry once the guard's precondition actually holds.
-              console.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
+              log.warn(`UI preview.selectPage was rejected for "${pageSlug}" (${result.code})`);
               lastRequestedPageKey = null;
               retirePageOverrideIfCurrent(rawPageSlug);
               return;
@@ -822,11 +822,11 @@ export function createUiDeps(
           if (result instanceof Error) {
             // Logged, never swallowed (errore rule 21). `runtimeError` stays reserved for
             // failures that make the UI unusable; the user can still read the panel and quit.
-            console.warn("UI project.close (blocked-open recovery) dispatch failed:", result);
+            log.warn("UI project.close (blocked-open recovery) dispatch failed:", result);
             return;
           }
           if (result.status === "rejected") {
-            console.warn(
+            log.warn(
               `UI project.close (blocked-open recovery) was rejected (${result.code}) — Home's Enter may stay refused`,
             );
           }

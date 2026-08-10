@@ -6,6 +6,7 @@ import { API } from "typescript/unstable/sync";
 import type { Diagnostic } from "typescript/unstable/sync";
 
 import { isCodeFile } from "entities/design-tree";
+import { log } from "infrastructure/debug-log";
 
 import type { GateError } from "../types";
 import { lineColOf } from "./lexer";
@@ -399,7 +400,7 @@ function runTreeTypeCheck(
       try {
         api.close();
       } catch (closeCause) {
-        console.warn(
+        log.warn(
           "type-check (tree): api.close() failed:",
           closeCause instanceof Error ? closeCause.message : String(closeCause),
         );

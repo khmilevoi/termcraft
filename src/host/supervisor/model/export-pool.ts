@@ -1,3 +1,5 @@
+import { log } from "infrastructure/debug-log";
+
 import { ProtocolError } from "../../protocol";
 import type { ExportPool, ExportTask, ExportTaskOutcome, OneShotResult } from "../types";
 import { SupervisorError } from "./errors";
@@ -69,7 +71,7 @@ export function createExportPool(deps: ExportPoolDeps): ExportPool {
           if (result instanceof Error) {
             if (failure === null) failure = result;
             else
-              console.warn("export pool: dropping a secondary in-flight failure:", result.message);
+              log.warn("export pool: dropping a secondary in-flight failure:", result.message);
             return;
           }
           outcomes.push({ manifestIndex: task.manifestIndex, spec: task.spec, result });

@@ -22,6 +22,7 @@ import {
   encodePagesManifest,
 } from "entities/design-tree";
 import type { PagesManifestInvalidError, PagesManifestV1 } from "entities/design-tree";
+import { log } from "infrastructure/debug-log";
 import { sha256Hex } from "store/jsonl";
 import { FsAccessError, MAX_PATH_COMPONENTS, NAMESPACE_LIMITS, isNotFound } from "store/safe-fs";
 import type { SafeFsError, SafeProjectFs } from "store/safe-fs";
@@ -175,7 +176,7 @@ function createDesignTreeStore(safeFs: SafeProjectFs): DesignTreeStore {
           // listing's own generic failure for the same path, which is LOGGED here rather
           // than silently discarded (errore rule 21: an error that is not propagated must
           // still be logged) even though it is not the value this method returns.
-          console.warn(
+          log.warn(
             `store: listTree could not list ${childProjectRel} as a directory either:`,
             subNames.message,
           );

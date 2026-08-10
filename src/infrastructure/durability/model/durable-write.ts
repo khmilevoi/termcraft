@@ -4,6 +4,8 @@ import path from "node:path";
 
 import * as errore from "errore";
 
+import { log } from "infrastructure/debug-log";
+
 import {
   type DirectoryFlushError,
   type DurabilityUnavailableError,
@@ -18,7 +20,7 @@ function removeTemp(tmpPath: string): void {
     catch: (cause) => new Error("temp cleanup failed", { cause }),
   });
   if (removed instanceof Error)
-    console.warn("durable-write: temp cleanup failed:", removed.message);
+    log.warn("durable-write: temp cleanup failed:", removed.message);
 }
 
 /**

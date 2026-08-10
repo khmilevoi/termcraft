@@ -8,6 +8,7 @@ import type {
 } from "core/ports";
 import type { FailureDtoV1 } from "core/protocol";
 import type { PageSlug, Size } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 import type { ExportPageSnapshotV1, ExportSnapshotV1 } from "../types";
 import { computeExportSizeLadder } from "./size-ladder";
@@ -110,7 +111,7 @@ async function readCachedRender(
   if ("code" in cached) {
     // A cache I/O fault is never fatal to a render — it degrades to a miss, logged so the
     // fault stays visible per errore's rule against silently swallowing it.
-    console.warn(
+    log.warn(
       `render-jobs: render cache read failed for page "${page.pageSlug}" — treating as a miss: ${cached.safeMessage}`,
     );
     return null;
@@ -137,7 +138,7 @@ async function cacheRender(
     layout: rendered.layout,
   });
   if (putFailure === undefined) return;
-  console.warn(
+  log.warn(
     `render-jobs: failed to populate the render cache for page "${page.pageSlug}": ${putFailure.safeMessage}`,
   );
 }
@@ -152,7 +153,7 @@ async function renderJob(
     // FORCED MISS, BOTH SIDES: no `get` above, no `put` below. Logged once per (page, size)
     // rather than propagated — nothing here fails, the frame is simply rendered fresh — per
     // errore's rule against dropping a fact silently.
-    console.warn(
+    log.warn(
       `render-jobs: page "${page.pageSlug}" has no provable closureHash — the render cache is skipped entirely (no get, no put) and the frame is rendered fresh`,
     );
     return renderFresh(deps, page, size, key);
@@ -217,7 +218,7 @@ export async function runExportRendering(
       // Unreachable: the ladder is derived FROM `snapshot.pages`, so every entry's
       // `pageSlug` is present in this map by construction. Kept explicit rather than a
       // non-null assertion, per errore's rule against silently trusting an invariant.
-      console.warn(`render-jobs: ladder entry for unknown page "${entry.pageSlug}" — skipped`);
+      log.warn(`render-jobs: ladder entry for unknown page "${entry.pageSlug}" — skipped`);
       return null;
     }
     return renderJob(deps, page, entry.size);

@@ -1,5 +1,6 @@
 import type { FencedEvent } from "agent/types";
 import type { AgentEvent, TurnFence } from "entities/turn";
+import { log } from "infrastructure/debug-log";
 
 /** A minimal single-reader async queue bridging a run's driver to `AgentRun.events`. */
 export interface EventQueue {
@@ -39,7 +40,7 @@ export function createEventQueue(fence: TurnFence): EventQueue {
     if (abandoned) {
       if (!abandonedDropLogged) {
         abandonedDropLogged = true;
-        console.warn("agent/run: events consumer is gone (break/return); dropping further events");
+        log.warn("agent/run: events consumer is gone (break/return); dropping further events");
       }
       return;
     }

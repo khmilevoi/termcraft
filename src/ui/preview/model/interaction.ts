@@ -4,9 +4,19 @@ import * as errore from "errore";
 import type { FrameTokenV1, GeometryTokenV1 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
+import { log, trace } from "infrastructure/debug-log";
 import type { Dispatcher, EventOf, UiPreviewFrame } from "ui/kernel";
 
 import type { Point, Rect } from "./overlay";
+
+// DIAGNOSTIC (infrastructure/debug-log): added while investigating "pins don't work" — traces
+// the "select"/"pin" leg of the geometry-query flow end to end (every early return, the
+// dispatched request, and the eventual result). Deliberately skips "hover", which fires on
+// every mouse-move and would drown the channel in noise this investigation does not need.
+function tracePin(channel: string, purpose: GeometryIntent, data: Record<string, unknown>): void {
+  if (purpose === "hover") return;
+  trace(channel, { purpose, ...data });
+}
 
 export type GeometryIntent = "hover" | "select" | "pin";
 type GeometryQueryKind = "hit" | "pin-anchor";
@@ -75,7 +85,7 @@ export function acknowledgeFrame(deps: PreviewInteractionDeps, uiFrame: UiPrevie
   const acknowledged = uiFrame.handle.acknowledgeDisplay(uiFrame.frameToken);
   if (acknowledged instanceof Error) {
     deps.runtimeError.set(acknowledged);
-    console.error("UI preview display acknowledgement failed:", acknowledged);
+    log.error("UI preview display acknowledgement failed:", acknowledged);
     return;
   }
 
@@ -94,13 +104,35 @@ export function requestGeometry(
   x: number,
   y: number,
 ): void {
-  if (!Number.isSafeInteger(x) || x < 0 || !Number.isSafeInteger(y) || y < 0) return;
-  if (purpose !== "hover" && deps.screen() === "read-only") return;
+  if (!Number.isSafeInteger(x) || x < 0 || !Number.isSafeInteger(y) || y < 0) {
+    tracePin("ui.preview.requestGeometry", purpose, { step: "refused", reason: "invalid coordinate", x, y });
+    return;
+  }
+  if (purpose !== "hover" && deps.screen() === "read-only") {
+    tracePin("ui.preview.requestGeometry", purpose, { step: "refused", reason: "screen is read-only" });
+    return;
+  }
 
   const displayedFrameToken = deps.interaction.displayedFrameToken();
   const current = deps.previewFrame();
-  if (displayedFrameToken === null || current === null) return;
-  if (current.frameToken !== displayedFrameToken) return;
+  if (displayedFrameToken === null || current === null) {
+    tracePin("ui.preview.requestGeometry", purpose, {
+      step: "refused",
+      reason: "no displayed frame",
+      hasDisplayedFrameToken: displayedFrameToken !== null,
+      hasPreviewFrame: current !== null,
+    });
+    return;
+  }
+  if (current.frameToken !== displayedFrameToken) {
+    tracePin("ui.preview.requestGeometry", purpose, {
+      step: "refused",
+      reason: "frame token mismatch",
+      displayedFrameToken,
+      currentFrameToken: current.frameToken,
+    });
+    return;
+  }
 
   const queryKind = purpose === "pin" ? "pin-anchor" : "hit";
   const request: GeometryRequest = {
@@ -114,8 +146,16 @@ export function requestGeometry(
   if (pending !== null) {
     deps.interaction.pendingGeometry.set({ ...pending, superseded: true });
     deps.interaction.queuedGeometry.set(request);
+    tracePin("ui.preview.requestGeometry", purpose, {
+      step: "queued",
+      reason: "another geometry query is already pending",
+      queryKind,
+      x,
+      y,
+    });
     return;
   }
+  tracePin("ui.preview.requestGeometry", purpose, { step: "dispatching", queryKind, x, y });
   dispatchGeometryRequest(deps, request);
 }
 
@@ -127,24 +167,69 @@ export function handleGeometryResult(
   const pending = deps.interaction.pendingGeometry();
   if (pending === null) return;
   const payload = envelope.payload;
-  if (payload.frameTokenId !== pending.frameToken || payload.queryKind !== pending.queryKind)
+  if (payload.frameTokenId !== pending.frameToken || payload.queryKind !== pending.queryKind) {
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "ignored",
+      reason: "frameToken/queryKind mismatch",
+      pendingQueryKind: pending.queryKind,
+      payloadQueryKind: payload.queryKind,
+    });
     return;
-  if (deps.interaction.displayedFrameToken() !== pending.frameToken) return;
+  }
+  if (deps.interaction.displayedFrameToken() !== pending.frameToken) {
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "ignored",
+      reason: "displayed frame changed since the request",
+    });
+    return;
+  }
   const current = deps.previewFrame();
-  if (current === null || current.frameToken !== pending.frameToken) return;
-  if (current.handle.previewSessionId !== payload.previewSessionId) return;
+  if (current === null || current.frameToken !== pending.frameToken) {
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "ignored",
+      reason: "no matching previewFrame",
+    });
+    return;
+  }
+  if (current.handle.previewSessionId !== payload.previewSessionId) {
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "ignored",
+      reason: "previewSessionId mismatch",
+    });
+    return;
+  }
 
   if (pending.superseded) {
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "superseded",
+      reason: "a newer request already replaced this one",
+    });
     promoteQueuedGeometry(deps);
     return;
   }
 
   deps.interaction.pendingGeometry.set(null);
   deps.interaction.queuedGeometry.set(null);
-  if (pending.purpose !== "hover" && deps.screen() === "read-only") return;
+  if (pending.purpose !== "hover" && deps.screen() === "read-only") {
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "dropped",
+      reason: "screen became read-only",
+    });
+    return;
+  }
 
   if (pending.purpose === "pin") {
-    if (payload.geometryToken === null) return;
+    if (payload.geometryToken === null) {
+      tracePin("ui.preview.geometryResult", pending.purpose, {
+        step: "dropped",
+        reason: "geometryToken is null — host resolved no anchor at this point",
+      });
+      return;
+    }
+    tracePin("ui.preview.geometryResult", pending.purpose, {
+      step: "pin-input opened",
+      geometryToken: payload.geometryToken,
+    });
     deps.interaction.pendingPin.set({
       geometryToken: payload.geometryToken,
       point: { x: pending.x, y: pending.y },
@@ -239,7 +324,7 @@ function dispatchGeometryRequest(deps: PreviewInteractionDeps, request: Geometry
             : null;
       if (error === null) return;
       deps.runtimeError.set(error);
-      console.error("UI geometry query dispatch failed:", error);
+      log.error("UI geometry query dispatch failed:", error);
       const pending = deps.interaction.pendingGeometry();
       if (pending === null || !sameGeometryRequest(pending, request)) return;
       promoteQueuedGeometry(deps);
@@ -272,7 +357,7 @@ function sameGeometryRequest(left: GeometryRequest, right: GeometryRequest): boo
 
 function reportDispatchFailure(promise: ReturnType<Dispatcher["dispatch"]>): void {
   void promise.then((result) => {
-    if (result instanceof Error) console.error("UI command dispatch failed:", result);
+    if (result instanceof Error) log.error("UI command dispatch failed:", result);
   });
 }
 

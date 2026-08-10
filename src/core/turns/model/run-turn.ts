@@ -19,7 +19,7 @@ import type {
   TurnTransactionService,
 } from "core/ports";
 import type { Clock } from "infrastructure/clock";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { AdmissionInputV1, AdmissionOutcomeV1, TurnContextV1 } from "../types";
 import { type AdmissionDeps, runAdmission } from "./admission";
@@ -74,7 +74,7 @@ import {
  *
  * THE BRIDGE HELPER: `bridge(action)` applies exactly one of those three sanctioned
  * transitions and warns (never throws, never silently drops) if the phase table rejects it
- * — matching `attempt.ts`'s own `console.warn`-on-illegal pattern for its internal
+ * — matching `attempt.ts`'s own `log.warn`-on-illegal pattern for its internal
  * `beginStopping`/`requestCancel` calls. In every reachable call site below the transition
  * is legal by construction (proven per call site in this file's own review); the warning
  * exists only so a violated invariant is visible rather than silently absorbed, and
@@ -309,7 +309,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
   function bridge(action: "beginSnapshot" | "beginTerminalization" | "requestCancel"): void {
     const moved = deps.machine.apply(action);
     if (moved.kind === "illegal") {
-      console.warn(
+      log.warn(
         `core/turns/run-turn: ${action} illegal (${moved.code}) for turn ${context.turnId}`,
       );
     }
@@ -616,7 +616,7 @@ export async function runTurn(deps: RunTurnDeps, input: RunTurnInputV1): Promise
           // never throw).
           const retried = deps.machine.apply("retryAfterSessionFallback");
           if (retried.kind === "illegal") {
-            console.warn(
+            log.warn(
               `core/turns/run-turn: retryAfterSessionFallback illegal (${retried.code}) for turn ${context.turnId}`,
             );
           }

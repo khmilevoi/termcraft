@@ -1,6 +1,7 @@
 import type { FailureDtoV1 } from "core/protocol";
 import type { ChatRecord } from "entities/chat";
 import type { Clock } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 
 import type {
   ChatHandleV1,
@@ -130,7 +131,7 @@ export function createFakeChatStore(options?: { readonly clock?: Clock }): FakeC
   function seedRecords(chatId: string, records: readonly ChatRecord[]): void {
     const chat = chats.get(chatId);
     if (chat === undefined) {
-      console.warn(`fakes/chat-store: seedRecords called for unknown chatId ${chatId}, ignored`);
+      log.warn(`fakes/chat-store: seedRecords called for unknown chatId ${chatId}, ignored`);
       return;
     }
     chat.records.push(...records);

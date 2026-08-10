@@ -20,6 +20,7 @@ import {
   type KernelStateChangedPayloadV1,
   isUuidv7,
 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import { buildPageDescriptors } from "./page-descriptors";
@@ -190,7 +191,7 @@ function projectClose(
 ): CommandOutcomeV1 {
   const beginOutcome = tryApply(context.machines.project, "beginClose");
   if (beginOutcome === null) {
-    console.warn(
+    log.warn(
       "core/kernel/handlers/project: project.close's beginClose was illegal despite the guard confirming legality",
     );
     return noOpOutcome();
@@ -215,7 +216,7 @@ function projectClose(
 
     const finishOutcome = tryApply(context.machines.project, "finishClose");
     if (finishOutcome === null) {
-      console.warn(
+      log.warn(
         "core/kernel/handlers/project: project.close's finishClose was illegal after the lease released",
       );
       return [];
@@ -243,7 +244,7 @@ function projectSetTrust(
 ): CommandOutcomeV1 {
   const applyOutcome = tryApply(context.machines.project, "setTrust");
   if (applyOutcome === null) {
-    console.warn(
+    log.warn(
       "core/kernel/handlers/project: project.setTrust's setTrust was illegal despite the guard confirming legality",
     );
     return noOpOutcome();
@@ -273,7 +274,7 @@ function projectSetTrust(
     const { deps } = context;
     const manifest = await wrap(deps.projectStore.readManifest());
     if ("code" in manifest) {
-      console.warn(
+      log.warn(
         `core/kernel/handlers/project: project.setTrust could not read the manifest to persist the durable grant: ${manifest.safeMessage}`,
       );
       return [];
@@ -285,7 +286,7 @@ function projectSetTrust(
       deps.trustGate.buildSubject(deps.projectStore.root, manifest.projectId, null),
     );
     if ("code" in subject) {
-      console.warn(
+      log.warn(
         `core/kernel/handlers/project: project.setTrust could not build a trust subject: ${subject.safeMessage}`,
       );
       return [];
@@ -294,7 +295,7 @@ function projectSetTrust(
     if (payload.trust === "trusted") {
       const grantFailure = await wrap(deps.trustGate.grant(subject));
       if (grantFailure !== undefined) {
-        console.warn(
+        log.warn(
           `core/kernel/handlers/project: project.setTrust could not durably persist the grant: ${grantFailure.safeMessage}`,
         );
       }
@@ -328,7 +329,7 @@ function blockOpen(
 ): readonly PublishableEventV1[] {
   const outcome = tryApply(context.machines.project, "blockOpen");
   if (outcome === null) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: blockOpen was illegal while handling "${reason}" (${failure.safeMessage})`,
     );
     return [];
@@ -401,7 +402,7 @@ function enablePreviewIfTrusted(
     // project (already past `disabled`) is the ordinary case that hits it, not a fault — but
     // still logged (errore rule 21: an error that is not propagated must be logged).
     const currentPhase = outcome.kind === "illegal" ? outcome.from : outcome.phase;
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: enablePreviewIfTrusted's kernel.preview.enable was ${outcome.kind} from "${currentPhase}"`,
     );
     return [];
@@ -440,7 +441,7 @@ async function buildActiveChatFallbackSummary(
 
   const handle = await wrap(context.deps.chatReader.open(activeChatId));
   if ("code" in handle) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: could not open the active chatId ${activeChatId} to build a chat-listing fallback row: ${handle.safeMessage}`,
     );
     return [];
@@ -480,7 +481,7 @@ async function listChatSummaries(
 ): Promise<readonly ChatSummaryV1[]> {
   const listed = await wrap(context.deps.chatReader.list());
   if ("code" in listed) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: could not list the project's chats (${listed.safeMessage}) — falling back to the active chat alone`,
     );
     return await wrap(buildActiveChatFallbackSummary(context, activeChatId));
@@ -489,7 +490,7 @@ async function listChatSummaries(
   const summaries: ChatSummaryV1[] = [];
   for (const entry of listed) {
     if (!isUuidv7(entry.chatId)) {
-      console.warn(
+      log.warn(
         `core/kernel/handlers/project: chat listing dropped "${entry.chatId}" — not a canonical UUIDv7`,
       );
       continue;
@@ -502,7 +503,7 @@ async function listChatSummaries(
   }
 
   if (!canPublishChatChanged(activeChatId, summaries)) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: chat listing read ${summaries.length} row(s) but activeChatId ${
         activeChatId === null ? "is null" : `"${activeChatId}"`
       } — chat.changed will not publish this open`,
@@ -528,7 +529,7 @@ async function restoreActiveChatTail(
 
   const handle = await wrap(context.deps.chatReader.open(activeChatId));
   if ("code" in handle) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: could not open the active chatId ${activeChatId} to restore its tail: ${handle.safeMessage}`,
     );
     return [];
@@ -536,7 +537,7 @@ async function restoreActiveChatTail(
 
   const loadResult = await wrap(handle.loadTail());
   if ("code" in loadResult) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: could not load the active chatId ${activeChatId}'s tail: ${loadResult.safeMessage}`,
     );
     return [];
@@ -634,7 +635,7 @@ async function runProjectReadySequence(
     // §9's "descriptor list is complete and ordered" is a stronger guarantee than any one
     // subscriber notification; a producer bug here (a duplicate `pageSlug`, per that
     // error's own doc) should not also block a project that DID open successfully.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: could not assemble page.descriptorsChanged: ${descriptorsPayload.message}`,
     );
   } else {
@@ -643,7 +644,7 @@ async function runProjectReadySequence(
 
   const finishOutcome = tryApply(machines.project, "finishOpen");
   if (finishOutcome === null) {
-    console.warn(
+    log.warn(
       "core/kernel/handlers/project: finishOpen was illegal after a clean open sequence — leaving the project in its current phase",
     );
     return events;
@@ -718,7 +719,7 @@ function beginProjectOpen(
 ): CommandOutcomeV1 {
   const outcome = tryApply(context.machines.project, action);
   if (outcome === null) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: project.${action === "beginCreate" ? "create" : "open"}'s ${action} was illegal despite the guard confirming legality`,
     );
     return noOpOutcome();
@@ -857,7 +858,7 @@ async function runRetryOpenContinuation(
       stateChangedEvent(domainModelId(domain), domainCompleteActionName(domain), completeOutcome),
     );
   } else {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: project.retryOpen's domain complete action was illegal for "${domain}"`,
     );
   }
@@ -882,7 +883,7 @@ function blockRetryOpen(
       }),
     );
   } else {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: project.retryOpen's domain blockRecovery was illegal for "${domain}" while handling "${reason}"`,
     );
   }
@@ -904,7 +905,7 @@ function projectRetryOpen(
     !context.machines.project.canApply("retryOpen") ||
     !canApplyDomainRetryRecovery(context, domain)
   ) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: project.retryOpen's admission pair was illegal for domain "${domain}" despite the guard confirming project-level legality`,
     );
     return noOpOutcome();
@@ -915,7 +916,7 @@ function projectRetryOpen(
   if (projectOutcome === null || domainOutcome.kind !== "changed") {
     // Unreachable given the `canApply` pair just confirmed above — logged rather than
     // silently accepted, per the errore rule against swallowing an unexpected condition.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/project: project.retryOpen's admission pair became illegal between the canApply check and apply for domain "${domain}"`,
     );
     return noOpOutcome();

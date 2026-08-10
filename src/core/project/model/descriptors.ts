@@ -12,6 +12,7 @@ import type {
 import { DESIGN_DIRNAME, PAGES_MANIFEST_RELPATH } from "entities/design-tree";
 import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 /**
  * `core/protocol`'s own index only re-exports `EventPayloadByKindV1` (the per-kind payload
@@ -130,14 +131,14 @@ export async function readPageOrder(
   // Refusing beats guessing: silently stripping a `design/` prefix would make this function
   // accept two vocabularies, and the plan fixes exactly one for this argument.
   if (paths.includes(`${DESIGN_DIRNAME}/${PAGES_MANIFEST_RELPATH}`)) {
-    console.warn(
+    log.warn(
       `core/project/descriptors: readPageOrder was given PROJECT-relative treePaths (they name "${DESIGN_DIRNAME}/${PAGES_MANIFEST_RELPATH}" but no "${PAGES_MANIFEST_RELPATH}"); it requires TREE-relative paths, so the manifest failure is propagated rather than read as an empty project`,
     );
     return manifest;
   }
 
   // The one honest empty: the tree names no manifest, so there is nothing to have failed.
-  console.warn(
+  log.warn(
     `core/project/descriptors: design/pages.json is absent from the tree — reading an empty page order (a project has no manifest until its first turn writes one). The underlying read reported: ${manifest.safeMessage}`,
   );
   return [];
@@ -150,7 +151,7 @@ async function readTreePaths(
 ): Promise<FailureDtoV1 | readonly string[]> {
   const listed = await wrap(designReader.listTree());
   if ("code" in listed) {
-    console.warn(
+    log.warn(
       `core/project/descriptors: could not list the design tree to tell an absent design/pages.json from an unreadable one (${listed.safeMessage}); propagating the original manifest failure`,
     );
     return manifestFailure;

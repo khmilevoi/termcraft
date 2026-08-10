@@ -20,6 +20,7 @@ import type {
   UnavailableReason,
 } from "core/protocol";
 import type { Size } from "entities/page";
+import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { PreviewBackpressure } from "./backpressure";
@@ -263,7 +264,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     if (applied.kind === "illegal") return OPERATION_BUSY_REJECTION;
     const session = currentSession;
     if (session === null) {
-      console.warn("preview session-commands: resize reached a live phase with no stored session");
+      log.warn("preview session-commands: resize reached a live phase with no stored session");
       return { kind: "rejected", reason: { code: "CAPABILITY_UNAVAILABLE" } };
     }
     // Coalescible (host-supervision §8: "coalescible resize ... may continue to replace an
@@ -278,7 +279,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     if (applied.kind === "illegal") return OPERATION_BUSY_REJECTION;
     const session = currentSession;
     if (session === null) {
-      console.warn("preview session-commands: setMode reached a live phase with no stored session");
+      log.warn("preview session-commands: setMode reached a live phase with no stored session");
       return { kind: "rejected", reason: { code: "CAPABILITY_UNAVAILABLE" } };
     }
     return withReservedSlot(async () => {
@@ -296,7 +297,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     if (applied.kind === "illegal") return OPERATION_BUSY_REJECTION;
     const session = currentSession;
     if (session === null) {
-      console.warn(
+      log.warn(
         "preview session-commands: setThemeCapabilities reached a live phase with no stored session",
       );
       return { kind: "rejected", reason: { code: "CAPABILITY_UNAVAILABLE" } };
@@ -313,7 +314,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     if (applied.kind === "illegal") return OPERATION_BUSY_REJECTION;
     const spec = lastSpec;
     if (spec === null) {
-      console.warn(
+      log.warn(
         "preview session-commands: retry reached circuit-open with no remembered spec to reissue",
       );
       return { kind: "rejected", reason: { code: "CAPABILITY_UNAVAILABLE" } };
@@ -355,7 +356,7 @@ export function createPreviewSessionCommands(deps: SessionCommandsDeps): Preview
     }
     const session = currentSession;
     if (session === null) {
-      console.warn(
+      log.warn(
         "preview session-commands: queryGeometry reached a live phase with no stored session",
       );
       return { kind: "rejected", reason: { code: "CAPABILITY_UNAVAILABLE" } };

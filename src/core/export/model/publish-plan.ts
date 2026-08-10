@@ -5,6 +5,7 @@ import {
   type ExportPublishOperationV1,
 } from "core/ports";
 import type { Sha256Hex } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import type { ExportPackageFileV1 } from "./package";
@@ -167,7 +168,7 @@ function buildDeleteOperations(
       const entry = previousPointer.files[target];
       if (entry === undefined) {
         // Unreachable: `target` comes from `Object.keys(previousPointer.files)` itself.
-        console.warn(
+        log.warn(
           `core/export/model/publish-plan: previous pointer manifest lost its own key "${target}" — skipped`,
         );
         return null;

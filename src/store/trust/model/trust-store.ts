@@ -5,6 +5,7 @@ import * as errore from "errore";
 import { z } from "zod";
 
 import { rfc3339UtcSchema } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 import { durableFileWrite } from "infrastructure/durability";
 import { formatFsIdentity } from "infrastructure/fs-guard";
 import { canonicalUuidv7Schema, isCanonicalUuidv7 } from "infrastructure/uuid";
@@ -144,7 +145,7 @@ export const nodeTrustFsDeps: TrustFsDeps = {
         const stat = fs.statSync(absPath);
         if (!stat.isFile()) return null;
         if (stat.size > MAX_GRANT_BYTES) {
-          console.warn("trust: grant refused, record exceeds", MAX_GRANT_BYTES, "bytes:", absPath);
+          log.warn("trust: grant refused, record exceeds", MAX_GRANT_BYTES, "bytes:", absPath);
           return null;
         }
         return new Uint8Array(fs.readFileSync(absPath));
@@ -196,13 +197,13 @@ function decodeGrantRecord(bytes: Uint8Array, grantPath: AbsPath) {
       }),
   });
   if (parsed instanceof Error) {
-    console.warn("trust: grant record ignored:", parsed.message);
+    log.warn("trust: grant record ignored:", parsed.message);
     return null;
   }
 
   const decoded = grantRecordSchema.safeParse(parsed);
   if (!decoded.success) {
-    console.warn("trust: grant record ignored:", `${grantPath} is not a schema-1 grant record`);
+    log.warn("trust: grant record ignored:", `${grantPath} is not a schema-1 grant record`);
     return null;
   }
   return decoded.data;
@@ -265,7 +266,7 @@ export function createTrustStore(deps: TrustStoreDeps): TrustStore {
       const bytes = deps.fs.readFile(grantPath);
       if (bytes instanceof Error) {
         // Never propagated: an unreadable ledger means "no grant to honor", not a grant.
-        console.warn("trust: grant read failed:", bytes.message);
+        log.warn("trust: grant read failed:", bytes.message);
         return false;
       }
       if (bytes === null) return false;
@@ -277,7 +278,7 @@ export function createTrustStore(deps: TrustStoreDeps): TrustStore {
       // contents digest to another has been tampered with and grants nothing.
       const derived = trustSubjectKey(record);
       if (derived !== record.key || derived !== subject.key) {
-        console.warn(
+        log.warn(
           "trust: grant record ignored:",
           `${grantPath} does not derive its own trust key`,
         );

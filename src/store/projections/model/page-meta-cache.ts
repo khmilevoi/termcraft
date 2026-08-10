@@ -60,6 +60,7 @@ import { z } from "zod";
 
 import type { Clock } from "infrastructure/clock";
 import { rfc3339UtcSchema } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 import { durableFileWrite } from "infrastructure/durability";
 
 import type { AbsPath, PageMetaEntry, PageMetaKey, ProjectionFsDeps, Sha256Hex } from "../types";
@@ -251,13 +252,13 @@ export function createPageMetaCache(deps: PageMetaCacheDeps): PageMetaCache {
         catch: (cause) => new Error("not valid JSON", { cause }),
       });
       if (parsed instanceof Error) {
-        console.warn("page-meta-cache: entry ignored (miss):", target, parsed.message);
+        log.warn("page-meta-cache: entry ignored (miss):", target, parsed.message);
         return null;
       }
 
       const decoded = envelopeSchema.safeParse(parsed);
       if (!decoded.success) {
-        console.warn(
+        log.warn(
           "page-meta-cache: entry ignored (miss):",
           target,
           "does not match the envelope schema",
@@ -267,7 +268,7 @@ export function createPageMetaCache(deps: PageMetaCacheDeps): PageMetaCache {
       const envelope = decoded.data;
 
       if (envelope.storeGeneration !== generation) {
-        console.warn(
+        log.warn(
           "page-meta-cache: entry ignored (miss):",
           target,
           `store generation ${envelope.storeGeneration} !== ${generation}`,
@@ -275,7 +276,7 @@ export function createPageMetaCache(deps: PageMetaCacheDeps): PageMetaCache {
         return null;
       }
       if (!sameKey(envelope.key, key)) {
-        console.warn(
+        log.warn(
           "page-meta-cache: entry ignored (miss):",
           target,
           "key mismatch (hash collision or tampering)",
@@ -283,7 +284,7 @@ export function createPageMetaCache(deps: PageMetaCacheDeps): PageMetaCache {
         return null;
       }
       if (valueChecksum(envelope.value) !== envelope.valueSha256) {
-        console.warn("page-meta-cache: entry ignored (miss):", target, "checksum mismatch");
+        log.warn("page-meta-cache: entry ignored (miss):", target, "checksum mismatch");
         return null;
       }
 

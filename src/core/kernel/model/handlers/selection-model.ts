@@ -4,6 +4,7 @@ import { type ModelSelectionV1, selectModel, validateModelSelection } from "core
 import type { PublishableEventV1 } from "core/mailbox";
 import { readPageEntrySource } from "core/project";
 import type { CommandPayloadByKindV1, EventPayloadByKindV1 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
 import type { KernelDeps } from "../../types";
 import {
@@ -111,7 +112,7 @@ async function runSelectionSet(
 ): Promise<readonly PublishableEventV1[]> {
   const source = await wrap(readPageEntrySource(deps.designReader, payload.pageSlug));
   if ("code" in source) {
-    console.warn(
+    log.warn(
       `core/kernel: selection.set could not resolve page "${payload.pageSlug}" — ${source.safeMessage}`,
     );
     return [];
@@ -168,7 +169,7 @@ async function runModelSelect(
   );
   if ("code" in result) {
     const reason = "safeMessage" in result ? result.safeMessage : result.code;
-    console.warn(
+    log.warn(
       `core/kernel: model.select failed to persist "${selection.backend}/${selection.model}/${selection.effort}" — ${reason}`,
     );
   }

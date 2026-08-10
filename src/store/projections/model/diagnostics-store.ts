@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import type { Clock } from "infrastructure/clock";
 import { rfc3339UtcSchema } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 import { durableFileWrite } from "infrastructure/durability";
 import { MiB } from "store/safe-fs";
 
@@ -250,7 +251,7 @@ function scanEntries(
     if (bytes instanceof Error) {
       // A real read failure (permissions, I/O) — not the benign vanished-entry case below.
       // The sweep still proceeds over the remaining entries, so the error must leave a trace.
-      console.warn(
+      log.warn(
         "diagnostics-store: quota sweep skipped an unreadable entry:",
         entryFile,
         bytes.message,
@@ -268,7 +269,7 @@ function scanEntries(
       // Dead weight: it can never serve a hit. Reclaim it now rather than let it sit.
       const removed = fsDeps.remove(entryFile);
       if (removed instanceof Error)
-        console.warn("diagnostics-store: corrupt entry cleanup failed:", removed.message);
+        log.warn("diagnostics-store: corrupt entry cleanup failed:", removed.message);
       continue;
     }
     entries.push({
@@ -301,7 +302,7 @@ function enforceQuota(input: {
     if (remaining <= input.quotaBytes) break;
     const removed = input.fsDeps.remove(entry.path);
     if (removed instanceof Error) {
-      console.warn("diagnostics-store: eviction failed, leaving entry in place:", removed.message);
+      log.warn("diagnostics-store: eviction failed, leaving entry in place:", removed.message);
       continue;
     }
     remaining -= entry.byteLength;
@@ -353,13 +354,13 @@ export function createDiagnosticsStore(deps: DiagnosticsStoreDeps): DiagnosticsS
         catch: (cause) => new Error("not valid JSON", { cause }),
       });
       if (parsed instanceof Error) {
-        console.warn("diagnostics-store: entry ignored (miss):", target, parsed.message);
+        log.warn("diagnostics-store: entry ignored (miss):", target, parsed.message);
         return null;
       }
 
       const decoded = envelopeSchema.safeParse(parsed);
       if (!decoded.success) {
-        console.warn(
+        log.warn(
           "diagnostics-store: entry ignored (miss):",
           target,
           "does not match the envelope schema",
@@ -369,7 +370,7 @@ export function createDiagnosticsStore(deps: DiagnosticsStoreDeps): DiagnosticsS
       const envelope = decoded.data;
 
       if (envelope.storeGeneration !== generation) {
-        console.warn(
+        log.warn(
           "diagnostics-store: entry ignored (miss):",
           target,
           `store generation ${envelope.storeGeneration} !== ${generation}`,
@@ -377,7 +378,7 @@ export function createDiagnosticsStore(deps: DiagnosticsStoreDeps): DiagnosticsS
         return null;
       }
       if (!sameKey(envelope.key, key)) {
-        console.warn(
+        log.warn(
           "diagnostics-store: entry ignored (miss):",
           target,
           "key mismatch (hash collision or tampering)",
@@ -385,7 +386,7 @@ export function createDiagnosticsStore(deps: DiagnosticsStoreDeps): DiagnosticsS
         return null;
       }
       if (valueChecksum(envelope.value) !== envelope.valueSha256) {
-        console.warn("diagnostics-store: entry ignored (miss):", target, "checksum mismatch");
+        log.warn("diagnostics-store: entry ignored (miss):", target, "checksum mismatch");
         return null;
       }
 
@@ -433,7 +434,7 @@ export function createDiagnosticsStore(deps: DiagnosticsStoreDeps): DiagnosticsS
       if (scanned instanceof Error) {
         // Quota bookkeeping is best-effort: the write already succeeded, so a failed
         // sweep is logged rather than turning a successful put into an error.
-        console.warn("diagnostics-store: quota sweep failed:", scanned.message);
+        log.warn("diagnostics-store: quota sweep failed:", scanned.message);
         return undefined;
       }
       enforceQuota({ entries: scanned, quotaBytes, keepPath: target, isPinned, fsDeps: deps.fs });

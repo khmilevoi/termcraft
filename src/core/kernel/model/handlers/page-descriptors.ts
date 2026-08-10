@@ -13,6 +13,7 @@ import type { FailureDtoV1, PageDescriptorV1 } from "core/protocol";
 import { DESIGN_DIRNAME } from "entities/design-tree";
 import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 import type { HandlerContext } from "./types";
 
@@ -137,7 +138,7 @@ function routePassErrors(errors: readonly GateErrorV1[]): PassErrorRoutingV1 {
       treeWide.push(error);
       continue;
     }
-    console.warn(
+    log.warn(
       `core/kernel/handlers/page-descriptors: the whole-tree pass reported [${error.kind}/${error.code}] at "${error.file}" and attributed it to no page — no page's RESOLVED closure contains that file — so it invalidates no descriptor: ${error.message}`,
     );
   }
@@ -212,7 +213,7 @@ export async function buildPageDescriptors(
   const published = new Set(pages.map((entry) => entry.slug));
   const unpublished = [...routed.byPage.keys()].filter((pageSlug) => !published.has(pageSlug));
   if (unpublished.length > 0) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/page-descriptors: the whole-tree pass blocked page(s) ${unpublished.map((pageSlug) => `"${pageSlug}"`).join(", ")} that this publish does not list, so their diagnostics invalidate no descriptor`,
     );
   }
@@ -221,7 +222,7 @@ export async function buildPageDescriptors(
     // No descriptor exists to carry them, so they would otherwise vanish here. The manifest naming
     // no page is the only way to reach this, and it is still worth a trace: "the compiler crashed"
     // is a fact about the run, not about how many pages the project happens to have.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/page-descriptors: the whole-tree pass reported ${routed.treeWide.length} tree-wide fatal(s) but the manifest lists no page to attribute them to: ${routed.treeWide.map((error) => `[${error.kind}/${error.code}] ${error.message}`).join("; ")}`,
     );
   }
@@ -337,7 +338,7 @@ export async function publishPageDescriptorsChanged(
 ): Promise<readonly PublishableEventV1[]> {
   const pages = await wrap(readPageOrder(context.deps.designReader));
   if ("code" in pages) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/page-descriptors: could not read design/pages.json for a "${reason}" descriptor announcement: ${pages.safeMessage}`,
     );
     return [];
@@ -345,7 +346,7 @@ export async function publishPageDescriptorsChanged(
 
   const read = await wrap(buildPageDescriptors(context, pages));
   if ("code" in read) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/page-descriptors: could not read a page source for a "${reason}" descriptor announcement: ${read.safeMessage}`,
     );
     return [];
@@ -365,7 +366,7 @@ export async function publishPageDescriptorsChanged(
     read.treeRevision,
   );
   if (payload instanceof PageDescriptorsAssemblyError) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/page-descriptors: could not assemble a "${reason}" page.descriptorsChanged: ${payload.message}`,
     );
     return [];
@@ -397,7 +398,7 @@ async function resolveActivePageSlug(
   const first = slugs[0] ?? null;
   const workspace = await wrap(context.deps.projectStore.readWorkspaceState());
   if ("code" in workspace) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/page-descriptors: could not read workspace state to keep the active page — falling back to the first page: ${workspace.safeMessage}`,
     );
     return first;

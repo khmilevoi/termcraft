@@ -1,7 +1,7 @@
 import { wrap } from "@reatom/core";
 
 import type { CommandResultV1 } from "core/protocol";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
@@ -144,7 +144,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       void dispatcher.dispatch("turn.start", { text }).then(
         wrap((result) => {
           if (result instanceof Error) {
-            console.error("UI command dispatch failed:", result);
+            log.error("UI command dispatch failed:", result);
             trace("ui.dispatch.result", { kind: "turn.start", result });
             return;
           }
@@ -299,7 +299,7 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
 
 function dispatchAndReport(promise: Promise<CommandResultV1 | Error>, kind: string): void {
   void promise.then((result) => {
-    if (result instanceof Error) console.error("UI command dispatch failed:", result);
+    if (result instanceof Error) log.error("UI command dispatch failed:", result);
     // DIAGNOSTIC (infrastructure/debug-log): this function's ONLY visible reaction is the
     // `console.error` above, which fires just for a thrown/returned Error. A command the Kernel
     // REJECTS comes back as a perfectly ordinary `CommandResultV1` and is discarded right here
@@ -326,7 +326,7 @@ function dispatchHomeSubmit(
   void promise.then(
     wrap((result) => {
       if (result instanceof Error) {
-        console.error("UI command dispatch failed:", result);
+        log.error("UI command dispatch failed:", result);
         trace("ui.dispatch.result", { kind, result });
         return;
       }
@@ -355,7 +355,7 @@ function dispatchTrustSetTrust(
   void promise.then(
     wrap((result) => {
       if (result instanceof Error) {
-        console.error("UI command dispatch failed:", result);
+        log.error("UI command dispatch failed:", result);
         trace("ui.dispatch.result", { kind, result });
         return;
       }

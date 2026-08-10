@@ -1,3 +1,4 @@
+import { log } from "infrastructure/debug-log";
 import { FrameDecoder } from "infrastructure/framing";
 
 import { ProtocolError } from "../../protocol";
@@ -123,7 +124,7 @@ export function createStderrDrain(
       // feeds the §13 diagnostics (stderr tail + discarded-byte count), so the ignored
       // branch must leave a trace — never a silent swallow (errore rule 21). No logger
       // seam exists in 2D-1; a diagnostics sink (2D-3) supersedes this console.warn.
-      console.warn(
+      log.warn(
         "host-supervisor: stderr drain read failed:",
         cause instanceof Error ? cause.message : String(cause),
       );

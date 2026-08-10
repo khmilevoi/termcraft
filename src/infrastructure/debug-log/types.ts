@@ -10,11 +10,11 @@ export interface TraceLine {
 }
 
 /**
- * The trace seam {@link installConsoleTee} writes through.
+ * The trace seam `log.*` (`model/logger.ts`) writes through.
  *
  * Injectable because the real sink resolves its target ONCE at module load, and under
- * `bun test` (`NODE_ENV=test`) that target is `null` — so a tee test can neither enable
- * tracing after the fact nor assert against a file. A fake sink makes the tee testable
+ * `bun test` (`NODE_ENV=test`) that target is `null` — so a logger test can neither enable
+ * tracing after the fact nor assert against a file. A fake sink makes the logger testable
  * without an environment variable and without touching disk.
  */
 export interface TeeSink {

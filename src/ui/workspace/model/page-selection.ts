@@ -1,4 +1,4 @@
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { WorkspaceDeps } from "../types";
 
@@ -28,7 +28,7 @@ export function selectPage(deps: WorkspaceDeps, pageSlug: string): void {
   // be refused by the Kernel anyway, and the tab strip would mark a tab that is not drawn.
   const known = deps.mirror.pageDescriptors().some((entry) => entry.pageSlug === pageSlug);
   if (!known) {
-    console.warn(`UI page switch skipped — no descriptor for page "${pageSlug}"`);
+    log.warn(`UI page switch skipped — no descriptor for page "${pageSlug}"`);
     return;
   }
   trace("ui.page.select", { pageSlug });
@@ -41,7 +41,7 @@ export function selectPage(deps: WorkspaceDeps, pageSlug: string): void {
     // Logged, never swallowed (errore rule 21): a refused clear leaves a stale chip attached to
     // the composer, which is worth seeing in the log even though it cannot break the switch.
     if (result instanceof Error) {
-      console.warn("UI selection.clear dispatch failed after a page switch:", result);
+      log.warn("UI selection.clear dispatch failed after a page switch:", result);
       return;
     }
     trace("ui.dispatch.result", { kind: "selection.clear", result });

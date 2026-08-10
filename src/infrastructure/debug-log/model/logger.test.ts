@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { TeeSink } from "../types";
-import {
-  MAX_HELD_LINES,
-  installConsoleTee,
-  resumeConsolePassthrough,
-  suspendConsolePassthrough,
-} from "./console-tee";
+import { MAX_HELD_LINES, createLogger, resumeConsolePassthrough, suspendConsolePassthrough } from "./logger";
 
 const ORIGINALS = {
   log: console.log,
@@ -30,73 +25,46 @@ function recordingSink(lines: string[]): TeeSink {
   };
 }
 
-describe("installConsoleTee", () => {
-  test("mirrors a warning into the sink and, with the terminal free, calls the original through", () => {
+describe("createLogger", () => {
+  test("mirrors a warning into the sink and, with the terminal free, calls console through", () => {
     const lines: string[] = [];
     const said: unknown[] = [];
     console.warn = (...args: unknown[]) => said.push(...args);
 
-    installConsoleTee(recordingSink(lines));
-    console.warn("hello");
+    const logger = createLogger(recordingSink(lines));
+    logger.warn("hello");
 
     expect(lines).toEqual(['console.warn:["hello"]']);
     expect(said).toEqual(["hello"]);
   });
 
-  test("re-installs over a foreign override — OpenTUI's overrideConsoleMethods", () => {
-    const lines: string[] = [];
-    const sink = recordingSink(lines);
-    installConsoleTee(sink);
-
-    // Exactly what `@opentui/core`'s `overrideConsoleMethods` does: assign a new function that
-    // never calls the previous one. The first install's wrapper is gone at this point.
-    const overlay: unknown[] = [];
-    console.warn = (...args: unknown[]) => overlay.push(...args);
-
-    installConsoleTee(sink);
-    console.warn("after the renderer started");
-
-    expect(lines).toEqual(['console.warn:["after the renderer started"]']);
-    expect(overlay).toEqual(["after the renderer started"]);
-  });
-
-  test("installing twice over its own wrapper does not double-record", () => {
-    const lines: string[] = [];
-    const sink = recordingSink(lines);
-    installConsoleTee(sink);
-    installConsoleTee(sink);
-    console.warn("once");
-
-    expect(lines).toEqual(['console.warn:["once"]']);
-  });
-
-  test("covers every method OpenTUI overrides, including info and debug", () => {
+  test("covers every method, including info and debug", () => {
     const lines: string[] = [];
     const infoSaid: unknown[] = [];
     const debugSaid: unknown[] = [];
     console.info = (...args: unknown[]) => infoSaid.push(...args);
     console.debug = (...args: unknown[]) => debugSaid.push(...args);
 
-    installConsoleTee(recordingSink(lines));
-    console.info("i");
-    console.debug("d");
+    const logger = createLogger(recordingSink(lines));
+    logger.info("i");
+    logger.debug("d");
 
     expect(lines).toEqual(['console.info:["i"]', 'console.debug:["d"]']);
     expect(infoSaid).toEqual(["i"]);
     expect(debugSaid).toEqual(["d"]);
   });
 
-  test("stays transparent when tracing is off — it installs, but never traces and never withholds", () => {
+  test("stays transparent when tracing is off — it never traces and never withholds", () => {
     const screen: unknown[] = [];
     console.warn = (...args: unknown[]) => screen.push(...args);
 
-    installConsoleTee({
+    const logger = createLogger({
       enabled: () => false,
       trace: () => {
-        throw new Error("the tee must not trace when tracing is off");
+        throw new Error("the logger must not trace when tracing is off");
       },
     });
-    console.warn("plain");
+    logger.warn("plain");
 
     expect(screen).toEqual(["plain"]);
   });
@@ -106,9 +74,9 @@ describe("installConsoleTee", () => {
     const said: unknown[] = [];
     console.error = (...args: unknown[]) => said.push(...args);
 
-    installConsoleTee(recordingSink(lines));
+    const logger = createLogger(recordingSink(lines));
     const outer = new Error("outer", { cause: new Error("inner") });
-    console.error("failed:", outer);
+    logger.error("failed:", outer);
 
     expect(lines[0]).toContain('"message":"inner"');
     expect(said).toEqual(["failed:", outer]);
@@ -121,9 +89,9 @@ describe("suspendConsolePassthrough", () => {
     const screen: unknown[] = [];
     console.warn = (...args: unknown[]) => screen.push(...args);
 
-    installConsoleTee(recordingSink(lines));
+    const logger = createLogger(recordingSink(lines));
     suspendConsolePassthrough();
-    console.warn("core/kernel/handlers/preview-export: preview.queryGeometry was failed");
+    logger.warn("core/kernel/handlers/preview-export: preview.queryGeometry was failed");
 
     expect(lines).toEqual([
       'console.warn:["core/kernel/handlers/preview-export: preview.queryGeometry was failed"]',
@@ -133,40 +101,22 @@ describe("suspendConsolePassthrough", () => {
     expect(screen).toEqual([]);
   });
 
-  test("suspends every method the tee covers, not just warn", () => {
+  test("suspends every method, not just warn", () => {
     const lines: string[] = [];
     const screen: unknown[] = [];
     for (const method of ["log", "info", "warn", "error", "debug"] as const) {
       console[method] = (...args: unknown[]) => screen.push(...args);
     }
 
-    installConsoleTee(recordingSink(lines));
+    const logger = createLogger(recordingSink(lines));
     suspendConsolePassthrough();
-    console.log("l");
-    console.info("i");
-    console.warn("w");
-    console.error("e");
-    console.debug("d");
+    logger.log("l");
+    logger.info("i");
+    logger.warn("w");
+    logger.error("e");
+    logger.debug("d");
 
     expect(lines).toHaveLength(5);
-    expect(screen).toEqual([]);
-  });
-
-  test("survives a re-install over a foreign override", () => {
-    const lines: string[] = [];
-    const sink = recordingSink(lines);
-    const screen: unknown[] = [];
-    console.warn = (...args: unknown[]) => screen.push(...args);
-
-    installConsoleTee(sink);
-    suspendConsolePassthrough();
-    // A renderer that re-overrode console after the suspension: the repair re-install must not
-    // hand the terminal back while the renderer still owns it.
-    console.warn = (...args: unknown[]) => screen.push(...args);
-    installConsoleTee(sink);
-    console.warn("still mid-frame");
-
-    expect(lines).toEqual(['console.warn:["still mid-frame"]']);
     expect(screen).toEqual([]);
   });
 
@@ -174,9 +124,9 @@ describe("suspendConsolePassthrough", () => {
     const screen: unknown[] = [];
     console.warn = (...args: unknown[]) => screen.push(...args);
 
-    installConsoleTee({ enabled: () => false, trace: () => undefined });
+    const logger = createLogger({ enabled: () => false, trace: () => undefined });
     suspendConsolePassthrough();
-    console.warn("nowhere else to go");
+    logger.warn("nowhere else to go");
 
     // Nothing may reach the frame — and nothing may be lost either. With no file capturing it,
     // the line waits in memory until the renderer gives the terminal back.
@@ -191,9 +141,9 @@ describe("suspendConsolePassthrough", () => {
     const screen: unknown[] = [];
     console.warn = (...args: unknown[]) => screen.push(...args);
 
-    installConsoleTee(recordingSink(lines));
+    const logger = createLogger(recordingSink(lines));
     suspendConsolePassthrough();
-    console.warn("traced");
+    logger.warn("traced");
     resumeConsolePassthrough();
 
     // Replaying a whole session's warnings onto the terminal after a normal quit would be noise,
@@ -207,9 +157,9 @@ describe("suspendConsolePassthrough", () => {
     console.warn = (...args: unknown[]) => screen.push(...args);
     console.error = (...args: unknown[]) => screen.push(...args);
 
-    installConsoleTee({ enabled: () => false, trace: () => undefined });
+    const logger = createLogger({ enabled: () => false, trace: () => undefined });
     suspendConsolePassthrough();
-    for (let index = 0; index < MAX_HELD_LINES + 3; index++) console.warn(`line-${index}`);
+    for (let index = 0; index < MAX_HELD_LINES + 3; index++) logger.warn(`line-${index}`);
     expect(screen).toEqual([]);
 
     resumeConsolePassthrough();
@@ -221,7 +171,7 @@ describe("suspendConsolePassthrough", () => {
     // The whole message, not a substring: `toContain("3")` also passes on "13", "30" or "203",
     // which is every wrong drop count this assertion exists to catch.
     expect(screen[0]).toBe(
-      `termcraft: 3 earlier console line(s) were dropped while the terminal was held (the buffer keeps the most recent ${MAX_HELD_LINES})`,
+      `termcraft: 3 earlier log line(s) were dropped while the terminal was held (the buffer keeps the most recent ${MAX_HELD_LINES})`,
     );
     expect(screen[1]).toBe("line-3");
     expect(screen.at(-1)).toBe(`line-${MAX_HELD_LINES + 2}`);
@@ -234,11 +184,11 @@ describe("resumeConsolePassthrough", () => {
     const screen: unknown[] = [];
     console.error = (...args: unknown[]) => screen.push(...args);
 
-    installConsoleTee(recordingSink(lines));
+    const logger = createLogger(recordingSink(lines));
     suspendConsolePassthrough();
-    console.error("during the frame");
+    logger.error("during the frame");
     resumeConsolePassthrough();
-    console.error("after teardown");
+    logger.error("after teardown");
 
     expect(screen).toEqual(["after teardown"]);
     expect(lines).toEqual([
@@ -252,10 +202,10 @@ describe("resumeConsolePassthrough", () => {
     const screen: unknown[] = [];
     console.warn = (...args: unknown[]) => screen.push(...args);
 
-    installConsoleTee(recordingSink(lines));
+    const logger = createLogger(recordingSink(lines));
     resumeConsolePassthrough();
     resumeConsolePassthrough();
-    console.warn("plain");
+    logger.warn("plain");
 
     expect(screen).toEqual(["plain"]);
   });

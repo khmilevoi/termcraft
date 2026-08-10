@@ -11,7 +11,7 @@ import type {
   BackendCapabilities,
   SessionScopeInput,
 } from "agent/types";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 import { ProcessTreeError } from "infrastructure/process";
 
 import { CLAUDE_BACKEND_ID } from "./backend-id";
@@ -54,7 +54,7 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
       const abortController = new AbortController();
       const tree = deps.processTreeFactory();
       if (tree instanceof ProcessTreeError) {
-        console.warn(
+        log.warn(
           "agent/claude-backend: processTreeFactory failed, run degraded:",
           tree.message,
         );
@@ -157,7 +157,7 @@ export function createClaudeBackend(deps: ClaudeBackendDeps): AgentBackend {
         // tree exists here, but that says nothing about whether the CLI is
         // installed. `startTurn` already refuses a real turn on this same
         // failure, so no paid turn can start on a wrong "ready".
-        console.warn(
+        log.warn(
           "agent/claude-backend: processTreeFactory failed for healthCheck(), probing without adoption:",
           tree.message,
         );

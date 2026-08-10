@@ -12,6 +12,7 @@ import * as errore from "errore";
 
 import type { AgentBackend, AgentInfo } from "agent";
 import type { AgentRegistry } from "core/ports";
+import { log } from "infrastructure/debug-log";
 import type { AgentHealth } from "ui/agent-health";
 
 /**
@@ -124,7 +125,7 @@ export function homeHealthFromAgentInfo(info: AgentInfo): AgentHealth {
       // fixed line there has no room for the backend's own free-text `health.detail` — kept out
       // of the visible `detail` (which stays the design's exact wording) but logged, not
       // silently discarded (errore rule 21).
-      console.warn(
+      log.warn(
         `agent-health: ${backendId} reported sandbox-degraded — backend detail: ${health.detail}`,
       );
       return {
@@ -204,7 +205,7 @@ export function createAgentHealthProbe(backend: AgentBackend): () => Promise<Age
         }),
     );
     if (info instanceof Error) {
-      console.warn(info.message, info.cause);
+      log.warn(info.message, info.cause);
       return {
         kind: "advisory",
         agent: backend.capabilities().backendId,

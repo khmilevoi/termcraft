@@ -1,4 +1,4 @@
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import {
   PROTOCOL_HARD_LIMITS,
@@ -478,7 +478,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     await teardown(true);
     if (deps.onFatal) deps.onFatal(error);
     else
-      console.warn(
+      log.warn(
         "host-supervisor: post-ready fatal outcome with no onFatal sink:",
         error.message,
       );
@@ -898,7 +898,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     const reaped = await Promise.race([exit, reapDeadline]);
     reapTimer.cancel();
     if (reaped === "reap-timeout") {
-      console.warn("host-supervisor: process did not reap within 1s; re-killing");
+      log.warn("host-supervisor: process did not reap within 1s; re-killing");
       target.kill();
       await target.exited;
     }
@@ -951,7 +951,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
     // before falling back anyway. Check the SAME pre-send guard sendRequest uses
     // (§8) BEFORE writing anything, and force immediately if the table is full.
     if (requestTable.size() >= REQUEST_TABLE_CAPACITY) {
-      console.warn("host-supervisor: request table full at stop(); forcing");
+      log.warn("host-supervisor: request table full at stop(); forcing");
       await teardown(true);
       await pumpTask;
       phase = "stopped";
@@ -988,7 +988,7 @@ export function createHostSession(spec: HostSessionSpec, deps: HostSessionDeps):
       if (ack instanceof Error) {
         const code =
           ack instanceof SupervisorError || ack instanceof ProtocolError ? ack.code : "UNKNOWN";
-        console.warn("host-supervisor: no shutdown-ack, forcing:", ack.message);
+        log.warn("host-supervisor: no shutdown-ack, forcing:", ack.message);
         return { reason: `forced: no shutdown-ack [${code}]` };
       }
       activeChild.stdin.end();

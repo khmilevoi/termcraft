@@ -1,5 +1,7 @@
 import * as errore from "errore";
 
+import { log } from "infrastructure/debug-log";
+
 import type { HealthProbeDeps } from "../types";
 
 /** Fired when no classifying message (nor a clean stream end) arrives within the probe deadline. */
@@ -43,7 +45,7 @@ function describeThrown(cause: unknown): string {
  */
 async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promise<void> {
   await wait(ms).catch((cause) => {
-    console.warn(
+    log.warn(
       "agent/health: injected wait() rejected during probe deadline:",
       describeThrown(cause),
     );
@@ -80,7 +82,7 @@ export async function withProbeDeadline<T>(
     // deadline already produced runHealthProbe's verdict; a late rejection
     // from the abandoned read is expected once we abort it above, not a new
     // failure.
-    console.warn(
+    log.warn(
       "agent/health: probe read failed after the deadline already fired:",
       describeThrown(e),
     );

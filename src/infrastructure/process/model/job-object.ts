@@ -1,6 +1,8 @@
 import { FFIType, dlopen, ptr, suffix } from "bun:ffi";
 import type { Library, Pointer } from "bun:ffi";
 
+import { log } from "infrastructure/debug-log";
+
 import type { ProcessTree } from "../types";
 import { ProcessTreeError } from "../types";
 
@@ -158,7 +160,7 @@ function closeHandleQuietly(sys: JobObjectSyscalls, handle: Pointer): void {
   try {
     sys.CloseHandle(handle);
   } catch (cause) {
-    console.warn(
+    log.warn(
       "infrastructure/process: CloseHandle failed, handle leaked:",
       describeFailure(cause),
     );

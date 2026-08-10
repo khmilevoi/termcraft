@@ -8,6 +8,7 @@ import {
 } from "core/machines";
 import type { CapabilityTargetByKindV1, CommandKindV1, UnavailableReason } from "core/protocol";
 import { deferredCapabilityReason } from "core/versions";
+import { log } from "infrastructure/debug-log";
 
 import type { CapabilityState, KernelStateSnapshot } from "../types";
 import { turnLockedReason } from "./turn-lock";
@@ -182,7 +183,7 @@ function migrationNotIdleReason(
 function turnStartReason(state: KernelStateSnapshot): UnavailableReason | null {
   if (state.turn.phase === "idle") return null;
   if (state.turn.activeTurnId === null) {
-    console.warn(
+    log.warn(
       `evaluateCapabilityGuard: turn.phase is "${state.turn.phase}" (non-idle) but activeTurnId is null; ` +
         `rejecting turn.start with CAPABILITY_UNAVAILABLE instead of a fabricated turnId`,
     );
@@ -207,7 +208,7 @@ function turnCancelReason(target: unknown, state: KernelStateSnapshot): Unavaila
     return { code: "TURN_NOT_ACTIVE" };
   }
   if (activeTurnId === null) {
-    console.warn(
+    log.warn(
       `evaluateCapabilityGuard: turn.phase is "${phase}" (active) but activeTurnId is null; ` +
         `rejecting turn.cancel with TURN_NOT_ACTIVE instead of comparing against a fabricated turnId`,
     );

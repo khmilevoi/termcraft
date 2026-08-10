@@ -3,6 +3,7 @@ import type { FailureDtoV1, PageRemovePlanV1, Sha256Hex } from "core/protocol";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 import { toFailureDto } from "./failure";
 import type { StoreAdapterDeps } from "./types";
@@ -93,7 +94,7 @@ function rewriteMetaTitle(source: string, newTitle: string): string | null {
 }
 
 function invalidPageSourceFailure(pageSlug: PageSlug): FailureDtoV1 {
-  console.warn(
+  log.warn(
     `store/adapters/design-store: page ${pageSlug} source has no rewritable meta.title — Gate should have already rejected this page`,
   );
   return {
@@ -113,7 +114,7 @@ function invalidPageSourceFailure(pageSlug: PageSlug): FailureDtoV1 {
  * codebase bans — a cast asserts a runtime fact never checked.
  */
 function invalidPageSlugFailure(rawSlug: string, reason: string): FailureDtoV1 {
-  console.warn(
+  log.warn(
     `store/adapters/design-store: page removal plan named an invalid pageSlug "${rawSlug}": ${reason} — Gate should have already rejected this plan`,
   );
   return {
@@ -126,7 +127,7 @@ function invalidPageSlugFailure(rawSlug: string, reason: string): FailureDtoV1 {
 
 /** `renameTitle`'s manifest lookup found no `design/pages.json` entry for `pageSlug` — never a slug-computed path guess (design §3, §7). */
 function pageEntryNotFoundFailure(pageSlug: PageSlug): FailureDtoV1 {
-  console.warn(
+  log.warn(
     `store/adapters/design-store: renameTitle found no design/pages.json entry for "${pageSlug}"`,
   );
   return {

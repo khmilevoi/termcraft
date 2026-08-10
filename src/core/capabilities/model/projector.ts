@@ -1,4 +1,5 @@
 import { type CapabilityTargetByKindV1, type CommandKindV1, canonicalJson } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 
 import type { CapabilityEntry, CapabilityRecord, KernelStateSnapshot } from "../types";
 import { evaluateCapabilityGuard } from "./guards";
@@ -51,7 +52,7 @@ export interface CapabilityChangeSet {
 function stableJson(value: unknown): string {
   const json = canonicalJson(value);
   if (json instanceof Error) {
-    console.warn(
+    log.warn(
       `core/capabilities projector: failed to canonicalize a capability key/state — ${json.message}`,
     );
     return JSON.stringify(value);

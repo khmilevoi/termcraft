@@ -1,4 +1,5 @@
 import type { AgentEvent, TurnFence } from "entities/turn";
+import { log } from "infrastructure/debug-log";
 
 import type {
   AgentBackend,
@@ -120,7 +121,7 @@ export function createFakeAgentBackend(options?: {
   function emitEvent(fence: TurnFence, event: AgentEvent): void {
     const run = runs.get(fenceKey(fence));
     if (run === undefined || run.settled) {
-      console.warn(
+      log.warn(
         `fakes/agent-backend: emitEvent for unknown or settled fence ${fenceKey(fence)}, ignored`,
       );
       return;
@@ -132,7 +133,7 @@ export function createFakeAgentBackend(options?: {
     const key = fenceKey(fence);
     const run = runs.get(key);
     if (run === undefined || run.settled) {
-      console.warn(
+      log.warn(
         `fakes/agent-backend: completeRun for unknown or already-settled fence ${key}, ignored`,
       );
       return;

@@ -25,6 +25,7 @@ import {
 } from "host/supervisor";
 import type { SpawnFn } from "host/supervisor";
 import { systemClock } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 import {
@@ -465,7 +466,7 @@ async function resolveEnvWithProjectIdentity(
     // hand a mid-composition failure to — `createShell` already committed to `open` above), so
     // it must log instead of swallowing it silently, or a genuine post-open manifest failure
     // would leave no trace anywhere.
-    console.warn(
+    log.warn(
       `termcraft: could not read the project manifest (${manifest.message}); keeping the path-based workspaceIdentity ${env.workspaceIdentity}`,
     );
     return { ...env, projectExists: existing };
@@ -530,7 +531,7 @@ function toKernelPort(kernel: Kernel): KernelPort {
       if (session !== cachedSession) {
         const previewSessionId = kernel.currentPreviewSessionId();
         if (previewSessionId === null) {
-          console.warn(
+          log.warn(
             "entrypoint: kernel.currentPreview() is non-null but currentPreviewSessionId() is null — defensive, should be unreachable; treating as no session rather than fabricating an id",
           );
           cachedSession = null;
@@ -586,7 +587,7 @@ export function toPreviewSessionHandle(
     for await (const frame of session.frames) {
       const frameToken = kernel.publishFrame(frame);
       if (frameToken instanceof Error) {
-        console.warn(`entrypoint: dropped a preview frame — ${frameToken.message}`);
+        log.warn(`entrypoint: dropped a preview frame — ${frameToken.message}`);
         continue;
       }
       yield { frame, frameToken, handle };

@@ -8,7 +8,7 @@ import type {
   TurnTransactionService,
 } from "core/ports";
 import type { CommandRejectionCode, FailureDtoV1 } from "core/protocol";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 /**
@@ -47,7 +47,7 @@ import { uuidv7 } from "infrastructure/uuid";
  * above — so the frozen candidate directory (`StagingService.retireCandidate`) is retired
  * unconditionally too, right after `settle`, whether the terminal record ended up recorded
  * or unrecorded: either way the turn is DONE and the candidate is no longer needed. A
- * retire failure is REPORTED via `console.warn`, never propagated — matching `finalize.ts`'s
+ * retire failure is REPORTED via `log.warn`, never propagated — matching `finalize.ts`'s
  * identical reasoning ("the turn's outcome is already durable by then"). `staging` is
  * REQUIRED (review finding #4 — matching `finalize.ts`'s identical fix: an optional
  * dependency here was never actually threaded through by any real caller, silently
@@ -172,7 +172,7 @@ async function retireIfCandidateFrozen(
   if (candidateRoot === null || candidateRoot === undefined) return;
   const retired = await wrap(staging.retireCandidate(candidateRoot));
   if (retired !== undefined)
-    console.warn("terminalizeTurn: candidate retirement failed:", retired.safeMessage);
+    log.warn("terminalizeTurn: candidate retirement failed:", retired.safeMessage);
 }
 
 export async function terminalizeTurn(

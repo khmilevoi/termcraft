@@ -11,6 +11,7 @@ import {
   exportPointerV1Schema,
 } from "core/ports";
 import type { FailureDtoV1 } from "core/protocol";
+import { log } from "infrastructure/debug-log";
 import { FsAccessError, isNotFound } from "store/safe-fs";
 import type {
   FileImage,
@@ -142,7 +143,7 @@ function toExportFailureDto(error: Error): FailureDtoV1 {
 }
 
 function noActivePermitFailure(): FailureDtoV1 {
-  console.warn(
+  log.warn(
     "store/adapters/export-publish: publish() called with no active write-mutex permit — the caller must hold one across the whole revalidate-then-publish window (kernel-command-contract §12.5)",
   );
   return {

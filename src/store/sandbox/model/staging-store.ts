@@ -3,6 +3,7 @@ import path from "node:path";
 import * as errore from "errore";
 
 import { DESIGN_DIRNAME } from "entities/design-tree";
+import { log } from "infrastructure/debug-log";
 import { isCanonicalUuidv7 } from "infrastructure/uuid";
 import type {
   CandidateSink,
@@ -138,7 +139,7 @@ function mkdirNewOrCollision(fsDeps: StagingFsDeps, absPath: AbsPath): StagingEr
 /** Close a sink whose copy already failed and propagate the original failure, not the close outcome. */
 function closeSinkThen(sink: CandidateSink, error: StagingError): StagingError {
   const closed = sink.close();
-  if (closed instanceof Error) console.warn("sandbox: staging sink close failed:", closed.message);
+  if (closed instanceof Error) log.warn("sandbox: staging sink close failed:", closed.message);
   return error;
 }
 

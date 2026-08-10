@@ -1,5 +1,6 @@
 import type { CommandPayloadByKindV1, FailureDtoV1 } from "core/protocol";
 import type { Size } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 import type { AssertConforms } from "../index";
 import type {
@@ -116,7 +117,7 @@ export function createFakePreviewSession(
 
   function emitFrame(frame: PreviewFrameV1): void {
     if (closed) {
-      console.warn(
+      log.warn(
         `fakes/preview-session: emitFrame after close() for session ${identity.sessionId}, ignored`,
       );
       return;

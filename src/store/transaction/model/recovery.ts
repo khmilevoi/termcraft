@@ -4,6 +4,7 @@ import path from "node:path";
 import * as errore from "errore";
 import { z } from "zod";
 
+import { log } from "infrastructure/debug-log";
 import type { DurabilityError } from "infrastructure/durability";
 import { isCanonicalUuidv7 } from "infrastructure/uuid";
 import { FsAccessError, isNotFound } from "store/safe-fs";
@@ -117,7 +118,7 @@ export function listTransactionIds(deps: TransactionFsDeps): SafeFsError | reado
     // transaction directory, not an anomaly — skip it quietly rather than warning on every
     // ordinary launch.
     if (name === "format.json") continue;
-    console.warn(
+    log.warn(
       `store/transaction recovery: skipping non-UUID entry under ${TRANSACTIONS_LOCAL_DIR}/: ${name}`,
     );
   }

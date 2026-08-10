@@ -20,6 +20,7 @@ import * as errore from "errore";
 
 import type { ChatRecord } from "entities/chat";
 import type { PageSlug } from "entities/page";
+import { log } from "infrastructure/debug-log";
 import { MiB } from "store/safe-fs";
 
 import type {
@@ -359,7 +360,7 @@ function scanSuffixLines(
     if (lf === -1) break; // an incomplete final line is not indexed (§7.2) — not an error
     const line = suffix.subarray(index, lf + 1);
     if (line.byteLength > JSONL_MAX_PHYSICAL_LINE_BYTES) {
-      console.warn(
+      log.warn(
         "chat-index: suffix scan deferring to rebuild:",
         `line at offset ${baseOffset + index} exceeds the physical line bound`,
       );
@@ -369,11 +370,11 @@ function scanSuffixLines(
     if (decoded instanceof Error) {
       // Not corruption — this narrow scan is not the authoritative classifier (T10's reader
       // is). Log the reason before deferring, so a rebuild storm is explainable.
-      console.warn("chat-index: suffix scan deferring to rebuild:", decoded.message);
+      log.warn("chat-index: suffix scan deferring to rebuild:", decoded.message);
       return null;
     }
     if (seenIds.has(decoded.recordId)) {
-      console.warn(
+      log.warn(
         "chat-index: suffix scan deferring to rebuild:",
         `duplicate recordId ${decoded.recordId} in the appended suffix`,
       );

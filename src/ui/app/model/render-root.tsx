@@ -3,11 +3,7 @@ import { createRoot } from "@opentui/react";
 import type { JSX } from "@opentui/react/jsx-runtime";
 import * as errore from "errore";
 
-import {
-  installConsoleTee,
-  resumeConsolePassthrough,
-  suspendConsolePassthrough,
-} from "infrastructure/debug-log";
+import { resumeConsolePassthrough, suspendConsolePassthrough } from "infrastructure/debug-log";
 
 export interface UiRootRenderer {
   readonly width: number;
@@ -37,23 +33,23 @@ export class UiRootError extends errore.createTaggedError({
  *
  * `consoleMode: "disabled"` (HANDOFF Finding 1, 2026-07-27): OpenTUI's default
  * `"console-overlay"` calls `overrideConsoleMethods` at construction, replacing every
- * `console.*` method with an overlay writer that does NOT call through — which discards the
- * debug-log tee installed back in `main.tsx` and blinds the entire interactive run. The app
- * never shows OpenTUI's overlay, so nothing is lost by turning it off, and
- * `host/render/model/renderer.ts` already makes exactly this choice for the same reason.
+ * `console.*` method with an overlay writer that does NOT call through. The app's own reporting
+ * goes through `infrastructure/debug-log`'s `log.*` (`model/logger.ts`), not `console.*`, so an
+ * overlay override cannot blind it — but the app never shows OpenTUI's overlay either way, so
+ * nothing is lost by turning it off, and `host/render/model/renderer.ts` already makes exactly
+ * this choice for the same reason.
  *
- * THE OTHER HALF OF THAT TRADE (2026-07-28). The overlay writer was also the only thing keeping
- * a `console.*` call off the screen. With `"disabled"` OpenTUI installs no interceptor at all:
- * the renderer's `stdout` defaults to `process.stdout`, the default `screenMode`
- * (`"alternate-screen"`) resolves `externalOutputMode` to `"passthrough"` — which leaves
- * `stdout.write` untouched — and `console.warn`/`console.error` go to `stderr`, which the
- * renderer never touches under any mode. So every warning the UI and Kernel emit wrote raw text
- * straight over the live frame; a screenshot of a real run showed a `preview-export` warning
- * cutting through a panel. That is why this setting is inseparable from the
- * `suspendConsolePassthrough()` call below: `"disabled"` keeps the trace alive, the suspension
- * keeps this app's `console.*` traffic off the frame, and neither half is correct without the
- * other. (Only `console.*` — a direct `process.stderr.write` or the runtime's own uncaught
- * printer still reaches the screen; see `suspendConsolePassthrough`'s own doc comment.)
+ * THE OTHER HALF OF THAT TRADE (2026-07-28, narrowed 2026-08-10). With `"disabled"` OpenTUI
+ * installs no interceptor at all: the renderer's `stdout` defaults to `process.stdout`, the
+ * default `screenMode` (`"alternate-screen"`) resolves `externalOutputMode` to `"passthrough"` —
+ * which leaves `stdout.write` untouched — and `console.warn`/`console.error` go to `stderr`,
+ * which the renderer never touches under any mode. A screenshot of a real run once showed a
+ * `preview-export` warning cutting through a panel this way. The app's own code no longer risks
+ * that — every call site reports through `log.*`, which `suspendConsolePassthrough()` below
+ * gates — but a DIRECT `console.*` call (a dependency's, or OpenTUI's own internals mid-setup)
+ * is no longer intercepted at all now that nothing monkey-patches `console` globally, and would
+ * still tear the frame if one fired inside the suspended window. Accepted: the app's own
+ * reporting is what actually fires routinely here, and is fully covered.
  *
  * The rejected alternative is OpenTUI's own sanctioned stdout sink, `externalOutputMode:
  * "capture-stdout"` — it is validated to require `screenMode: "split-footer"`, i.e. the app
@@ -80,14 +76,8 @@ export async function mountRenderRoot(
   adapters: UiRootAdapters,
   render: (size: { readonly w: number; readonly h: number }) => JSX.Element,
 ): Promise<UiRootError | { dispose(): void }> {
-  // Ensures the gate `suspendConsolePassthrough` below relies on actually exists. `main.tsx`
-  // installs the tee at startup, but `demo.tsx` does not, and this function must not depend on
-  // which root reached it. Idempotent by wrapper identity, so this costs nothing when the tee is
-  // already in place.
-  installConsoleTee();
   // Terminal ownership begins INSIDE `createCliRenderer`, not after it: `setupTerminal()` enters
-  // raw mode, mouse tracking and the alternate screen before the promise resolves, and OpenTUI
-  // can `console.error` from its own partially-set-up-renderer teardown in there. So the
+  // raw mode, mouse tracking and the alternate screen before the promise resolves. So the
   // suspension has to straddle the await rather than follow it — every path out of it below
   // resumes. See `UI_RENDERER_CONFIG`'s doc comment for why `consoleMode: "disabled"` makes this
   // necessary at all, and `infrastructure/debug-log`'s `suspendConsolePassthrough` for where a
@@ -100,10 +90,6 @@ export async function mountRenderRoot(
     resumeConsolePassthrough();
     return renderer;
   }
-  // Belt to `UI_RENDERER_CONFIG`'s braces: any renderer construction — including an injected
-  // adapter, or a future OpenTUI version that re-overrides console outside `consoleMode` — gets
-  // the tee put back over whatever it left behind. A no-op when nothing replaced it.
-  installConsoleTee();
 
   const root = errore.try(() => adapters.createRoot(renderer));
   if (root instanceof Error) {

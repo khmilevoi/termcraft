@@ -1,3 +1,5 @@
+import { log } from "infrastructure/debug-log";
+
 import type { SpawnCommand, SpawnFn, SpawnedChild } from "../types";
 
 /**
@@ -60,7 +62,7 @@ export function createSparePool(deps: SparePoolDeps): SparePool {
         // A spare that could not be pre-spawned is not a failure the caller can act on — it
         // is not holding a session, and a cold spawn on adoption is the ordinary fallback
         // (errore rule 21: leave a trace, never fail silently).
-        console.warn("spare-pool: replenish spawn failed:", spawned.message);
+        log.warn("spare-pool: replenish spawn failed:", spawned.message);
         return;
       }
       idle.push(spawned);

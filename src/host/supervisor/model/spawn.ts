@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { SpawnCommand, SpawnFn, SpawnedChild } from "../types";
 import { SupervisorError, osFailureReason } from "./errors";
@@ -110,7 +110,7 @@ function removeScratchDir(directory: string): void {
     // On Windows a directory that is still a live process's cwd refuses deletion. Leaving it is
     // the correct outcome — the next sweep collects it — and a cleanup that could throw into the
     // spawn path would be strictly worse than a stray directory.
-    console.warn(`host: could not remove scratch directory ${directory}`, cause);
+    log.warn(`host: could not remove scratch directory ${directory}`, cause);
   }
 }
 
@@ -153,14 +153,14 @@ export function sweepStaleScratchDirs(nowMs: number = Date.now()): void {
       cap: SCRATCH_SWEEP_MAX_DELETIONS,
     });
     if (stale.skipped > 0) {
-      console.warn(
+      log.warn(
         `host: scratch-directory sweep stopped at its per-run cap of ${SCRATCH_SWEEP_MAX_DELETIONS} — ` +
           `${stale.skipped} abandoned directories remain in ${tmp} and the next launch continues the sweep`,
       );
     }
   } catch (cause) {
     // Best-effort housekeeping: an unreadable %TEMP% must not stop the app from starting.
-    console.warn(`host: scratch-directory sweep could not read the temp directory (${tmp})`, cause);
+    log.warn(`host: scratch-directory sweep could not read the temp directory (${tmp})`, cause);
   }
 }
 
@@ -215,7 +215,7 @@ export function createBunSpawn(options?: { makeScratchDir?: () => string }): Spa
         void proc.exited.then(
           () => removeScratchDir(scratch),
           (cause) =>
-            console.warn(`host: scratch cleanup skipped for ${scratch} — exited rejected`, cause),
+            log.warn(`host: scratch cleanup skipped for ${scratch} — exited rejected`, cause),
         );
         return proc as unknown as SpawnedChild;
       } catch (cause) {

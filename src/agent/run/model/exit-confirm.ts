@@ -1,5 +1,6 @@
 import * as errore from "errore";
 
+import { log } from "infrastructure/debug-log";
 import type { ProcessTree } from "infrastructure/process";
 import { ProcessTreeError } from "infrastructure/process";
 
@@ -57,7 +58,7 @@ function safeTerminate(processTree: ProcessTree): ProcessTreeError | null {
  */
 async function safeWait(wait: (ms: number) => Promise<void>, ms: number): Promise<void> {
   await wait(ms).catch((cause) => {
-    console.warn(
+    log.warn(
       "agent/run: injected wait() rejected during exit confirmation:",
       describeThrown(cause),
     );
@@ -85,10 +86,10 @@ export async function confirmExit(
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const count = safeActiveProcesses(processTree);
     if (count instanceof ProcessTreeError) {
-      console.warn("agent/run: activeProcesses() failed while confirming exit:", count.message);
+      log.warn("agent/run: activeProcesses() failed while confirming exit:", count.message);
     } else if (count === 0) {
       if (processTree.ownershipConfirmed()) return true;
-      console.warn(
+      log.warn(
         "agent/run: activeProcesses() reported zero but ownership of this tree was never confirmed; not treating it as a confirmed exit",
       );
     }
@@ -110,7 +111,7 @@ export async function escalateAndConfirm(
 ): Promise<boolean> {
   const terminateResult = safeTerminate(processTree);
   if (terminateResult instanceof ProcessTreeError) {
-    console.warn(
+    log.warn(
       "agent/run: processTree.terminate() failed while escalating:",
       terminateResult.message,
     );

@@ -1,6 +1,6 @@
 import * as errore from "errore";
 
-import { resumeConsolePassthrough } from "infrastructure/debug-log";
+import { log, resumeConsolePassthrough } from "infrastructure/debug-log";
 
 import type { ProcessBoundary, ShutdownSignal } from "../types";
 
@@ -69,7 +69,7 @@ const REAL_TERMINAL_CONTROL: TerminalControl = {
  * The real exit seam: flushes `stderr` before exiting, mirroring `main.tsx`'s own
  * flush-then-exit pattern for `stdout` — an empty trailing write's callback fires only after
  * every earlier write's callback already has (Writable streams process queued writes strictly
- * in order), so this guarantees the diagnostic `reportFatal` just printed via `console.error`
+ * in order), so this guarantees the diagnostic `reportFatal` just printed via `log.error`
  * (which targets `stderr`) physically lands before the process disappears, even on a piped,
  * non-TTY `stderr` (worse on Windows).
  */
@@ -96,7 +96,7 @@ const REAL_PROCESS_EXIT: ProcessExit = (code) => {
  * the `reportFatalAndExit` method below instead of owning a bare `process.exit` of its own —
  * `main.tsx`'s `_host`-stdio-failure and interactive-bootstrap-failure branches both now call
  * it, so their exit shares the exact same flush-then-exit `exit` seam the panic path already
- * used (a bare `process.exit()` right after `reportFatal`'s `console.error` does not wait for
+ * used (a bare `process.exit()` right after `reportFatal`'s `log.error` does not wait for
  * that write to physically land on a piped, non-TTY stderr — worse on Windows — so the
  * diagnostic could get truncated). `demo.tsx` still pairs its own `reportFatal` with a bare
  * `process.exit(1)` — same latent truncation risk, left alone here since `demo.tsx` is outside
@@ -137,11 +137,11 @@ export function createProcessBoundary(
       terminal.exitAlternateScreen();
     });
     // The fourth thing a live renderer took, and the one `TerminalControl` cannot express: while
-    // it owned the terminal, `ui/app/model/root.tsx` had the debug-log tee stop calling through
-    // to the real writer, so nothing would paint raw text over a frame
+    // it owned the terminal, `ui/app/model/render-root.tsx` had `log.*` stop calling through to
+    // the real writer, so nothing would paint raw text over a frame
     // (`infrastructure/debug-log`'s `suspendConsolePassthrough`). A panic never reaches that
     // renderer's own `dispose()` — this function is the ONLY thing that runs — so without this
-    // line `reportFatal`'s `console.error` below would land in the trace file and nowhere else,
+    // line `reportFatal`'s `log.error` below would land in the trace file and nowhere else,
     // leaving the operator with a correctly restored but completely blank terminal. Called
     // directly rather than through the injected `terminal` seam precisely because it must never
     // be optional: `main.tsx`'s `NOOP_TERMINAL_CONTROL` (the `_host`/`export` branches, which
@@ -152,19 +152,19 @@ export function createProcessBoundary(
     // screen rather than only the trace file. Ahead of the caller's own fatal message on purpose:
     // it explains a terminal that may still be half-restored when that message lands.
     if (teardown instanceof Error) {
-      console.error("termcraft: terminal restore did not complete:", teardown);
+      log.error("termcraft: terminal restore did not complete:", teardown);
     }
   }
 
   function reportFatal(message: string, cause: unknown): void {
     restoreTerminal();
-    console.error(`termcraft: ${message}`);
-    if (cause !== undefined && cause !== null) console.error(cause);
+    log.error(`termcraft: ${message}`);
+    if (cause !== undefined && cause !== null) log.error(cause);
   }
 
   function reportFatalAndExit(message: string, cause: unknown): void {
     reportFatal(message, cause);
-    // Same reasoning as `onPanic` below: `reportFatal` only prints (via `console.error`), it
+    // Same reasoning as `onPanic` below: `reportFatal` only prints (via `log.error`), it
     // never exits, so callers that need to end the process route through the injected `exit`
     // seam themselves — `REAL_PROCESS_EXIT` by default, which flushes `stderr` before exiting.
     exit(1);

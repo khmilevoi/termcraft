@@ -28,6 +28,8 @@
  * a connect hook owning this state's lifetime.
  */
 
+import { log } from "infrastructure/debug-log";
+
 export const HOST_CONTROL_QUEUE_CAPACITY = 256;
 export const HOST_CONTROL_QUEUE_LOW_WATER_MARK = 128;
 
@@ -72,7 +74,7 @@ export function createPreviewBackpressure(): PreviewBackpressure {
 
   function release(): void {
     if (size === 0) {
-      console.warn("preview backpressure: release() called on an empty queue, ignored");
+      log.warn("preview backpressure: release() called on an empty queue, ignored");
       return;
     }
     size -= 1;

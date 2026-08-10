@@ -5,6 +5,7 @@ import { bind, wrap } from "@reatom/core";
 import { reatomComponent, useWrap } from "@reatom/react";
 
 import type { PageDescriptorV1, PinDtoV1 } from "core/protocol";
+import { log, trace } from "infrastructure/debug-log";
 import { HOTKEYS, filterSlashRows } from "ui/actions";
 import type { HotkeyAction } from "ui/actions";
 import { agentBlockedNote, agentHealthBadge } from "ui/agent-health";
@@ -866,7 +867,7 @@ export const Workspace = reatomComponent<{
     void dispatcher.dispatch("chat.load-older", { chatId, cursor: held.prevCursor }).then(
       wrap((result) => {
         if (result instanceof Error) {
-          console.error("UI command dispatch failed:", result);
+          log.error("UI command dispatch failed:", result);
           // CORRECTED (review round 2): a dispatcher-level refusal — a transport failure here,
           // `CAPABILITY_UNAVAILABLE` or similar below — happens BEFORE any Kernel round trip
           // ever touches the chat file, so it is not a `chat.records.older` load failure.
@@ -887,9 +888,23 @@ export const Workspace = reatomComponent<{
     );
   }, "ui.Workspace.maybeLoadOlder");
 
+  // DIAGNOSTIC (infrastructure/debug-log): added while investigating "pins don't work" — traces
+  // the "select"/"pin" leg only (never "hover", which fires on every mouse-move) so a right-click
+  // that never reaches `requestGeometry` at all — no live frame yet — is visible too, not just
+  // the requests that got that far.
   const requestAtMouse = (purpose: "hover" | "select" | "pin", event: MouseEvent) => {
     const current = previewFrame();
-    if (current === null) return;
+    if (current === null) {
+      if (purpose !== "hover") {
+        trace("ui.Workspace.requestAtMouse", {
+          purpose,
+          step: "refused",
+          reason: "no previewFrame",
+          absolute: { x: event.x, y: event.y },
+        });
+      }
+      return;
+    }
     const origin = previewFrameOrigin(size, fullscreen);
     const frameRect = {
       x: origin.x,
@@ -898,6 +913,15 @@ export const Workspace = reatomComponent<{
       height: current.frame.height,
     };
     const point = frameLocalPoint({ absolute: { x: event.x, y: event.y }, frameRect });
+    if (purpose !== "hover") {
+      trace("ui.Workspace.requestAtMouse", {
+        purpose,
+        step: "dispatching",
+        absolute: { x: event.x, y: event.y },
+        frameRect,
+        point,
+      });
+    }
     requestGeometry(props.deps, purpose, point.x, point.y);
   };
   const onPreviewMouseMove = useWrap(

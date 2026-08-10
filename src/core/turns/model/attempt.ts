@@ -11,7 +11,7 @@ import type {
 } from "core/ports";
 import type { CommandRejectionCode, EventPayloadByKindV1 } from "core/protocol";
 import type { TokenUsage } from "entities/turn";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 
 import type { TurnDeadlines } from "./deadlines";
 import type { TurnFence, TurnFenceError } from "./fence";
@@ -158,11 +158,11 @@ export function startTurnAttempt(
   // be lost.
   const handleFencedEvent = wrap((fencedEvent: FencedEvent) => {
     if (!input.fence.accepts(asLease(fencedEvent.fence))) {
-      console.warn(
+      log.warn(
         `core/turns/attempt: dropping a stale event for turn ${input.turnId} attempt ${lease.attempt}`,
       );
       // DIAGNOSTIC (infrastructure/debug-log): a stale event dropped by the fence check -- the
-      // console.warn above is already mirrored into the trace file by the console tee, but this gives
+      // log.warn above is already mirrored into the trace file by the console tee, but this gives
       // the drop its own greppable channel alongside the rest of this attempt's own trace.
       trace("core.turns.attempt.eventDropped", { turnId: input.turnId, attempt: lease.attempt });
       return;
@@ -185,7 +185,7 @@ export function startTurnAttempt(
     if (!cancelRequested) {
       const stopped = deps.machine.apply("beginStopping");
       if (stopped.kind === "illegal") {
-        console.warn(
+        log.warn(
           `core/turns/attempt: beginStopping illegal (${stopped.code}) for turn ${input.turnId}`,
         );
       }
@@ -225,7 +225,7 @@ export function startTurnAttempt(
   // runDriver()` note. A rejection here is a producer bug in the port, logged rather than
   // left as an unhandled rejection.
   void pump().catch((cause) => {
-    console.warn(
+    log.warn(
       `core/turns/attempt: event pump failed for turn ${input.turnId} attempt ${lease.attempt}:`,
       describeThrown(cause),
     );
@@ -238,7 +238,7 @@ export function startTurnAttempt(
       cancelRequested = true;
       const cancelled = deps.machine.apply("requestCancel");
       if (cancelled.kind === "illegal") {
-        console.warn(
+        log.warn(
           `core/turns/attempt: requestCancel illegal (${cancelled.code}) for turn ${input.turnId}`,
         );
       }

@@ -52,7 +52,7 @@ import type { ChatSelection } from "entities/chat";
 import { DESIGN_DIRNAME } from "entities/design-tree";
 import type { PageEntryV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
-import { trace } from "infrastructure/debug-log";
+import { log, trace } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 
 import { mintActiveChat } from "./chat";
@@ -547,7 +547,7 @@ function decodeCachedUtf8(
 ): string {
   const bytes = cachingStaging.readCandidateBytes(root, relPath);
   if (bytes === null) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: no cached candidate content for "${relPath}" under "${root}" — defensive, should be unreachable (the caching wrapper reads every file eagerly at freeze time)`,
     );
     return "";
@@ -605,12 +605,12 @@ function resolveStoredOrDefaultAgentTriple(
   if (registered.length === 0) {
     const reason =
       "turn.start refused — no agent selection stored and no backend registered to default from";
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   if (registered.length > 1) {
     const reason = `turn.start refused — no agent selection stored and ${registered.length} backends are registered; MVP has no picker to choose a default among them`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const [only] = registered;
@@ -619,7 +619,7 @@ function resolveStoredOrDefaultAgentTriple(
     // exactly one element remains) — kept explicit per this project's "never silently assume
     // success" rule.
     const reason = "turn.start refused — registry reported one backend but yielded none on read";
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   return {
@@ -639,25 +639,25 @@ function resolveAgentSelection(
   const capabilities = context.deps.agentRegistry.list().find((b) => b.backendId === backendId);
   if (capabilities === undefined) {
     const reason = `turn.start refused — unknown backend "${backendId}"`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const modelCapability = capabilities.models.find((m) => m.model === model);
   if (modelCapability === undefined) {
     const reason = `turn.start refused — backend "${backendId}" does not offer model "${model}"`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const resolvedEffort = modelCapability.efforts.find((e) => e === effort);
   if (resolvedEffort === undefined) {
     const reason = `turn.start refused — model "${model}" does not offer effort "${effort}"`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   const agentBackend = context.deps.agentRegistry.get(backendId);
   if (agentBackend === null) {
     const reason = `turn.start refused — registry lost backend "${backendId}" between list() and get()`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return { code: "PERSISTENCE_FAILED", retryable: false, safeMessage: reason, details: {} };
   }
   return { backendId, model, effort: resolvedEffort, agentBackend };
@@ -698,7 +698,7 @@ export function terminalChangedPages(
     const entry = entries.find((candidateEntry) => candidateEntry.slug === pageSlug);
     const sourceHash = entry === undefined ? undefined : shaByRelPath.get(entry.entry);
     if (sourceHash === undefined) {
-      console.warn(
+      log.warn(
         `core/kernel/handlers/turn: changed page "${pageSlug}" has no resolvable entry hash in the frozen candidate — omitted from turn.completed's changedPages rather than reported with a fabricated one`,
       );
       continue;
@@ -723,7 +723,7 @@ function toAdmissionSelection(selection: SelectionSnapshotV1 | null): ChatSelect
   if (selection === null) return null;
   const pageSlug = parsePageSlug(selection.pageSlug);
   if (pageSlug instanceof Error) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: turn.start dropped an unparseable selection page slug "${selection.pageSlug}": ${pageSlug.message}`,
     );
     return null;
@@ -827,7 +827,7 @@ function applyAbortStep(
 ): PublishableEventV1<"kernel.stateChanged"> | null {
   const outcome = context.machines.turn.apply(action);
   if (outcome.kind === "illegal") {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: abortEarlyAdmission — ${action} was illegal for turn ${turnId} (${outcome.code})`,
     );
     return null;
@@ -981,14 +981,14 @@ async function resolveSurvivingWarningsFold(
 ): Promise<string> {
   const handle = await wrap(context.deps.chatReader.open(chatId));
   if ("code" in handle) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: could not open chat "${chatId}" to check for warnings surviving from the previous turn: ${handle.safeMessage}`,
     );
     return "";
   }
   const tail = await wrap(handle.loadTail());
   if ("code" in tail) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: could not read chat "${chatId}"'s tail to check for warnings surviving from the previous turn: ${tail.safeMessage}`,
     );
     return "";
@@ -1004,14 +1004,14 @@ async function resolvePendingChatNaming(
 ): Promise<{ readonly createdAt: string } | null> {
   const handle = await wrap(context.deps.chatReader.open(chatId));
   if ("code" in handle) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: could not open chat "${chatId}" to check whether it still needs a name: ${handle.safeMessage}`,
     );
     return null;
   }
   const tail = await wrap(handle.loadTail());
   if ("code" in tail) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: could not read chat "${chatId}"'s tail to check whether it still needs a name: ${tail.safeMessage}`,
     );
     return null;
@@ -1090,7 +1090,7 @@ async function terminalizeRejectedAdmission(
   if (bridged.kind === "illegal") {
     // Defensive only — `admitting -> terminalizing` is a table row as of spec §1.1, and the
     // machine cannot have left `admitting` while this operation owned it. Logged, never swallowed.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: beginTerminalization was illegal for turn ${turnId}'s rejected admission (${bridged.code})`,
     );
   }
@@ -1129,7 +1129,7 @@ async function terminalizeRejectedAdmission(
     // exit, so `onSettled` never fires and `activeTurnId` is left as-is — matching every other
     // unreachable-in-practice illegal-transition branch in this file (e.g. `applyAbortStep`),
     // which likewise logs rather than invents a compensating clear.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: terminalizeTurn was illegal for turn ${turnId}'s rejected admission (${terminalized.code})`,
     );
   }
@@ -1168,7 +1168,7 @@ async function runTurnStart(
   trace("kernel.turnStart", { step: "readWorkspaceState done" });
   if ("code" in workspaceState) {
     const reason = `turn.start refused — could not read workspace state: ${workspaceState.safeMessage}`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return abortEarlyAdmission(context, turnId, { ...workspaceState, safeMessage: reason });
   }
   const { backend, model, effort, activePageSlug } = workspaceState.state;
@@ -1197,7 +1197,7 @@ async function runTurnStart(
     const minted = await wrap(mintActiveChat(context));
     if ("code" in minted) {
       const reason = `turn.start refused — no active chat yet and minting one failed: ${minted.safeMessage}`;
-      console.warn(`core/kernel/handlers/turn: ${reason}`);
+      log.warn(`core/kernel/handlers/turn: ${reason}`);
       return abortEarlyAdmission(context, turnId, { ...minted, safeMessage: reason });
     }
     // Published NOW, live (`context.publishOperationEvent`, the same primitive `publish`
@@ -1237,7 +1237,7 @@ async function runTurnStart(
   trace("kernel.turnStart", { step: "readManifestSnapshot done" });
   if ("code" in manifestSnapshot) {
     const reason = `turn.start refused — could not read project.toml's snapshot: ${manifestSnapshot.safeMessage}`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return abortEarlyAdmission(context, turnId, { ...manifestSnapshot, safeMessage: reason });
   }
 
@@ -1249,7 +1249,7 @@ async function runTurnStart(
   trace("kernel.turnStart", { step: "readManifest done" });
   if ("code" in manifest) {
     const reason = `turn.start refused — could not read project.toml's manifest for its workspaceIdentity: ${manifest.safeMessage}`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return abortEarlyAdmission(context, turnId, { ...manifest, safeMessage: reason });
   }
 
@@ -1261,7 +1261,7 @@ async function runTurnStart(
   trace("kernel.turnStart", { step: "listTree done" });
   if ("code" in treeList) {
     const reason = `turn.start refused — could not list the design tree: ${treeList.safeMessage}`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return abortEarlyAdmission(context, turnId, { ...treeList, safeMessage: reason });
   }
 
@@ -1287,7 +1287,7 @@ async function runTurnStart(
   trace("kernel.turnStart", { step: "readManifest (design tree) done" });
   if ("code" in pageEntries) {
     const reason = `turn.start refused — could not decode design/pages.json: ${pageEntries.safeMessage}`;
-    console.warn(`core/kernel/handlers/turn: ${reason}`);
+    log.warn(`core/kernel/handlers/turn: ${reason}`);
     return abortEarlyAdmission(context, turnId, { ...pageEntries, safeMessage: reason });
   }
   const pageSlugs = pageEntries.map((entry) => entry.slug);
@@ -1305,7 +1305,7 @@ async function runTurnStart(
     const pins = await wrap(context.deps.pinReader.fold(activePageSlug));
     if ("code" in pins) {
       const reason = `turn.start refused — could not fold pins for active page "${activePageSlug}": ${pins.safeMessage}`;
-      console.warn(`core/kernel/handlers/turn: ${reason}`);
+      log.warn(`core/kernel/handlers/turn: ${reason}`);
       return abortEarlyAdmission(context, turnId, { ...pins, safeMessage: reason });
     }
     for (const pin of pins) {
@@ -1322,7 +1322,7 @@ async function runTurnStart(
       const pinsAppendBase = await wrap(context.deps.pinReader.readAppendBase(activePageSlug));
       if ("code" in pinsAppendBase) {
         const reason = `turn.start refused — could not read pin append-base for active page "${activePageSlug}": ${pinsAppendBase.safeMessage}`;
-        console.warn(`core/kernel/handlers/turn: ${reason}`);
+        log.warn(`core/kernel/handlers/turn: ${reason}`);
         return abortEarlyAdmission(context, turnId, { ...pinsAppendBase, safeMessage: reason });
       }
       readSetPins.push({ pageSlug: activePageSlug, base: pinsAppendBase });
@@ -1360,7 +1360,7 @@ async function runTurnStart(
   );
   trace("kernel.turnStart", { step: "evaluateSessionPlan done" });
   if ("code" in sessionPlanResult) {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: turn.start's evaluateSessionPlan failed for chat "${activeChatId}" scope "${sessionScopeId}" — ${sessionPlanResult.safeMessage}; starting with an empty seed`,
     );
   }
@@ -1553,7 +1553,7 @@ async function runTurnStart(
         workspaceTreeRelPath(change.relPath),
       );
       if (bytes === null) {
-        console.warn(
+        log.warn(
           `core/kernel/handlers/turn: no cached candidate bytes for changed file "${change.relPath}" — dropping it from this attempt's finalize diff`,
         );
         continue;
@@ -1679,7 +1679,7 @@ async function runTurnStart(
           correlation: { turnId },
         });
       } else {
-        console.warn(
+        log.warn(
           `core/kernel/handlers/turn: turn.start's activeChatId "${admittedChatId}" is not a valid UUIDv7 — turn.started skipped (defensive only)`,
         );
       }
@@ -1810,7 +1810,7 @@ async function runTurnStart(
         // storage-identity §6.2: "Session checkpoint failure never changes chat history." The
         // turn already committed durably above — this is a non-fatal, logged best-effort step:
         // the NEXT turn simply evaluates "fresh" again, honestly, rather than resuming.
-        console.warn(
+        log.warn(
           `core/kernel/handlers/turn: turn.start could not advance the session checkpoint for chat "${admittedChatId}" scope "${sessionScopeId}": ${advanced.safeMessage}`,
         );
       }
@@ -1867,7 +1867,7 @@ async function runTurnStart(
   // handle it — `ui/mirror/model/mirror.ts`'s terminal case lists all three kinds together, and
   // `entrypoint/model/run-app.ts`'s turn-settled wait already accepts `turn.cancelled`.
   const kind = outcome === "cancelled" ? "turn.cancelled" : "turn.failed";
-  console.warn(
+  log.warn(
     `core/kernel/handlers/turn: turn.start ended on ${branch} — publishing ${kind} with outcome "${outcome}" (see ./turn.ts's header, "THE TERMINAL EVENT")`,
   );
   return [
@@ -1908,7 +1908,7 @@ export function beginTurn(
   const turnId = uuidv7();
   const began = context.machines.turn.apply("beginAdmission");
   if (began.kind === "illegal") {
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: beginTurn refused — beginAdmission was illegal (${began.code})`,
     );
     return [];
@@ -1917,7 +1917,7 @@ export function beginTurn(
     // Unreachable given `beginAdmission`'s own table (`turn-machine.ts`) has no same-state
     // `noOp` row — kept explicit, in the same voice as the `illegal` branch just above, per
     // this project's "never silently assume success" rule.
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: beginTurn refused — beginAdmission returned "${began.kind}" (phase ${began.phase}) instead of a real transition`,
     );
     return [];
@@ -1966,7 +1966,7 @@ function handleTurnCancel(
     // before dispatch ever reached this handler; unreachable in a correctly-wired Kernel,
     // kept explicit per this project's "never silently assume success" rule (mirrors
     // `project.ts`'s identical defensive posture for its own `tryApply` calls).
-    console.warn(
+    log.warn(
       `core/kernel/handlers/turn: turn.cancel's requestCancel was illegal despite the guard confirming legality (turnId ${payload.turnId})`,
     );
     return noOpOutcome();

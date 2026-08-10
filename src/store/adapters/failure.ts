@@ -1,5 +1,6 @@
 import type { FailureDtoV1 } from "core/protocol";
 import { PagesManifestInvalidError } from "entities/design-tree";
+import { log } from "infrastructure/debug-log";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
 import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease";
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
@@ -86,7 +87,7 @@ function normalizeSourceChangedPart(raw: string | number): {
   const text = String(raw);
   if (text === "manifest") return { part: "manifest" };
   if (text.startsWith("design:")) return { part: "page", relPath: text.slice("design:".length) };
-  console.warn(
+  log.warn(
     `store/adapters: SourceChangedError.part "${text}" matched neither "manifest" nor "design:<treeRelPath>"; defaulting to "page"`,
   );
   return { part: "page" };
@@ -100,7 +101,7 @@ function normalizeStalePart(raw: string | number): {
   const text = String(raw);
   if (text === "chat") return { part: "chat" };
   if (text.startsWith("pins:")) return { part: "pins", slug: text.slice("pins:".length) };
-  console.warn(
+  log.warn(
     `store/adapters: StaleError.part "${text}" matched neither "chat" nor "pins:<slug>"; defaulting to "pins"`,
   );
   return { part: "pins" };
@@ -475,7 +476,7 @@ export function toFailureDto(error: Error): FailureDtoV1 {
   }
 
   // An unmapped store error at this boundary is a bug to surface, not swallow (errore rule 21).
-  console.warn("store/adapters: unmapped store error folded to PERSISTENCE_FAILED:", error);
+  log.warn("store/adapters: unmapped store error folded to PERSISTENCE_FAILED:", error);
   return {
     code: "PERSISTENCE_FAILED",
     retryable: false,

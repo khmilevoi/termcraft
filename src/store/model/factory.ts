@@ -14,6 +14,7 @@ import type { PageSlug } from "entities/page";
 import { foldPins } from "entities/pin";
 import { TERMCRAFT_VERSION } from "infrastructure/build-info";
 import { systemClock } from "infrastructure/clock";
+import { log } from "infrastructure/debug-log";
 import { durableFileWrite, flushDir, probeDurability } from "infrastructure/durability";
 import { formatFsIdentity, isReparsePoint } from "infrastructure/fs-guard";
 import { uuidv7 } from "infrastructure/uuid";
@@ -1094,7 +1095,7 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
       // error" policy every other projection in this codebase already follows).
       const persisted = await cache.state.write(chatId, state);
       if (persisted instanceof Error)
-        console.warn(`store: chat index cache persist failed for ${chatId}:`, persisted.message);
+        log.warn(`store: chat index cache persist failed for ${chatId}:`, persisted.message);
 
       const handle: ChatHandle = {
         header,
@@ -1131,7 +1132,7 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
 
         const stat = safeFs.stat(relPath);
         if (stat instanceof Error) {
-          console.warn(`store: chat listing could not stat ${relPath}:`, stat.message);
+          log.warn(`store: chat listing could not stat ${relPath}:`, stat.message);
           continue;
         }
         // A genuinely empty file is neither an identity mismatch nor a decode failure — it is
@@ -1139,7 +1140,7 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
         // own honest message rather than borrowing `scanChatListingPrefix`'s generic ones
         // (review fix round 1, Minor).
         if (stat.size === 0) {
-          console.warn(`store: chat listing skipping ${relPath}, chat file is empty`);
+          log.warn(`store: chat listing skipping ${relPath}, chat file is empty`);
           continue;
         }
         const prefix = safeFs.readRange(
@@ -1148,7 +1149,7 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
           Math.min(stat.size, CHAT_INDEX_SCAN_CHUNK_BYTES),
         );
         if (prefix instanceof Error) {
-          console.warn(`store: chat listing could not read ${relPath}:`, prefix.message);
+          log.warn(`store: chat listing could not read ${relPath}:`, prefix.message);
           continue;
         }
 
@@ -1170,23 +1171,23 @@ function makeChatStore(safeFs: SafeProjectFs, deps: StoreDeps, projectId: string
  */
 function logChatListingIssue(relPath: string, issue: ChatListingScanIssue): void {
   if (issue.kind === "no-header-line") {
-    console.warn(`store: chat listing skipping ${relPath}, no complete header line found`);
+    log.warn(`store: chat listing skipping ${relPath}, no complete header line found`);
     return;
   }
   if (issue.kind === "header-unreadable") {
-    console.warn(
+    log.warn(
       `store: chat listing skipping ${relPath}, chat header unreadable:`,
       issue.cause.message,
     );
     return;
   }
   if (issue.kind === "identity-mismatch") {
-    console.warn(
+    log.warn(
       `store: chat listing skipping ${relPath}, chat header names chatId ${issue.headerChatId} projectId ${issue.headerProjectId}, which does not match its filename/project`,
     );
     return;
   }
-  console.warn(
+  log.warn(
     `store: chat listing ${relPath} has an unreadable record before its first user record — listing it without a name:`,
     issue.cause.message,
   );
@@ -1221,7 +1222,7 @@ async function scanOrphanTurns(input: {
   const names = input.safeFs.list("chats");
   if (names instanceof Error) {
     if (names instanceof FsAccessError && isNotFound(names)) return [];
-    console.warn("store: orphan turn scan could not list chats:", names.message);
+    log.warn("store: orphan turn scan could not list chats:", names.message);
     return [];
   }
 
@@ -1232,12 +1233,12 @@ async function scanOrphanTurns(input: {
     const relPath = chatJsonlPath(chatId);
     const bytes = input.safeFs.readFile(relPath);
     if (bytes instanceof Error) {
-      console.warn(`store: orphan turn scan could not read ${relPath}:`, bytes.message);
+      log.warn(`store: orphan turn scan could not read ${relPath}:`, bytes.message);
       continue;
     }
     const doc = readChatJsonl({ path: relPath, chunks: [bytes] });
     if (doc instanceof Error) {
-      console.warn(
+      log.warn(
         `store: orphan turn scan skipping ${relPath}, mid-file corruption:`,
         doc.message,
       );
@@ -1253,7 +1254,7 @@ async function scanOrphanTurns(input: {
       doc.header.chatId !== chatId ||
       doc.header.projectId !== input.projectId
     ) {
-      console.warn(`store: orphan turn scan skipping ${relPath}, chat header identity mismatch`);
+      log.warn(`store: orphan turn scan skipping ${relPath}, chat header identity mismatch`);
       continue;
     }
     if (doc.tail.kind !== "clean") continue;
@@ -1293,7 +1294,7 @@ async function scanOrphanTurns(input: {
         createdAt,
       });
       if (result instanceof Error)
-        console.warn(
+        log.warn(
           `store: orphan turn scan could not terminalize turn ${turnId} in chat ${chatId}:`,
           result.message,
         );
