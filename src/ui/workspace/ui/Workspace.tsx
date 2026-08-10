@@ -6,8 +6,7 @@ import { reatomComponent, useWrap } from "@reatom/react";
 
 import type { PageDescriptorV1, PinDtoV1 } from "core/protocol";
 import { log, trace } from "infrastructure/debug-log";
-import { HOTKEYS, filterSlashRows } from "ui/actions";
-import type { HotkeyAction } from "ui/actions";
+import { filterSlashRows } from "ui/actions";
 import { agentBlockedNote, agentHealthBadge } from "ui/agent-health";
 import {
   AgentStatusBlock,
@@ -44,7 +43,9 @@ import { SHELL_PALETTE, shellAttrs } from "ui/theme";
 
 import { agentStatusMaxRows } from "../model/agent-block-budget";
 import { deriveComposerAttach } from "../model/attach";
+import { effectiveZone } from "../model/focus";
 import type { OverlayKind } from "../model/focus";
+import { hintKeys } from "../model/hint-keys";
 import { selectPage } from "../model/page-selection";
 import { derivePinListRows } from "../model/pins";
 import {
@@ -57,7 +58,7 @@ import {
 import type { CellSize } from "../model/preview-geometry";
 import { deriveTabs, tabsOverflow } from "../model/tabs";
 import type { TabEntry } from "../model/tabs";
-import type { WorkspaceDeps } from "../types";
+import type { PreviewHalt, WorkspaceDeps } from "../types";
 import { PreviewPaneRule } from "./PreviewPaneRule";
 
 /**
@@ -73,13 +74,6 @@ type UseRef = <T>(initialValue: T) => { current: T };
 const { useRef } = createRequire(import.meta.url)("react") as { readonly useRef: UseRef };
 
 const BOLD = shellAttrs({ bold: true });
-
-/**
- * The one halted-preview fact the panel, the status bar, the composer attach line and the chat
- * notice all four read — derived once in `Workspace` so the four can never disagree about
- * whether the host halted or whose fault it was.
- */
-type PreviewHalt = null | { readonly retryAvailable: boolean; readonly designAtFault: boolean };
 
 /**
  * The five status-bar/composer facts the "filling" (opening) state overrides, bundled so a
@@ -137,108 +131,6 @@ function modeChip(
   if (previewHalt !== null)
     return { text: previewHalt.designAtFault ? "HALTED" : "NO HOST", fg: "bg", bg: "red" };
   return { text: "STATIC", fg: "amberHi", bg: "line" };
-}
-
-function hotkeyGlyph(key: string): string {
-  if (key === "ctrl+e") return "^E";
-  if (key.startsWith("ctrl+")) return `Ctrl+${key.slice(5).toUpperCase()}`;
-  // CORRECTED (review finding I5): a bare `.toUpperCase()` read `pageup`/`pagedown` as
-  // `PAGEUP`/`PAGEDOWN` — two spellings of the same key on one screen, since
-  // `ChatScrollback`'s own retry row already writes the design's literal `PgUp`
-  // (`design/termcraft-engine.js:1505-1506`).
-  if (key === "pageup") return "PgUp";
-  if (key === "pagedown") return "PgDn";
-  return key.toUpperCase();
-}
-
-function hotkeyHint(action: HotkeyAction, label = action.label): StatusBarHintKey {
-  // MVP-inert keys are shown but do nothing — the design's own `dis` treatment, which is also
-  // exactly what this component already rendered for them.
-  return action.inert === true
-    ? [hotkeyGlyph(action.key), label, "dis"]
-    : [hotkeyGlyph(action.key), label];
-}
-
-function fullscreenHint(label: string): readonly StatusBarHintKey[] {
-  return HOTKEYS.filter((action) => action.id === "preview.fullscreen").map((action) =>
-    hotkeyHint(action, label),
-  );
-}
-
-/**
- * The right-aligned hint keys for the current state (design `hintKeys` defaults). CORRECTED
- * (finding §2.5, phase-8 Task 16): the running branch used to append the F2 "full" hint after
- * "esc cancel" — the plainer `workspace(w,h,'gen')` screen's own key row
- * (`design/termcraft-engine.js:215`) does show F2, but the dedicated, more detailed generating
- * screens this task is about do not: `wsGenTyping` (`:275-276`) and `wsSlashTurn` (`:1005-1006`)
- * both draw the SAME exact pair, `keys:[['⏎','send','dis'],['esc','cancel']]` — a faint,
- * explicitly-disabled `⏎ send` alongside the live `esc cancel`, no F2 at all.
- */
-function hintKeys(
-  turn: TurnMirror,
-  fullscreen: boolean,
-  previewHalt: PreviewHalt,
-  // `following`/`atStart`/`olderPageFailed` (review finding I5): the chat-scroll key entries
-  // this row derives from `HOTKEYS` all vary with the chat viewport's own state, not merely
-  // with the four facts this function already took.
-  chat: Readonly<{ following: boolean; atStart: boolean; olderPageFailed: boolean }>,
-): readonly StatusBarHintKey[] {
-  if (fullscreen) return fullscreenHint("windowed");
-  // design/termcraft-engine.js:1005-1006 (`wsSlashTurn`) / :275-276 (`wsGenTyping`).
-  if (turn.phase === "running") {
-    // CORRECTED (review finding I5): `wsScrollLive` (`design/termcraft-engine.js:1605`) is a
-    // THIRD running-turn key row the citation above doesn't cover — scrolled away from a live
-    // block that keeps growing off-screen below. Its row drops the disabled-send hint for the
-    // scroll/follow trio instead: there is nothing to send toward (the turn already owns the
-    // composer), but there IS somewhere to scroll back to.
-    if (!chat.following) {
-      return [
-        ...HOTKEYS.filter(
-          (action) => action.id === "chat.scroll-up" || action.id === "chat.scroll-down",
-        ).map((action) => hotkeyHint(action)),
-        ...HOTKEYS.filter((action) => action.id === "chat.follow-latest").map((action) =>
-          hotkeyHint(action),
-        ),
-        ["esc", "cancel"],
-      ];
-    }
-    return [
-      ["⏎", "send", "dis"],
-      ["esc", "cancel"],
-    ];
-  }
-  // `preview.retry` and `preview.repair` are advertised ONLY where they actually act. Showing
-  // them unconditionally would put a live-looking `F5 retry`/`F6 repair` in the status bar for
-  // the entire session, for actions that do nothing in every other phase — the same "advertised
-  // but inert" trap this file's own `dis` state and the `q`/`/exit` divergence exist to avoid.
-  //
-  // `F6` additionally requires the PAGE to be at fault: `wsHostUnavailable`'s own key row is
-  // `F5 · F2 · F3` with no repair key at all, because no page edit could start a host.
-  //
-  // `chat.scroll-up`/`chat.follow-latest` are ALSO conditional (review finding I5): PgUp drops
-  // at the true start of chat — `wsScrollStart`'s own key row is `PgDn`-only, there is nothing
-  // above to page to — and `^D follow` draws only while `!following`, matching every mockup
-  // that shows it (`wsScrollMid`/`wsScrollLive`; `wsScrollLoaded`/`wsScrollLoading`/
-  // `wsScrollFailed`/`wsScrollStart` all omit it).
-  return HOTKEYS.filter((action) => {
-    // A key bound without being drawn (the page-step extension, `HotkeyAction.hint`) never
-    // enters the row: this row is a transcription of the design's own key rows.
-    if (action.hint === false) return false;
-    if (action.id === "preview.retry") return previewHalt !== null;
-    if (action.id === "preview.repair") return previewHalt?.designAtFault === true;
-    if (action.id === "chat.scroll-up") return !chat.atStart;
-    if (action.id === "chat.follow-latest") return !chat.following;
-    return true;
-  }).map((action): StatusBarHintKey => {
-    if (action.id === "preview.retry" && previewHalt?.retryAvailable === false)
-      // Both no-retry variants mark F5 `dis` in the key row.
-      return [hotkeyGlyph(action.key), action.label, "dis"];
-    // design/termcraft-engine.js:1505-1506 / `ChatScrollback`'s own "PgUp retries" row copy:
-    // the SAME gesture that requested the failed page retries it.
-    if (action.id === "chat.scroll-up" && chat.olderPageFailed)
-      return [hotkeyGlyph(action.key), "retries"];
-    return hotkeyHint(action);
-  });
 }
 
 /** The collapsed record lines for a terminal turn (✓ per changed page, or ✗ on a non-success). */
@@ -605,8 +497,7 @@ export const Workspace = reatomComponent<{
   // `:801` is the one screen that varies it, `prevBorderFg: cf ? P.line : P.amber`, the exact
   // composer-focus switch this codebase already applies to the pane's `borderColor` below).
   // Computed once here, not inlined twice, so the rule and the border can never drift apart.
-  const previewBorderColor =
-    chatFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber;
+  const previewBorderColor = chatFocused && !fullscreen ? SHELL_PALETTE.line : SHELL_PALETTE.amber;
   const frameH = previewPaneHeight(size);
   const ghostSlug = turn.phase === "running" && descriptors.length === 0 ? activePageSlug : null;
   const tabs = deriveTabs(descriptors, activePageSlug, ghostSlug);
@@ -1287,11 +1178,17 @@ export const Workspace = reatomComponent<{
         hintKeys={
           filling
             ? opening.hintKeys
-            : hintKeys(turn, fullscreen, previewHalt, {
-                following,
-                atStart: history.prevCursor === null,
-                olderPageFailed: olderPage.kind === "failed",
-              })
+            : hintKeys(
+                turn,
+                fullscreen,
+                previewHalt,
+                {
+                  following,
+                  atStart: history.prevCursor === null,
+                  olderPageFailed: olderPage.kind === "failed",
+                },
+                effectiveZone(local.focus(), fullscreen),
+              )
         }
       />
     </box>

@@ -92,6 +92,17 @@ export interface WorkspaceLocalState {
   readonly agentHealth: Atom<AgentHealth>;
 }
 
+/**
+ * A preview that has stopped, and the two facts the chrome branches on: whether a retry is offered
+ * at all, and whether the PAGE was at fault (a render crash) rather than the host (never started).
+ * Shared by the component and `model/hint-keys.ts`, which is why it lives here rather than beside
+ * either one.
+ */
+export type PreviewHalt = null | {
+  readonly retryAvailable: boolean;
+  readonly designAtFault: boolean;
+};
+
 export interface WorkspaceDeps {
   readonly mirror: Mirror;
   readonly dispatcher: Dispatcher;
