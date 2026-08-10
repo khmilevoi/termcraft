@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { EscState } from "./focus";
-import { nextFocus, resolveEsc, singleCharKeysActive } from "./focus";
+import { effectiveZone, nextFocus, resolveEsc } from "./focus";
 
 const base: EscState = {
   overlayOpen: null,
@@ -76,10 +76,16 @@ describe("nextFocus", () => {
   });
 });
 
-describe("singleCharKeysActive", () => {
-  test("live only when the preview is focused and no overlay is open", () => {
-    expect(singleCharKeysActive("preview", null)).toBe(true);
-    expect(singleCharKeysActive("chat", null)).toBe(false);
-    expect(singleCharKeysActive("preview", "slash-menu")).toBe(false);
+describe("effectiveZone", () => {
+  test("is the focus target while windowed", () => {
+    expect(effectiveZone("chat", false)).toBe("chat");
+    expect(effectiveZone("preview", false)).toBe("preview");
+  });
+
+  // The chat pane is not rendered in fullscreen (`Workspace.tsx`'s `!fullscreen &&` guard), so a
+  // zone that could read "chat" there would name a pane that is not on screen.
+  test("is forced to preview while fullscreen, whatever focus says", () => {
+    expect(effectiveZone("chat", true)).toBe("preview");
+    expect(effectiveZone("preview", true)).toBe("preview");
   });
 });

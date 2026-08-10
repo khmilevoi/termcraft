@@ -2,6 +2,7 @@ import { resolveHotkey } from "ui/actions";
 import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import type { ScreenKind } from "ui/mirror";
+import { effectiveZone } from "ui/workspace";
 import type { FocusTarget, OverlayKind } from "ui/workspace";
 
 /**
@@ -30,6 +31,15 @@ export interface KeyContext {
   readonly screen: ScreenKind;
   readonly focus: FocusTarget;
   /**
+   * Whether the preview is fullscreen (`ui.local.fullscreen`, the F2 toggle).
+   *
+   * Read for exactly two decisions, both in §4: the effective zone is forced to `preview` while it
+   * is true (the chat pane is not rendered, so no key may act on it), and `Tab` becomes an
+   * unclaimed no-op (there is no second pane to reach). It is NOT a third focus state — the stored
+   * `focus` is untouched by F2, so leaving fullscreen restores whatever zone the user was in.
+   */
+  readonly fullscreen: boolean;
+  /**
    * The one surface that currently owns the keys, ALREADY precedence-resolved (M14 fix). The
    * App builds this with {@link resolveActiveOverlay} from the stored UI-local overlay atom and
    * the export-popup-showing flag — the SAME call `renderOverlay` makes to decide what is drawn
@@ -57,7 +67,7 @@ export interface KeyContext {
    * guarding `blocked`'s literal `q`-quits key (fix round 2, Minor finding; escape route
    * CORRECTED fix round 3, both below), and — phase-8 Task 17, §3.10 — gating the `/`-opens-
    * the-slash-menu check the same branch also carries, the Home prompt's exact analogue of
-   * `composerValue.length === 0` gating `composerActive`'s own `/`-open check below. Reusing this
+   * `composerValue.length === 0` gating the chat zone's own `/`-open check below. Reusing this
    * field for that second purpose (rather than adding a same-valued `promptValue` sibling) keeps
    * `KeyContext` from carrying two fields that always hold the identical `deps.local.prompt()`
    * read.
@@ -252,18 +262,14 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     return { kind: "none" };
   }
 
-  // Global keys resolve through the one action registry regardless of focus.
+  // Global keys resolve through the one action registry regardless of focus — F-keys, `Ctrl+E`,
+  // `Ctrl+P`: everything that cannot collide with typing. Asked for `global` explicitly, so a
+  // zone-scoped row can never be reached from here (see `resolveHotkey`'s own doc comment).
   if (key.name === "escape") return { kind: "esc" };
-  const hotkey = resolveHotkey(hotkeyName(key), "global");
-  if (hotkey?.inert === true) return { kind: "none" };
-  if (hotkey !== null) return { kind: "action-execute", actionId: hotkey.id };
-
-  // §3.2: typing the next message WHILE a turn runs is allowed — only sending is refused. The
-  // hazard the old `!context.turnRunning` guarded against (a second `turn.start` the Kernel
-  // rejects, discarding the draft) is closed at its real source instead: `applyIntent`'s
-  // `composer-submit` no longer clears the composer, and no-ops while a turn runs.
-  const composerActive =
-    context.screen === "workspace" && context.focus === "chat" && context.overlay === null;
+  const pressed = hotkeyName(key);
+  const global = resolveHotkey(pressed, "global");
+  if (global?.inert === true) return { kind: "none" };
+  if (global !== null) return { kind: "action-execute", actionId: global.id };
 
   if (context.screen === "home") {
     // The missing-CLI panel has no prompt input at all, so every key but the two the design's
@@ -302,7 +308,7 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
       return homeSubmitAllowed(context.agentHealth) ? { kind: "home-submit" } : { kind: "none" };
     }
     // §3.10: `/` as the first character of an empty primary input opens the slash menu — the Home
-    // prompt is a primary input, exactly like the Workspace composer (`composerActive`'s own `/`
+    // prompt is a primary input, exactly like the Workspace composer (the chat zone's own `/`
     // check below). The overlay branch above is checked BEFORE the screen branches, so an
     // already-open menu is served by the same code and needs nothing further here. Only reachable
     // from this point in the function at all when `missing`/`blocked` already returned above —
@@ -329,10 +335,30 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     return { kind: "none" };
   }
 
-  // Tab cycles focus in the workspace (not while a text input's own Tab is needed — MVP has none).
-  if (key.name === "tab" && context.overlay === null) return { kind: "tab" };
+  // Tab cycles focus in the workspace. A NO-OP WHILE FULLSCREEN (§4): the chat pane is not
+  // rendered, so there is no second pane to reach. Returning `none` rather than swallowing the key
+  // is deliberate — the App calls `preventDefault()` iff the intent is not `none`, so this falls
+  // through like any unclaimed key instead of silently toggling a zone the user cannot see.
+  if (key.name === "tab" && context.overlay === null) {
+    return context.fullscreen ? { kind: "none" } : { kind: "tab" };
+  }
 
-  if (composerActive) {
+  // ZONE-SCOPED KEYS (§4). Strictness is the load-bearing part: a key whose scope is not the
+  // effective zone resolves to `null` here and is NOT looked up a second time in any other scope.
+  // No fallback, automatic or declared — a key that means one thing in the chat and another in the
+  // preview must be silent in the zone it does not belong to, or the editor loses it again.
+  const zone = effectiveZone(context.focus, context.fullscreen);
+  const zoned = resolveHotkey(pressed, zone);
+  if (zoned?.inert === true) return { kind: "none" };
+  if (zoned !== null) return { kind: "action-execute", actionId: zoned.id };
+
+  // The chat zone's two inline keys (§5). They are not registry rows and carry no scope: they are
+  // resolved here exactly as they always were, now behind the zone rather than behind a
+  // `focus === "chat"` flag. §3.2: typing the next message WHILE a turn runs is allowed — only
+  // sending is refused, which `applyIntent`'s `composer-submit` handles at its real source.
+  // `context.overlay === null` is not re-checked here: every non-null overlay returned from its
+  // own branch far above, so reaching this line already proves it.
+  if (zone === "chat" && context.screen === "workspace") {
     if (key.sequence === "/" && context.composerValue.length === 0) return { kind: "slash-open" };
     // Refused, not merely rejected downstream — see `KeyContext.projectOpen`.
     if (isSubmitKey(key)) {

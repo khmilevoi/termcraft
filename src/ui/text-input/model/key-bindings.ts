@@ -41,8 +41,10 @@ export const TEXT_EDITOR_KEY_BINDINGS: readonly KeyBinding[] = [
 
   // CTRL+A IS REMAPPED, NOT REMOVED, because removal is not expressible through the merge.
   // Mapping it to `select-all` both kills the default `line-home` and gives the behaviour most
-  // users expect. `ctrl+b` (`move-left`) and `ctrl+e` (`line-end`) need no remap: the App claims
-  // both ahead of the editor through the action registry, so their defaults are unreachable —
-  // asserted by the dead-binding guard in `ui/app/model/keymap.test.ts`, not assumed.
+  // users expect. `ctrl+e` (`line-end`) stays unreachable: the App claims it globally for export
+  // through the action registry — asserted by the dead-binding guard in
+  // `ui/app/model/keymap.test.ts`, not assumed. `ctrl+b` (`move-left`) came BACK on 2026-08-10:
+  // `page.prev` is `preview`-scoped now, so in the chat zone the key is never looked up in the
+  // registry at all and reaches this map unshadowed.
   { name: "a", ctrl: true, action: "select-all" },
 ];

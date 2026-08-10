@@ -72,10 +72,18 @@ export function nextFocus(current: FocusTarget): FocusTarget {
 }
 
 /**
- * Whether single-character keys (`v`, arrow navigation, `r`) are live. Per §3.8 they work
- * only when no text input is focused — i.e. focus is on the preview and no overlay is open.
- * Global keys (F2/F3/F4, Ctrl+E, Ctrl+P) are unaffected and handled separately.
+ * The zone a key is resolved against (focus-scoped-hotkeys §4). DERIVED, never stored.
+ *
+ * Deriving it is what keeps it honest: in fullscreen the chat pane is not rendered at all
+ * (`ui/workspace/ui/Workspace.tsx`'s `!fullscreen &&` guard) and the preview border is already
+ * painted amber for that case, so a stored zone could disagree with the drawn one. A derived zone
+ * cannot.
+ *
+ * REPLACES `singleCharKeysActive`, deleted here. That helper expressed design §3.8's second hotkey
+ * tier — "`v`, arrows and `r` work only when no text input is focused" — and was never called from
+ * anywhere in `src/`. The tier it described IS the `preview` scope: the helper was the concept
+ * without a mechanism, and the scope is the mechanism.
  */
-export function singleCharKeysActive(focus: FocusTarget, overlayOpen: OverlayKind | null): boolean {
-  return focus === "preview" && overlayOpen === null;
+export function effectiveZone(focus: FocusTarget, fullscreen: boolean): FocusTarget {
+  return fullscreen ? "preview" : focus;
 }

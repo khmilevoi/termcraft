@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
+import type { HotkeyZone } from "ui/actions";
 import type { AgentHealth } from "ui/agent-health";
+import type { FocusTarget } from "ui/workspace";
 
 import type { KeyContext, KeyLike } from "./keymap";
 import { isClaimedKey, resolveActiveOverlay, resolveKey } from "./keymap";
@@ -24,6 +26,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   turnRunning: false,
   projectOpening: false,
   projectOpen: true,
+  fullscreen: false,
   ...over,
 });
 
@@ -37,44 +40,6 @@ describe("resolveKey — global keys (design §3.8)", () => {
     expect(resolveKey(key({ name: "f2" }), ctx({ focus: "chat" }))).toEqual({
       kind: "action-execute",
       actionId: "preview.fullscreen",
-    });
-  });
-
-  test("Ctrl+B / Ctrl+N -> the previous / next page tab, even while the composer is focused", () => {
-    // C0 control bytes (0x02 / 0x0E) — a single byte no terminal can fail to deliver, unlike a
-    // CSI-encoded ctrl+arrow chord (HANDOFF Finding 3).
-    expect(
-      resolveKey(key({ name: "b", ctrl: true, sequence: "\x02" }), ctx({ focus: "chat" })),
-    ).toEqual({
-      kind: "action-execute",
-      actionId: "page.prev",
-    });
-    expect(
-      resolveKey(key({ name: "n", ctrl: true, sequence: "\x0e" }), ctx({ focus: "chat" })),
-    ).toEqual({
-      kind: "action-execute",
-      actionId: "page.next",
-    });
-  });
-
-  test("Ctrl+Left / Ctrl+Right are NOT page steps — they move the cursor by word (G1)", () => {
-    // The aliases were dropped when the composer became a real editor: `ctrl+b`/`ctrl+n` are the
-    // page-step keys (the registry's own comment already names them the reliable primary, "one
-    // byte, no encoding to get wrong"), and neither arrow chord is drawn anywhere — both entries
-    // carry `hint: false`. Keeping them would have made Ctrl+Left switch pages inside a text
-    // editor, which is the "advertised but wrong" trap this codebase has already fixed twice.
-    expect(resolveKey(key({ name: "left", ctrl: true }), ctx({ focus: "chat" }))).toEqual({
-      kind: "none",
-    });
-    expect(resolveKey(key({ name: "right", ctrl: true }), ctx({ focus: "chat" }))).toEqual({
-      kind: "none",
-    });
-  });
-
-  test("unmodified arrows are NOT page switches — they stay free for in-surface navigation", () => {
-    expect(resolveKey(key({ name: "left" }), ctx({ focus: "chat" }))).toEqual({ kind: "none" });
-    expect(resolveKey(key({ name: "right" }), ctx({ focus: "chat" }))).toEqual({
-      kind: "none",
     });
   });
 
@@ -92,34 +57,120 @@ describe("resolveKey — global keys (design §3.8)", () => {
       kind: "none",
     });
   });
+});
 
-  test("PgUp/PgDn resolve to the chat scroll actions, ctrl+u as PgUp's own alias", () => {
-    const context = ctx({}); // reuse this file's own context builder
-    expect(resolveKey(key({ name: "pageup", ctrl: false, sequence: "\x1b[5~" }), context)).toEqual({
+describe("resolveKey — zone-scoped keys (focus-scoped-hotkeys §4)", () => {
+  test("Ctrl+Left / Ctrl+Right switch pages while the PREVIEW owns focus", () => {
+    expect(resolveKey(key({ name: "left", ctrl: true }), ctx({ focus: "preview" }))).toEqual({
+      kind: "action-execute",
+      actionId: "page.prev",
+    });
+    expect(resolveKey(key({ name: "right", ctrl: true }), ctx({ focus: "preview" }))).toEqual({
+      kind: "action-execute",
+      actionId: "page.next",
+    });
+  });
+
+  test("the C0 aliases reach the same actions, for terminals that drop the modifier", () => {
+    expect(
+      resolveKey(key({ name: "b", ctrl: true, sequence: "\x02" }), ctx({ focus: "preview" })),
+    ).toEqual({ kind: "action-execute", actionId: "page.prev" });
+    expect(
+      resolveKey(key({ name: "n", ctrl: true, sequence: "\x0e" }), ctx({ focus: "preview" })),
+    ).toEqual({ kind: "action-execute", actionId: "page.next" });
+  });
+
+  // The defect this whole design exists to remove: in the chat, these are the editor's.
+  test("in the chat zone every page key falls through to the editor", () => {
+    for (const pressed of [
+      key({ name: "left", ctrl: true }),
+      key({ name: "right", ctrl: true }),
+      key({ name: "b", ctrl: true, sequence: "\x02" }),
+      key({ name: "n", ctrl: true, sequence: "\x0e" }),
+    ]) {
+      const intent = resolveKey(pressed, ctx({ focus: "chat" }));
+      expect(intent).toEqual({ kind: "none" });
+      expect(isClaimedKey(intent)).toBe(false);
+    }
+  });
+
+  test("the chat keys act in the chat zone and are strictly inert in the preview", () => {
+    expect(resolveKey(key({ name: "pageup" }), ctx({ focus: "chat" }))).toEqual({
       kind: "action-execute",
       actionId: "chat.scroll-up",
     });
     expect(
-      resolveKey(key({ name: "pagedown", ctrl: false, sequence: "\x1b[6~" }), context),
-    ).toEqual({
+      resolveKey(key({ name: "d", ctrl: true, sequence: "\x04" }), ctx({ focus: "chat" })),
+    ).toEqual({ kind: "action-execute", actionId: "chat.follow-latest" });
+    expect(resolveKey(key({ name: "pageup" }), ctx({ focus: "preview" }))).toEqual({
+      kind: "none",
+    });
+    expect(resolveKey(key({ name: "pagedown" }), ctx({ focus: "preview" }))).toEqual({
+      kind: "none",
+    });
+    expect(
+      resolveKey(key({ name: "d", ctrl: true, sequence: "\x04" }), ctx({ focus: "preview" })),
+    ).toEqual({ kind: "none" });
+  });
+
+  // The rest of the chat zone's key set — PgDn as a positive case, and PgUp's ctrl+u alias
+  // (dropped from the "global keys" describe above, since neither key is global: HOTKEYS scopes
+  // both `chat.scroll-up`/`chat.scroll-down` to `"chat"`, not `"global"`).
+  test("PgDn scrolls down in the chat zone, and ctrl+u is PgUp's own alias", () => {
+    const chat = ctx({ focus: "chat" });
+    expect(resolveKey(key({ name: "pagedown", sequence: "\x1b[6~" }), chat)).toEqual({
       kind: "action-execute",
       actionId: "chat.scroll-down",
     });
-    expect(resolveKey(key({ name: "u", ctrl: true, sequence: "\x15" }), context)).toEqual({
+    expect(resolveKey(key({ name: "u", ctrl: true, sequence: "\x15" }), chat)).toEqual({
       kind: "action-execute",
       actionId: "chat.scroll-up",
     });
   });
 
-  // Review finding I3: `ctrl+d` used to double as `chat.scroll-down`'s own alias, colliding with
-  // the design's real assignment for it — `design/termcraft-engine.js:1525,1557,1602` binds `^D`
-  // to "follow latest", a different action entirely.
-  test("ctrl+d resolves to follow-latest, not scroll-down", () => {
-    const context = ctx({});
-    expect(resolveKey(key({ name: "d", ctrl: true, sequence: "\x04" }), context)).toEqual({
-      kind: "action-execute",
-      actionId: "chat.follow-latest",
+  test("global keys resolve identically in both zones", () => {
+    for (const focus of ["chat", "preview"] as const) {
+      expect(resolveKey(key({ name: "f2" }), ctx({ focus }))).toEqual({
+        kind: "action-execute",
+        actionId: "preview.fullscreen",
+      });
+      expect(resolveKey(key({ name: "e", ctrl: true, sequence: "\x05" }), ctx({ focus }))).toEqual({
+        kind: "action-execute",
+        actionId: "export.start",
+      });
+      expect(resolveKey(key({ name: "escape" }), ctx({ focus }))).toEqual({ kind: "esc" });
+    }
+  });
+
+  test("unmodified arrows stay free for in-surface navigation in both zones", () => {
+    expect(resolveKey(key({ name: "left" }), ctx({ focus: "chat" }))).toEqual({ kind: "none" });
+    expect(resolveKey(key({ name: "right" }), ctx({ focus: "preview" }))).toEqual({ kind: "none" });
+  });
+});
+
+describe("resolveKey — fullscreen forces the preview zone (§4)", () => {
+  test("a page key acts even though focus still reads chat", () => {
+    expect(
+      resolveKey(key({ name: "left", ctrl: true }), ctx({ focus: "chat", fullscreen: true })),
+    ).toEqual({ kind: "action-execute", actionId: "page.prev" });
+  });
+
+  test("a chat key goes inert there", () => {
+    expect(resolveKey(key({ name: "pageup" }), ctx({ focus: "chat", fullscreen: true }))).toEqual({
+      kind: "none",
     });
+  });
+
+  // "No-op" means UNCLAIMED: the App calls preventDefault only for a non-`none` intent, so Tab
+  // falls through like any unclaimed key instead of silently toggling a zone nobody can see.
+  test("Tab is a no-op and is not claimed", () => {
+    const intent = resolveKey(key({ name: "tab" }), ctx({ fullscreen: true }));
+    expect(intent).toEqual({ kind: "none" });
+    expect(isClaimedKey(intent)).toBe(false);
+  });
+
+  test("Tab still toggles while windowed", () => {
+    expect(resolveKey(key({ name: "tab" }), ctx({ fullscreen: false }))).toEqual({ kind: "tab" });
   });
 });
 
@@ -642,6 +693,11 @@ describe("the claim rule — preventDefault iff resolveKey returned something ot
     ],
     ["a printable in the pin input", key({ name: "p", sequence: "p" }), { overlay: "pin-input" }],
     ["Backspace in the pin input", key({ name: "backspace" }), { overlay: "pin-input" }],
+    // Ctrl+B REACHES THE EDITOR NOW (§4, moved here from the `claimed` table below,
+    // 2026-08-10): `page.prev` is `preview`-scoped, and the default context's `focus` is
+    // `"chat"`, so this key is never looked up in the registry at all — see the dead-binding
+    // guard's own describe below for the precise, single-assertion version of this fact.
+    ["Ctrl+B in the chat zone", key({ name: "b", ctrl: true, sequence: "\u0002" }), {}],
   ];
 
   for (const [label, pressed, context] of reachesTheEditor) {
@@ -657,7 +713,6 @@ describe("the claim rule — preventDefault iff resolveKey returned something ot
     ["Tab", key({ name: "tab" }), {}],
     ["F2", key({ name: "f2" }), {}],
     ["Ctrl+E", key({ name: "e", ctrl: true, sequence: "\u0005" }), {}],
-    ["Ctrl+B", key({ name: "b", ctrl: true, sequence: "\u0002" }), {}],
     ["/ on an empty composer", key({ name: "/", sequence: "/" }), {}],
     ["Up while the slash menu is open", key({ name: "up" }), { overlay: "slash-menu" }],
     ["Down while the slash menu is open", key({ name: "down" }), { overlay: "slash-menu" }],
@@ -682,21 +737,26 @@ describe("the claim rule — preventDefault iff resolveKey returned something ot
   });
 });
 
-describe("dead-binding guard — the two editor defaults the App shadows (§4.7)", () => {
-  test("Ctrl+B and Ctrl+E resolve to registry actions, so the editor's defaults are unreachable", () => {
-    // PAIRED with `key-bindings.test.ts`: the editor's own map still resolves ctrl+b to move-left
-    // and ctrl+e to line-end, because `mergeKeyBindings` can shadow but never remove. Together
-    // the two assertions mean "unreachable by construction". If someone later drops ctrl+e from
-    // the registry, THIS assertion fails and points straight at the collision instead of letting
-    // export silently become "go to end of line".
-    expect(resolveKey(key({ name: "b", ctrl: true, sequence: "\u0002" }), ctx({}))).toEqual({
-      kind: "action-execute",
-      actionId: "page.prev",
-    });
-    expect(resolveKey(key({ name: "e", ctrl: true, sequence: "\u0005" }), ctx({}))).toEqual({
-      kind: "action-execute",
-      actionId: "export.start",
-    });
+describe("dead-binding guard — the ONE editor default the App still shadows (§5.3)", () => {
+  // PAIRED with `key-bindings.test.ts`: the editor's own map still resolves ctrl+e to line-end,
+  // because `mergeKeyBindings` can shadow but never remove. Ctrl+B has LEFT this guard: it is
+  // preview-scoped now, so in the chat zone the editor's `move-left` is reachable for the first
+  // time since `page.prev` took it.
+  test("Ctrl+E is shadowed by export in both zones", () => {
+    for (const focus of ["chat", "preview"] as const) {
+      expect(
+        resolveKey(key({ name: "e", ctrl: true, sequence: "\u0005" }), ctx({ focus })),
+      ).toEqual({
+        kind: "action-execute",
+        actionId: "export.start",
+      });
+    }
+  });
+
+  test("Ctrl+B is no longer shadowed in the chat zone", () => {
+    expect(
+      resolveKey(key({ name: "b", ctrl: true, sequence: "\u0002" }), ctx({ focus: "chat" })),
+    ).toEqual({ kind: "none" });
   });
 });
 
@@ -727,4 +787,13 @@ describe("Home while the agent is blocked — the one surviving editing intent",
       resolveKey(key({ name: "d", sequence: "d" }), ctx({ screen: "home", agentHealth: blocked })),
     ).toEqual({ kind: "none" });
   });
+});
+
+// COMPILE-TIME ONLY: `HotkeyZone` and `FocusTarget` must stay the same union, because `resolveKey`
+// hands the second where the first is expected with no cast. If either grows a member the other
+// lacks, one of these two lines stops compiling.
+const zoneAcceptsFocus: HotkeyZone = "chat" as FocusTarget;
+const focusAcceptsZone: FocusTarget = "preview" as HotkeyZone;
+test("the zone and focus unions are identical", () => {
+  expect([zoneAcceptsFocus, focusAcceptsZone]).toEqual(["chat", "preview"]);
 });
