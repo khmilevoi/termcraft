@@ -101,3 +101,8 @@ mandatory `id`.
   `orientation`, `contentSize`, `viewportSize`, `position` (all in cells). Optional
   `trackColor`/`thumbColor`/`arrowColor`, `showArrows` (off by default), `width`/`height`,
   `onScroll(position)`.
+- `TextTable` — a grid of styled text cells that measures its own column widths and wraps inside
+  a cell. Required: `id`, `rows` (a matrix whose cells are a plain string or a list of
+  `{ text, color?, background?, bold?, italic?, underline? }` runs). Optional `borders` (off),
+  `borderColor`, `textColor`, `background`, `columnGap` (1), `wrap` (`"word"`), `cellPadding`,
+  `width`/`height`. Row selection belongs to `Table`, not here.

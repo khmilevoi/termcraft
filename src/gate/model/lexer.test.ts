@@ -378,10 +378,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // `runtime/ui/renderable-tags.ts`, `runtime/ui/renderable-tags.augmentation.d.ts` and
     // `runtime/ui/renderable-tags.test.tsx`, taking it to 952. Task 2 adds
     // `runtime/ui/slider.tsx` and `runtime/ui/slider.test.tsx`, taking it to 954. Task 3 adds
-    // `runtime/ui/scroll-bar.tsx` and `runtime/ui/scroll-bar.test.tsx`, taking it to 956.
+    // `runtime/ui/scroll-bar.tsx` and `runtime/ui/scroll-bar.test.tsx`, taking it to 956. Task 4
+    // adds `runtime/ui/text-table.tsx` and `runtime/ui/text-table.test.tsx`, taking it to 958.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(956);
+    expect(files.length).toBe(958);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

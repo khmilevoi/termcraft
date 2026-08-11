@@ -91,3 +91,5 @@ export { Slider } from "./ui/slider";
 export type { SliderProps } from "./ui/slider";
 export { ScrollBar } from "./ui/scroll-bar";
 export type { ScrollBarProps } from "./ui/scroll-bar";
+export { TextTable } from "./ui/text-table";
+export type { TextTableProps, TextTableCell, TextTableSpan } from "./ui/text-table";
