@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import type { ThemeTokens, TokenMap } from "../types";
 import {
-  activeTokens,
   DARK_DEFAULT,
   DEFAULT_THEME_ID,
+  activeTokens,
   seedThemeCapability,
   themeIdAtom,
   themeTokens,
