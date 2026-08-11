@@ -97,3 +97,5 @@ export type { BorderGlyphs, BorderSide, Dimension } from "./types";
 // the family contract and for the documented id/geometry divergence.
 export { Span } from "./ui/inline";
 export type { SpanProps } from "./ui/inline";
+export { Bold, Italic, Underline } from "./ui/inline";
+export type { BoldProps, ItalicProps, UnderlineProps } from "./ui/inline";

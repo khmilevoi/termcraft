@@ -1,3 +1,4 @@
+import { TextAttributes } from "@opentui/core";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { StyledRun } from "host/protocol";
@@ -7,7 +8,7 @@ import type { RenderHandle } from "host/render/types";
 
 import { hostModeAtom } from "../model/capabilities";
 import { activeTokens } from "../model/tokens";
-import { Span } from "./inline";
+import { Bold, Italic, Span, Underline } from "./inline";
 import { Text } from "./text";
 
 let open: RenderHandle | null = null;
@@ -114,5 +115,86 @@ describe("inline ids and host geometry — the recorded divergence", () => {
     await handle.render();
     expect(handle.rectOf("line")).not.toBeNull();
     expect(handle.rectOf("unreachable")).toBeNull();
+  });
+});
+
+describe("Bold / Italic / Underline inline wrappers (spec §6.1)", () => {
+  test("Bold sets the bold attribute on its run", async () => {
+    const handle = await createHeadlessRenderer({ w: 16, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line">
+        <Bold id="strong">hey</Bold>
+      </Text>,
+    );
+    await handle.render();
+    const styled = allRuns(handle.capture()).find((run) => run.text.includes("hey"));
+    // The mask is the protocol's own (src/host/protocol/types.ts:81 — 1 bold, 2 dim, 4 italic,
+    // 8 underline); `TextAttributes` is OpenTUI's source for the same bits.
+    expect((styled?.attrs ?? 0) & TextAttributes.BOLD).toBe(TextAttributes.BOLD);
+  });
+
+  test("Italic sets the italic attribute on its run", async () => {
+    const handle = await createHeadlessRenderer({ w: 16, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line">
+        <Italic id="slant">hey</Italic>
+      </Text>,
+    );
+    await handle.render();
+    const styled = allRuns(handle.capture()).find((run) => run.text.includes("hey"));
+    expect((styled?.attrs ?? 0) & TextAttributes.ITALIC).toBe(TextAttributes.ITALIC);
+  });
+
+  test("Underline sets the underline attribute on its run", async () => {
+    const handle = await createHeadlessRenderer({ w: 16, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line">
+        <Underline id="rule">hey</Underline>
+      </Text>,
+    );
+    await handle.render();
+    const styled = allRuns(handle.capture()).find((run) => run.text.includes("hey"));
+    expect((styled?.attrs ?? 0) & TextAttributes.UNDERLINE).toBe(TextAttributes.UNDERLINE);
+  });
+
+  test("they nest, and the attributes combine", async () => {
+    const handle = await createHeadlessRenderer({ w: 16, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line">
+        <Bold id="outer">
+          <Italic id="inner">hey</Italic>
+        </Bold>
+      </Text>,
+    );
+    await handle.render();
+    const styled = allRuns(handle.capture()).find((run) => run.text.includes("hey"));
+    const mask = TextAttributes.BOLD | TextAttributes.ITALIC;
+    expect((styled?.attrs ?? 0) & mask).toBe(mask);
+  });
+
+  test("each takes a Color, and a token NAME does not compile (spec §4.5)", () => {
+    // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().accent`.
+    const rejected = <Bold id="rejected-bold" color="accent" />;
+    expect(rejected).toBeDefined();
+  });
+
+  test("export mode renders the identical frame (spec §6.3)", async () => {
+    const tree = (
+      <Text id="line">
+        <Bold id="b" color={activeTokens().accent}>
+          a
+        </Bold>
+        <Italic id="i">b</Italic>
+        <Underline id="u">c</Underline>
+      </Text>
+    );
+    const preview = await renderOnce(tree, { w: 16, h: 1 });
+    hostModeAtom.set("export");
+    const exported = await renderOnce(tree, { w: 16, h: 1 });
+    expect(exported.rows).toEqual(preview.rows);
   });
 });

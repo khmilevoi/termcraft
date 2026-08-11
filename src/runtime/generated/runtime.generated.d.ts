@@ -426,6 +426,50 @@ declare module "@termcraft/runtime" {
    * `Text`; on its own it has no container to attach to.
    */
   function Span(props: SpanProps): React.ReactNode;
+  /** Props for the inline `Bold`. `id` is the mandatory stable id (§3.2). */
+  interface BoldProps {
+      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      readonly id: string;
+      /** Literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      readonly color?: Color;
+  }
+  /**
+   * A bold inline run inside a `Text` (design-system §6.1). The weight comes from the intrinsic
+   * itself — `@opentui/react`'s `b` renderable ORs `TextAttributes.BOLD` into the run — so nesting
+   * `Bold` inside `Italic` combines both rather than replacing one.
+   */
+  function Bold(props: BoldProps): React.ReactNode;
+  /** Props for the inline `Italic`. `id` is the mandatory stable id (§3.2). */
+  interface ItalicProps {
+      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      readonly id: string;
+      /** Literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      readonly color?: Color;
+  }
+  /**
+   * An italic inline run inside a `Text` (design-system §6.1). The slant comes from the intrinsic
+   * (`TextAttributes.ITALIC`); whether the terminal actually renders italics is the terminal's
+   * choice, and the attribute is carried into the export snapshot either way.
+   */
+  function Italic(props: ItalicProps): React.ReactNode;
+  /** Props for the inline `Underline`. `id` is the mandatory stable id (§3.2). */
+  interface UnderlineProps {
+      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      readonly id: string;
+      /** Literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      readonly color?: Color;
+  }
+  /**
+   * An underlined inline run inside a `Text` (design-system §6.1). The rule comes from the
+   * intrinsic (`TextAttributes.UNDERLINE`), not from a drawn glyph, so it never consumes a row.
+   */
+  function Underline(props: UnderlineProps): React.ReactNode;
 
   // ── src/runtime/ui/input
   /** Props for the themed `Input` component. `id` is the mandatory stable id (§3.2). */
@@ -822,6 +866,8 @@ declare module "@termcraft/runtime" {
   export type { BorderGlyphs, BorderSide, Dimension };
   export { Span };
   export type { SpanProps };
+  export { Bold, Italic, Underline };
+  export type { BoldProps, ItalicProps, UnderlineProps };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {

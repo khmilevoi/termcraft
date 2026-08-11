@@ -44,3 +44,71 @@ export function Span(props: SpanProps) {
     </span>
   );
 }
+
+/** Props for the inline `Bold`. `id` is the mandatory stable id (§3.2). */
+export interface BoldProps {
+  /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+  readonly id: string;
+  /** Literal text, or further inline wrappers. */
+  readonly children?: unknown;
+  /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+  readonly color?: Color;
+}
+
+/**
+ * A bold inline run inside a `Text` (design-system §6.1). The weight comes from the intrinsic
+ * itself — `@opentui/react`'s `b` renderable ORs `TextAttributes.BOLD` into the run — so nesting
+ * `Bold` inside `Italic` combines both rather than replacing one.
+ */
+export function Bold(props: BoldProps) {
+  return (
+    <b id={props.id} fg={props.color ?? activeTokens().foreground}>
+      {props.children}
+    </b>
+  );
+}
+
+/** Props for the inline `Italic`. `id` is the mandatory stable id (§3.2). */
+export interface ItalicProps {
+  /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+  readonly id: string;
+  /** Literal text, or further inline wrappers. */
+  readonly children?: unknown;
+  /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+  readonly color?: Color;
+}
+
+/**
+ * An italic inline run inside a `Text` (design-system §6.1). The slant comes from the intrinsic
+ * (`TextAttributes.ITALIC`); whether the terminal actually renders italics is the terminal's
+ * choice, and the attribute is carried into the export snapshot either way.
+ */
+export function Italic(props: ItalicProps) {
+  return (
+    <i id={props.id} fg={props.color ?? activeTokens().foreground}>
+      {props.children}
+    </i>
+  );
+}
+
+/** Props for the inline `Underline`. `id` is the mandatory stable id (§3.2). */
+export interface UnderlineProps {
+  /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+  readonly id: string;
+  /** Literal text, or further inline wrappers. */
+  readonly children?: unknown;
+  /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+  readonly color?: Color;
+}
+
+/**
+ * An underlined inline run inside a `Text` (design-system §6.1). The rule comes from the
+ * intrinsic (`TextAttributes.UNDERLINE`), not from a drawn glyph, so it never consumes a row.
+ */
+export function Underline(props: UnderlineProps) {
+  return (
+    <u id={props.id} fg={props.color ?? activeTokens().foreground}>
+      {props.children}
+    </u>
+  );
+}
