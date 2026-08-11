@@ -2,6 +2,7 @@ import type {
   DesignSystemId,
   DesignSystemRef,
   DesignSystemVersion,
+  SourceId,
 } from "entities/design-system-ref";
 import type { Clock } from "infrastructure/clock";
 
@@ -139,4 +140,23 @@ export interface PublishReceipt {
   readonly contentHash: Sha256Hex;
   /** RFC 3339 UTC. */
   readonly publishedAt: string;
+}
+
+/**
+ * Where design systems come from (design §8.1). The store-side twin of `core/ports`'
+ * `DesignSystemSource`: the SAME method set and the SAME shapes, with this module's tagged
+ * `SourceError` union in place of the ring's `FailureDtoV1` — the relationship `TrustStore` has
+ * with `TrustGate`. `store/adapters/design-system-source.ts` is where one becomes the other.
+ *
+ * Every operation is asynchronous and failable FROM THE START even though a local directory
+ * needs neither: "a synchronous contract has no room for a network source later" (§8.1).
+ */
+export interface DesignSystemSource {
+  readonly id: SourceId;
+  readonly label: string;
+  readonly canPublish: boolean;
+
+  list(): Promise<Error | readonly DesignSystemSummary[]>;
+  fetch(ref: DesignSystemRef): Promise<Error | FetchedPackage>;
+  publish(pkg: LocalPackage): Promise<Error | PublishReceipt>;
 }

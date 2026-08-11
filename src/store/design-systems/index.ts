@@ -72,3 +72,5 @@ export { fetchLocalPackage } from "./model/fetch";
 export { readPackageDirectory } from "./model/walk";
 export type { LocalPackage, PublishReceipt } from "./types";
 export { publishLocalPackage } from "./model/publish";
+export type { DesignSystemSource } from "./types";
+export { createLocalDesignSystemSource } from "./model/local-source";
