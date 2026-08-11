@@ -100,3 +100,22 @@ export { Textarea } from "./ui/textarea";
 export type { TextareaProps } from "./ui/textarea";
 export { ScrollBox } from "./ui/scroll-box";
 export type { ScrollBoxProps } from "./ui/scroll-box";
+
+
+// §6.2 border and layout vocabulary (plan P6). A SEPARATE export line from the §4 one above on
+// purpose: P5/P7/P8/P9 append to this file from their own worktrees, and appended lines merge
+// where an edited line conflicts.
+export type { BorderGlyphs, BorderSide, Dimension } from "./types";
+
+// Inline text wrappers (§6.1). Valid only inside a `Text` — see `./ui/inline`'s module note for
+// the family contract and for the documented id/geometry divergence.
+export { Span } from "./ui/inline";
+export type { SpanProps } from "./ui/inline";
+export { Bold, Italic, Underline } from "./ui/inline";
+export type { BoldProps, ItalicProps, UnderlineProps } from "./ui/inline";
+export { Link, LineBreak } from "./ui/inline";
+export type { LinkProps, LineBreakProps } from "./ui/inline";
+
+// Display text (§6.1).
+export { AsciiFont } from "./ui/ascii-font";
+export type { AsciiFontProps, AsciiFontName } from "./ui/ascii-font";

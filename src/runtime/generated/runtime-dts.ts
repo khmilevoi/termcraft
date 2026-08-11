@@ -305,6 +305,86 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
        */
       readonly theme?: ThemeId;
   }
+  /**
+   * One side of a box frame (spec §6.2). \`Box.border\` takes \`true\` for all four, \`false\` for none,
+   * or a list of exactly the sides to draw. termcraft declares this locally rather than re-exporting
+   * \`@opentui/core\`'s \`BorderSides\`, so an OpenTUI upgrade changes the adapter and not one saved
+   * page (§6).
+   */
+  type BorderSide = "top" | "right" | "bottom" | "left";
+  /**
+   * A complete custom frame glyph set (spec §6.2). All eleven members are required: a partial set
+   * would leave a frame drawn half in one alphabet and half in another, which reads as a rendering
+   * bug rather than a choice. The four built-in tables \`borderStyle\` selects
+   * (\`single\`/\`double\`/\`rounded\`/\`heavy\`) each supply exactly these eleven.
+   */
+  interface BorderGlyphs {
+      readonly topLeft: string;
+      readonly topRight: string;
+      readonly bottomLeft: string;
+      readonly bottomRight: string;
+      /** The horizontal run along the top and bottom edges. */
+      readonly horizontal: string;
+      /** The vertical run along the left and right edges. */
+      readonly vertical: string;
+      /** T-junctions where an interior rule meets an edge. */
+      readonly topT: string;
+      readonly bottomT: string;
+      readonly leftT: string;
+      readonly rightT: string;
+      /** The four-way junction where two interior rules cross. */
+      readonly cross: string;
+  }
+  /**
+   * A layout length (spec §6.2): a cell count, a percentage of the containing box, or \`auto\` —
+   * "whatever the content or the flex algorithm decides". termcraft declares this locally rather
+   * than re-exporting OpenTUI's own union, so an OpenTUI upgrade changes the adapter and not one
+   * saved page (§6).
+   */
+  type Dimension = number | "auto" | \`\${number}%\`;
+
+  // ── src/runtime/ui/ascii-font
+  /**
+   * The seven glyph sets \`@opentui/core@0.4.5\` ships (\`lib/ascii.font.d.ts:3\`), declared locally
+   * rather than re-exported so an OpenTUI upgrade changes this adapter and not one saved page (§6).
+   * Omitting \`font\` leaves OpenTUI's own default, \`tiny\`.
+   */
+  type AsciiFontName = "tiny" | "block" | "shade" | "slick" | "huge" | "grid" | "pallet";
+  /** Props for the \`AsciiFont\` display text. \`id\` is the mandatory stable id (§3.2). */
+  interface AsciiFontProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      /**
+       * The string to draw. REQUIRED, where upstream's is optional: a banner with no text renders
+       * nothing, and a silently empty element in an authored page reads as a broken render.
+       */
+      readonly text: string;
+      /** Which glyph set to draw with; omitted leaves OpenTUI's \`tiny\`. */
+      readonly font?: AsciiFontName;
+      /**
+       * The glyph hue; defaults to the theme's \`foreground\`.
+       *
+       * DESIGN GAP, RECORDED RATHER THAN GUESSED (CLAUDE.md): the project's design system contains
+       * no ASCII-banner screen — \`design/*.dc.html\` and \`design/termcraft-engine.js\` have none — so
+       * there is no design hue to take. The default is therefore the CATALOG's own established one
+       * (\`Text\` defaults to \`foreground\` too), not an invented accent.
+       *
+       * DELIBERATE OMISSION: upstream also accepts an ARRAY of colours for a per-row gradient. §6.1
+       * asks for a display-text wrapper, not a gradient API, and nothing in the design system would
+       * pick the stops. Adding it later is additive.
+       */
+      readonly color?: Color;
+      /** The fill behind the glyph block. Read one off \`useTokens()\` (spec §4.5). */
+      readonly background?: Color;
+  }
+  /**
+   * Large ASCII-art display text (design-system §6.1). Renders one OpenTUI \`ascii-font\` element,
+   * sized by the chosen glyph set rather than by width/height props — upstream \`Omit\`s both
+   * (\`@opentui/core/renderables/ASCIIFont.d.ts:7\`), so wrap it in a \`Box\` when it needs to be
+   * placed or constrained. The mandatory \`id\` resolves for host geometry: unlike the inline text
+   * family, this is a real layout \`Renderable\`.
+   */
+  function AsciiFont(props: AsciiFontProps): React.ReactNode;
 
   // ── src/runtime/ui/button
   /** Props for the themed \`Button\` component. \`id\` is the mandatory stable id (§3.2). */
@@ -450,6 +530,169 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * as one contiguous bar. Colors + glyphs match the design engine's gauge.
    */
   function Gauge(props: GaugeProps): React.ReactNode;
+
+  // ── src/runtime/ui/inline
+  /**
+   * THE INLINE TEXT FAMILY (spec §6.1). Six wrappers over OpenTUI's text-node intrinsics —
+   * \`span\`, \`b\`, \`i\`, \`u\`, \`a\`, \`br\` — kept in ONE module because they share one contract that
+   * has to be stated once and obeyed by all of them:
+   *
+   *  - **They are only valid inside a \`Text\`.** Each renders a \`TextNodeRenderable\`
+   *    (\`@opentui/core/renderables/TextNode.d.ts:17\`), which is not a layout renderable and has no
+   *    container of its own; a \`Text\` is what holds them. \`TextProps.children\` is widened to accept
+   *    them.
+   *  - **Their \`id\` is mandatory but NOT host-addressable.** \`TextNodeRenderable\` extends
+   *    \`BaseRenderable\` — no Yoga node, no screen rect — and the host's \`rectOf\`/\`checkHit\` walk
+   *    \`Renderable.findDescendantById\` (\`@opentui/core/Renderable.d.ts:187\`), which never reaches a
+   *    text node. DIVERGENCE, DOCUMENTED RATHER THAN SILENTLY DROPPED (CLAUDE.md): the id is
+   *    carried, stable, and part of the authored-page contract spec §6 states without exception,
+   *    but the shell cannot select or pin an inline run today. \`ui/inline.test.tsx\` pins that fact.
+   *  - **Weight, slant and underline are the dedicated wrappers, not \`Span\` flags.** Two spellings
+   *    for one effect is what §4.5 removed from the colour model; one spelling is kept here.
+   *  - **No background prop in this stage.** \`Text\` has none either, and splitting the text
+   *    vocabulary for \`Span\` alone would cost more than it buys. Adding it later is additive.
+   */
+  /** Props for the inline \`Span\`. \`id\` is the mandatory stable id (§3.2). */
+  interface SpanProps {
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
+      readonly id: string;
+      /** Literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing \`Text\`'s colour (which itself defaults to
+       * the theme's \`foreground\`) — OpenTUI merges text-node styles down the chain, so a \`Span\`
+       * inside a red \`Text\` is red. Read one off \`useTokens()\` (spec §4.5).
+       */
+      readonly color?: Color;
+  }
+  /**
+   * An inline run of text inside a \`Text\` (design-system §6.1). Its only styling is a hue — for
+   * weight, slant or underline, wrap it in \`Bold\`, \`Italic\` or \`Underline\`. Must be nested in a
+   * \`Text\`; on its own it has no container to attach to.
+   */
+  function Span(props: SpanProps): React.ReactNode;
+  /** Props for the inline \`Bold\`. \`id\` is the mandatory stable id (§3.2). */
+  interface BoldProps {
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
+      readonly id: string;
+      /** Literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing \`Text\`'s colour (which itself defaults to
+       * the theme's \`foreground\`) — OpenTUI merges text-node styles down the chain, so a \`Span\`
+       * inside a red \`Text\` is red. Read one off \`useTokens()\` (spec §4.5).
+       */
+      readonly color?: Color;
+  }
+  /**
+   * A bold inline run inside a \`Text\` (design-system §6.1). The weight comes from the intrinsic
+   * itself — \`@opentui/react\`'s \`b\` renderable ORs \`TextAttributes.BOLD\` into the run — so nesting
+   * \`Bold\` inside \`Italic\` combines both rather than replacing one.
+   */
+  function Bold(props: BoldProps): React.ReactNode;
+  /** Props for the inline \`Italic\`. \`id\` is the mandatory stable id (§3.2). */
+  interface ItalicProps {
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
+      readonly id: string;
+      /** Literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing \`Text\`'s colour (which itself defaults to
+       * the theme's \`foreground\`) — OpenTUI merges text-node styles down the chain, so a \`Span\`
+       * inside a red \`Text\` is red. Read one off \`useTokens()\` (spec §4.5).
+       */
+      readonly color?: Color;
+  }
+  /**
+   * An italic inline run inside a \`Text\` (design-system §6.1). The slant comes from the intrinsic
+   * (\`TextAttributes.ITALIC\`); whether the terminal actually renders italics is the terminal's
+   * choice, and the attribute is carried into the export snapshot either way.
+   */
+  function Italic(props: ItalicProps): React.ReactNode;
+  /** Props for the inline \`Underline\`. \`id\` is the mandatory stable id (§3.2). */
+  interface UnderlineProps {
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
+      readonly id: string;
+      /** Literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing \`Text\`'s colour (which itself defaults to
+       * the theme's \`foreground\`) — OpenTUI merges text-node styles down the chain, so a \`Span\`
+       * inside a red \`Text\` is red. Read one off \`useTokens()\` (spec §4.5).
+       */
+      readonly color?: Color;
+  }
+  /**
+   * An underlined inline run inside a \`Text\` (design-system §6.1). The rule comes from the
+   * intrinsic (\`TextAttributes.UNDERLINE\`), not from a drawn glyph, so it never consumes a row.
+   */
+  function Underline(props: UnderlineProps): React.ReactNode;
+  /** Props for the inline \`Link\`. \`id\` is the mandatory stable id (§3.2). */
+  interface LinkProps {
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
+      readonly id: string;
+      /** The link target, emitted as a terminal hyperlink. Required: a link with no target is text. */
+      readonly href: string;
+      /** The label; literal text, or further inline wrappers. */
+      readonly children?: unknown;
+      /**
+       * The label's hue. Omitted, it INHERITS the enclosing \`Text\`'s colour (which itself defaults
+       * to the theme's \`foreground\`) — OpenTUI merges text-node styles down the chain, so a \`Link\`
+       * inside a red \`Text\` is red. Read one off \`useTokens()\` (spec §4.5).
+       */
+      readonly color?: Color;
+  }
+  /**
+   * A terminal hyperlink inside a \`Text\` (design-system §6.1). The label renders as ordinary
+   * inline text; \`href\` becomes the run's hyperlink target in terminals that support it.
+   *
+   * DESIGN GAP, RECORDED RATHER THAN GUESSED (CLAUDE.md): the design system defines no distinct
+   * link hue, so an omitted \`color\` inherits the enclosing \`Text\`'s hue like every other inline
+   * run instead of inventing one — pass \`color={t.accent}\` for the conventional highlighted link.
+   *
+   * DIVERGENCE: a hyperlink TARGET is not observable in a captured frame. \`StyledRun\`
+   * (\`src/host/protocol/types.ts:77-83\`) carries text, colours and attributes and has no link
+   * field, so an export snapshot preserves the label and drops the target. The tests assert the
+   * label and its hue for exactly that reason.
+   */
+  function Link(props: LinkProps): React.ReactNode;
+  /** Props for the inline \`LineBreak\`. \`id\` is the mandatory stable id (§3.2) and its only prop. */
+  interface LineBreakProps {
+      /**
+       * Stable id the shell keys on. Mandatory, with no exception carved for this element: \`id\` is
+       * the ENTIRE prop surface the \`br\` intrinsic has (\`LineBreakProps = Pick<SpanProps, "id">\`,
+       * \`@opentui/react/src/types/components.d.ts:37\`), and spec §6 states the rule without
+       * exception — see the module note: an inline id is stable and part of the export vocabulary,
+       * but it is NOT addressable by the host's geometry queries.
+       */
+      readonly id: string;
+  }
+  /**
+   * A hard line break inside a \`Text\` (design-system §6.1). Takes no children and no styling — the
+   * intrinsic emits a newline and nothing else. Use it to split one \`Text\` across rows without
+   * paying for a second container.
+   */
+  function LineBreak(props: LineBreakProps): React.ReactNode;
 
   // ── src/runtime/ui/input
   /** Props for the themed \`Input\` component. \`id\` is the mandatory stable id (§3.2). */
@@ -621,11 +864,71 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly padding?: number;
       /** Flex grow factor — a 0 keeps the box at content size; ≥1 lets it expand. */
       readonly grow?: number;
-      readonly width?: number;
-      readonly height?: number;
-      readonly border?: boolean;
+      /** Flex shrink factor — a 0 refuses to give way when the line is over-full. */
+      readonly shrink?: number;
+      /** Flex basis — the main-axis starting size before grow/shrink, or \`auto\` for content size. */
+      readonly basis?: number | "auto";
+      /** Whether an over-full row/column wraps onto further lines. */
+      readonly wrap?: "nowrap" | "wrap" | "wrap-reverse";
+      /** Cross-axis placement of THIS box, overriding its parent's \`align\` for it alone. */
+      readonly alignSelf?: "auto" | "start" | "center" | "end" | "stretch" | "baseline";
+      readonly width?: Dimension;
+      readonly height?: Dimension;
+      readonly minWidth?: Dimension;
+      readonly maxWidth?: Dimension;
+      readonly minHeight?: Dimension;
+      readonly maxHeight?: Dimension;
+      /**
+       * Outer spacing on all four sides. DELIBERATE OMISSION: OpenTUI also offers per-side and
+       * per-axis margins; spec §6.2 asks for the scalar form only, and exposing more is additive.
+       */
+      readonly margin?: Dimension;
+      /**
+       * \`absolute\` takes the box out of its parent's flex flow and places it by the offsets below.
+       * DELIBERATE OMISSION: OpenTUI's third value, \`static\`, is Yoga's own default and §6.2 does not
+       * ask for it.
+       */
+      readonly position?: "relative" | "absolute";
+      readonly top?: Dimension;
+      readonly right?: Dimension;
+      readonly bottom?: Dimension;
+      readonly left?: Dimension;
+      /** Paint order among overlapping siblings; higher paints later. */
+      readonly zIndex?: number;
+      /**
+       * What happens to content larger than the box. \`scroll\` currently clips exactly like \`hidden\`
+       * on \`Box\`: \`Renderable\` installs a scissor rect for any value other than \`visible\` but gives
+       * \`Box\` neither a scroll offset nor any affordance to move it — a scrollable container is
+       * \`ScrollBox\`'s job (plan P7), not this one.
+       */
+      readonly overflow?: "visible" | "hidden" | "scroll";
+      /**
+       * The frame: \`true\` for all four sides, \`false\`/omitted for none, or exactly the sides to
+       * draw (spec §6.2).
+       */
+      readonly border?: boolean | readonly BorderSide[];
+      /**
+       * Which glyph table the frame is drawn from. OMITTED ON PURPOSE BY DEFAULT: \`Box\` is the
+       * un-opinionated escape hatch (runtime-api §3.2), so with no \`borderStyle\` OpenTUI's own
+       * \`single\` applies. The DESIGN's default frame is rounded
+       * (\`design/termcraft-engine.js:47\` — \`const r = o.rounded !== false\`) and is pinned where it
+       * belongs, on \`Panel\`, the design-conformant frame.
+       */
+      readonly borderStyle?: "single" | "double" | "rounded" | "heavy";
+      /** A complete custom glyph set, replacing whatever \`borderStyle\` would have selected. */
+      readonly borderChars?: BorderGlyphs;
       /** The border hue (only meaningful with \`border\`). Read one off \`useTokens()\` (spec §4.5). */
       readonly borderColor?: Color;
+      /** Caption drawn into the TOP border row. */
+      readonly title?: string;
+      /** Where the top caption sits along its row; OpenTUI's own default is \`left\`. */
+      readonly titleAlign?: "left" | "center" | "right";
+      /** The caption hue. Read one off \`useTokens()\` (spec §4.5). */
+      readonly titleColor?: Color;
+      /** Caption drawn into the BOTTOM border row. */
+      readonly bottomTitle?: string;
+      /** Where the bottom caption sits along its row; OpenTUI's own default is \`left\`. */
+      readonly bottomTitleAlign?: "left" | "center" | "right";
       /** The fill hue. Read one off \`useTokens()\` (spec §4.5). */
       readonly background?: Color;
   }
@@ -911,7 +1214,13 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   interface TextProps {
       /** Stable id selection and pins key on (§3.2). Mandatory on every catalog component. */
       readonly id: string;
-      readonly children?: string | number;
+      /**
+       * Literal text, or the inline wrappers of \`ui/inline\` (\`Span\`, \`Bold\`, \`Italic\`, \`Underline\`,
+       * \`Link\`, \`LineBreak\`). \`unknown\` rather than a named node union: the React/OpenTUI node type
+       * is a private identity this facade must not leak into authored source (runtime-api §3.3), and
+       * \`BoxProps.children\` already takes the same shape for the same reason.
+       */
+      readonly children?: unknown;
       /** The text hue; defaults to the theme's \`foreground\`. Read one off \`useTokens()\` (spec §4.5). */
       readonly color?: Color;
       readonly bold?: boolean;
@@ -1035,6 +1344,15 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   export type { TextareaProps };
   export { ScrollBox };
   export type { ScrollBoxProps };
+  export type { BorderGlyphs, BorderSide, Dimension };
+  export { Span };
+  export type { SpanProps };
+  export { Bold, Italic, Underline };
+  export type { BoldProps, ItalicProps, UnderlineProps };
+  export { Link, LineBreak };
+  export type { LinkProps, LineBreakProps };
+  export { AsciiFont };
+  export type { AsciiFontProps, AsciiFontName };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {

@@ -115,4 +115,49 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     // The retired closed union. Its survival here would mean the emit did not pick the change up.
     expect(dts).not.toContain('type ThemeId = "dark-default"');
   });
+
+  test("exports the §6.1 inline text family and the display-text wrapper", () => {
+    for (const name of [
+      "Span",
+      "Bold",
+      "Italic",
+      "Underline",
+      "Link",
+      "LineBreak",
+      "AsciiFont",
+    ] as const) {
+      // See the rationale on the first loop above: tsc already validates `name`.
+      // oxlint-disable-next-line import/namespace
+      expect(typeof runtime[name]).toBe("function");
+    }
+  });
+
+  test("the generated prompt declaration carries the §6.1/§6.2 additions with their docs", () => {
+    const dts = readFileSync(
+      new URL("./generated/runtime.generated.d.ts", import.meta.url),
+      "utf8",
+    );
+    // The agent's own component documentation IS this file's doc comments (spec §6.4).
+    for (const symbol of [
+      "function Span",
+      "function Bold",
+      "function Italic",
+      "function Underline",
+      "function Link",
+      "function LineBreak",
+      "function AsciiFont",
+      "type AsciiFontName",
+      "type Dimension",
+      "type BorderSide",
+      "interface BorderGlyphs",
+    ]) {
+      expect(dts).toContain(symbol);
+    }
+    // The Box expansion, sampled at three props that did not exist before plan P6.
+    expect(dts).toContain("borderStyle?:");
+    expect(dts).toContain("bottomTitleAlign?:");
+    expect(dts).toContain("alignSelf?:");
+    // And the family contract an authoring agent must read.
+    expect(dts).toContain("only valid inside a `Text`");
+  });
 });

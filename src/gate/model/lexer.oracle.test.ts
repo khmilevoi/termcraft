@@ -553,7 +553,7 @@ function fuzzCorpus(count: number, seed: number): Row[] {
 }
 
 describe("the differential oracle — Bun's parse against the gate's view", () => {
-  test("the repository's own 959 sources: zero under-scans and zero refusals", () => {
+  test("the repository's own 963 sources: zero under-scans and zero refusals", () => {
     const found = runCorpus(repositoryCorpus());
     expect(report(found)).toEqual([]);
   });
