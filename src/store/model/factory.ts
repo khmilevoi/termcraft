@@ -156,6 +156,7 @@ import type {
 } from "../types";
 import { scanChatListingPrefix } from "./chat-listing";
 import type { ChatListingScanIssue } from "./chat-listing";
+import { createDesignSystemSeedFiles } from "./design-system-seed";
 import {
   buildPagesManifestOperation,
   createDesignTreeStore,
@@ -1238,10 +1239,7 @@ async function scanOrphanTurns(input: {
     }
     const doc = readChatJsonl({ path: relPath, chunks: [bytes] });
     if (doc instanceof Error) {
-      log.warn(
-        `store: orphan turn scan skipping ${relPath}, mid-file corruption:`,
-        doc.message,
-      );
+      log.warn(`store: orphan turn scan skipping ${relPath}, mid-file corruption:`, doc.message);
       continue;
     }
     // storage-identity §5.2 identity check (blocker finding #2), re-applied here rather than
@@ -1682,9 +1680,19 @@ async function createProject(
     pagesManifestBytes,
   );
 
+  // THE SEEDED DESIGN SYSTEM (design-systems §4.4): a new project has a working design system
+  // before its first page exists, so no page is ever authored against a missing token map. Same
+  // transaction as everything else above — see the `chatId` comment for why a second write is not
+  // an option.
+  const seedOps = createDesignSystemSeedFiles({ kitApiVersion: input.kitApiVersion }).map(
+    (file, offset) =>
+      buildReplaceOperation(deps, 5 + offset, designFilePath(file.relPath), file.bytes),
+  );
+
   // ONE project-mutation transaction mints projectId + the format-2 layout + the generated
-  // .gitignore + the workspace file + the first chat header + the seeded design tree
-  // (storage-identity §14.2; multi-file design tree §3, §10).
+  // .gitignore + the workspace file + the first chat header + the seeded design tree + the
+  // seeded design system (storage-identity §14.2; multi-file design tree §3, §10; design-systems
+  // §4.4).
   const result = await engine.runProjectMutation({
     transactionId: deps.uuidv7(),
     actionId: deps.uuidv7(),
@@ -1695,6 +1703,7 @@ async function createProject(
       workspaceOp.operation,
       chatOp.operation,
       pagesOp.operation,
+      ...seedOps.map((op) => op.operation),
     ],
     payloads: new Map([
       manifestOp.payload,
@@ -1702,6 +1711,7 @@ async function createProject(
       workspaceOp.payload,
       chatOp.payload,
       pagesOp.payload,
+      ...seedOps.map((op) => op.payload),
     ]),
     createdAt,
   });

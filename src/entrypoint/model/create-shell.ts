@@ -409,6 +409,10 @@ async function openOrCreateProject(
     // `EMBEDDED_RUNTIME_DECLARATION.module`) and Gate actually validate/render pages for
     // today — a fact about this MVP's supported stack, not an invented design value.
     targetStack: "js-opentui",
+    // `store` must not import `runtime` (D3), so this binary's own embedded kit API identity
+    // — the same constant the host/Gate handshake checks — is supplied here, never re-derived
+    // inside `store` (`CreateProjectInput.kitApiVersion`'s own doc comment).
+    kitApiVersion: EMBEDDED_RUNTIME_DECLARATION.currentKitApiVersion,
   });
   if (created instanceof Error) {
     return new ShellCompositionError({

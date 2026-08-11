@@ -3,8 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { decodeDesignSystemManifest } from "entities/design-system";
 import { decodePagesManifest } from "entities/design-tree";
 import { uuidv7 } from "infrastructure/uuid";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 import { encodeChatHeaderLine, sha256Hex } from "store/jsonl";
 import {
   PROJECT_GITIGNORE_FILENAME,
@@ -23,7 +25,7 @@ import type {
   TransactionOperation,
   TransactionPlan,
 } from "store/transaction";
-import { chatJsonlPath, runCrashCase } from "store/transaction";
+import { TRANSACTIONS_LOCAL_DIR, chatJsonlPath, decodePlan, runCrashCase } from "store/transaction";
 
 import type { StoreDeps } from "../types";
 import { ProjectAlreadyExistsError, createStore, nodeStoreDeps } from "./factory";
@@ -52,6 +54,31 @@ function testDeps(userStateRoot: string): StoreDeps {
   return nodeStoreDeps({ userStateRoot });
 }
 
+/**
+ * One project-creation transaction's `mutationKind` and `operations`, read back from the
+ * committed `plan.json` the engine leaves on disk (it is never cleaned up — turn-durability's
+ * own recovery classification needs it). `createProject` writes exactly one project's own
+ * `.termcraft/transactions.local/` directory (the implicit trust grant, a separate write,
+ * lands in `userStateRoot`, never here), so this always reads back the single transaction
+ * `createProject` itself ran.
+ */
+function readRecordedMutations(projectRoot: string): readonly {
+  readonly mutationKind: unknown;
+  readonly operations: readonly TransactionOperation[];
+}[] {
+  const txRoot = path.join(projectRoot, ".termcraft", TRANSACTIONS_LOCAL_DIR);
+  return fs
+    .readdirSync(txRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const bytes = fs.readFileSync(path.join(txRoot, entry.name, "plan.json"));
+      const plan = decodePlan(new Uint8Array(bytes));
+      if (plan instanceof Error)
+        throw new Error(`fixture bug: undecodable plan.json: ${plan.message}`);
+      return { mutationKind: plan.domain.mutationKind, operations: plan.operations };
+    });
+}
+
 describe("createProject — new-project creation (storage-identity §14.2)", () => {
   test("mints projectId, the format-2 layout, the gitignore, the workspace file, the seeded design tree, the first chat header, and the implicit trust grant", async () => {
     const userStateRoot = freshScratch("tc-create-userstate-");
@@ -63,6 +90,7 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       root: projectRoot,
       name: "My Project",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (opened instanceof Error)
       throw new Error(`fixture bug: createProject failed: ${opened.message}`);
@@ -126,9 +154,11 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       // fabricated design, and the first turn is what creates one.
       expect(seededTree.pages).toEqual([]);
       expect(seededTree.requestedActivePage).toBeNull();
-      // And the seed is the ONLY thing in the tree — no invented `lib/`, no example component.
+      // And the seed is the ONLY thing in the tree beyond the design system (design-systems
+      // §4.4) — no invented `lib/`, no example component.
       expect(fs.readdirSync(path.join(projectRoot, ".termcraft", "design"))).toEqual([
         "pages.json",
+        "system",
       ]);
 
       // ---- the first chat header ----
@@ -176,6 +206,72 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
     }
   }, 20_000);
 
+  test("a new project is created with a working design system (design-systems §4.4)", async () => {
+    // "a new project has a working design system before its first page exists, so no page is
+    // ever authored against a missing token map."
+    const userStateRoot = freshScratch("tc-create-userstate-");
+    const projectRoot = freshScratch("tc-create-project-");
+    const deps = testDeps(userStateRoot);
+    const store = createStore(deps);
+
+    const opened = await store.createProject({
+      root: projectRoot,
+      name: "Design System Project",
+      targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
+    });
+    if (opened instanceof Error)
+      throw new Error(`fixture bug: createProject failed: ${opened.message}`);
+
+    try {
+      const manifest = fs.readFileSync(
+        path.join(projectRoot, ".termcraft/design/system/design-system.json"),
+        "utf8",
+      );
+      const decoded = decodeDesignSystemManifest(manifest);
+      expect(decoded).not.toBeInstanceOf(Error);
+      if (decoded instanceof Error) return;
+      expect(decoded.defaultTheme).toBe("dark-default");
+      expect(decoded.kitApiVersion).toBe(CURRENT_KIT_API_VERSION);
+      expect(decoded.components).toEqual([]);
+
+      const tokens = fs.readFileSync(
+        path.join(projectRoot, ".termcraft/design/system/tokens.ts"),
+        "utf8",
+      );
+      expect(tokens).toContain('import ds from "./design-system.json"');
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  test("the whole creation is still ONE transaction", async () => {
+    // The seed files ride the SAME `project-creation` transaction as `project.toml` and
+    // `design/pages.json` — a second write could be interrupted between the two and leave a
+    // project whose manifest says format 2 and whose tree has no design system.
+    const userStateRoot = freshScratch("tc-create-userstate-");
+    const projectRoot = freshScratch("tc-create-project-");
+    const deps = testDeps(userStateRoot);
+    const store = createStore(deps);
+
+    const opened = await store.createProject({
+      root: projectRoot,
+      name: "One Transaction Project",
+      targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
+    });
+    if (opened instanceof Error)
+      throw new Error(`fixture bug: createProject failed: ${opened.message}`);
+
+    try {
+      const recordedMutations = readRecordedMutations(projectRoot);
+      expect(recordedMutations.map((m) => m.mutationKind)).toEqual(["project-creation"]);
+      expect(recordedMutations[0]?.operations).toHaveLength(7);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
   test("refuses to create a second project over an existing .termcraft directory", async () => {
     const userStateRoot = freshScratch("tc-create-userstate-");
     const projectRoot = freshScratch("tc-create-exists-");
@@ -186,6 +282,7 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       root: projectRoot,
       name: "First",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (first instanceof Error) throw new Error(`fixture bug: ${first.message}`);
     await first.close();
@@ -194,6 +291,7 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
       root: projectRoot,
       name: "Second",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     expect(second instanceof Error).toBe(true);
     expect(ProjectAlreadyExistsError.is(second)).toBe(true);

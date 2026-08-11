@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { createFakeDesignStore } from "core/ports/fakes";
+import {
+  DESIGN_SYSTEM_MANIFEST_RELPATH,
+  DESIGN_SYSTEM_TOKENS_RELPATH,
+} from "entities/design-system";
 import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
@@ -29,6 +33,14 @@ const ABOUT_SLUG = mustParseSlug("about");
 // never distinguish a genuine manifest lookup from a slug-computed guess.
 const HOME_ENTRY = "screens/home-view.tsx";
 const ABOUT_ENTRY = "panels/about-panel.tsx";
+
+// `createRealProjectFixture` drives a real `createProject`, which now seeds the design system
+// (design-systems §4.4) in the SAME transaction as `pages.json` — every real-tree listing below
+// carries these two files alongside whatever pages the test itself seeds.
+const SEEDED_DESIGN_SYSTEM_RELPATHS = [
+  DESIGN_SYSTEM_MANIFEST_RELPATH,
+  DESIGN_SYSTEM_TOKENS_RELPATH,
+];
 
 const HOME_SOURCE = `export const meta = definePage({
   kitApiVersion: 1,
@@ -110,7 +122,9 @@ describe("createDesignStoreAdapter — contract test (fake vs. real)", () => {
 
       const tree = await adapter.listTree();
       if ("code" in tree) throw new Error("fixture bug: listTree failed");
-      expect(tree.map((entry) => entry.relPath).sort()).toEqual(["pages.json", HOME_ENTRY].sort());
+      expect(tree.map((entry) => entry.relPath).sort()).toEqual(
+        ["pages.json", HOME_ENTRY, ...SEEDED_DESIGN_SYSTEM_RELPATHS].sort(),
+      );
     } finally {
       await open.close();
     }
@@ -356,7 +370,11 @@ describe("createFakeDesignStore — fake-vs-real contract", () => {
       // the real adapter's tree walk includes; the fake's `files` map is a separate seed
       // from `manifest` and never models the manifest itself as a walkable tree entry.
       expect(realTree.map((entry) => entry.relPath).sort()).toEqual(
-        [...fakeTree.map((entry) => entry.relPath), "pages.json"].sort(),
+        [
+          ...fakeTree.map((entry) => entry.relPath),
+          "pages.json",
+          ...SEEDED_DESIGN_SYSTEM_RELPATHS,
+        ].sort(),
       );
     } finally {
       await open.close();

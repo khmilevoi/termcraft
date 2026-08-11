@@ -23,6 +23,7 @@ import { createGateRunnerAdapter } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { systemClock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 import {
   createChatStoreAdapter,
   createDesignStoreAdapter,
@@ -369,6 +370,7 @@ async function composeRealShell(root: string, userStateRoot: string): Promise<Re
     root,
     name: "smoke-project",
     targetStack: "js-opentui",
+    kitApiVersion: CURRENT_KIT_API_VERSION,
   });
   if (open instanceof Error) throw open;
 

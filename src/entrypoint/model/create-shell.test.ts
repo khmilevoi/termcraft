@@ -14,6 +14,7 @@ import { type PageSlug, parsePageSlug } from "entities/page";
 import { resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { uuidv7 } from "infrastructure/uuid";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 import { createStore, nodeStoreDeps } from "store";
 import { PROJECT_MANIFEST_FILENAME, WORKSPACE_STATE_FILENAME } from "store/toml";
 import type { EventEnvelopeV1, UiEnv } from "ui";
@@ -102,7 +103,12 @@ async function projectWithPagesAndNoChats(): Promise<string> {
   fs.mkdirSync(root, { recursive: true });
   const store = createStore(nodeStoreDeps({ userStateRoot: path.join(scratch, "user-state") }));
 
-  const created = await store.createProject({ root, name: "Clone", targetStack: "js-opentui" });
+  const created = await store.createProject({
+    root,
+    name: "Clone",
+    targetStack: "js-opentui",
+    kitApiVersion: CURRENT_KIT_API_VERSION,
+  });
   if (created instanceof Error) throw created;
   await created.close();
 
@@ -137,7 +143,12 @@ async function createAndCloseRealProject(prefix: string): Promise<string> {
   const root = path.join(scratch, "project");
   fs.mkdirSync(root, { recursive: true });
   const store = createStore(nodeStoreDeps({ userStateRoot: path.join(scratch, "user-state") }));
-  const created = await store.createProject({ root, name: "Fixture", targetStack: "js-opentui" });
+  const created = await store.createProject({
+    root,
+    name: "Fixture",
+    targetStack: "js-opentui",
+    kitApiVersion: CURRENT_KIT_API_VERSION,
+  });
   if (created instanceof Error) throw created;
   await created.close();
   return root;

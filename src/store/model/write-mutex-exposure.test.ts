@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { CURRENT_KIT_API_VERSION } from "runtime";
+
 import type { StoreDeps } from "../types";
 import { createStore, nodeStoreDeps } from "./factory";
 
@@ -55,6 +57,7 @@ describe("OpenProject.writeMutex — the same exclusion primitive the engine use
       root: projectRoot,
       name: "Mutex Test",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (opened instanceof Error)
       throw new Error(`fixture bug: createProject failed: ${opened.message}`);
@@ -104,6 +107,7 @@ describe("OpenProject.writeMutex — the same exclusion primitive the engine use
       root: projectRoot,
       name: "Reopen Mutex Test",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();

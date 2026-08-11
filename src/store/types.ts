@@ -597,6 +597,14 @@ export interface CreateProjectInput {
   readonly root: AbsPath;
   readonly name: string;
   readonly targetStack: ProjectManifest["targetStack"];
+  /**
+   * The binary's own `CURRENT_KIT_API_VERSION` (design-systems §4.4, §9), stamped into the
+   * seeded `design/system/design-system.json`. `store` must not import `runtime` (D3), and
+   * `StoreDeps` does not carry this constant, so — like every other cross-ring value this
+   * factory needs — the caller supplies it: `src/entrypoint/model/create-shell.ts` passes
+   * `EMBEDDED_RUNTIME_DECLARATION.currentKitApiVersion`, which `entrypoint` already holds.
+   */
+  readonly kitApiVersion: number;
 }
 
 /** What one completed migration produced — the identities the journal and the backup share. */
