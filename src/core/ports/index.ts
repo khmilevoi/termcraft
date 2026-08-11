@@ -109,6 +109,17 @@ export type {
   TurnWorkspaceV1,
 } from "./staging";
 export type { GitIdentityV1, TrustGate, TrustSubjectV1 } from "./trust";
+
+// ---- design-system sources (project-design-systems §8.1, Track C / P3) ------------------
+export type {
+  DesignSystemSource,
+  DesignSystemSummaryV1,
+  DesignSystemTokenSwatchV1,
+  FetchedPackageV1,
+  LocalPackageV1,
+  PackageFileV1,
+  PublishReceiptV1,
+} from "./design-system-source";
 export type {
   DiagnosticsCache,
   DiagnosticsEntryV1,

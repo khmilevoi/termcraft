@@ -38,6 +38,7 @@ flowchart TB
     trust["{userStateRoot} TrustStore — trust ledger outside project"]
     backups["{userStateRoot}/backups/{projectId}/{migrationActionId}/ — verified migration backups"]
     turns["{userStateRoot}/sandboxes/{projectKey}/turns/{turnId}/workspace/ — unique writable workspaces"]
+    ds["{userStateRoot}/design-systems/ — sources.json, local/<systemId>/, cache/<sourceIdSegment>/<systemId>@<version>/"]
 ```
 
 ## Walkthrough
@@ -209,7 +210,19 @@ flowchart TB
     cwd/writable root. Later turns never clear or reuse it. The Gate reads a
     `SafeProjectFs`-created immutable candidate after the relevant process tree is
     confirmed exited.
-16. **Export.** `export/` is derived and may be committed by `/commit-all`.
+16. **The design-system library.** `{userStateRoot}/design-systems/` holds the designer's own
+    systems (`local/<systemId>/`, which is also the publish target), the configured sources
+    (`sources.json`, into which the built-in `local` source is always re-inserted), and
+    materialized remote packages (`cache/<sourceIdSegment>/<systemId>@<version>/`, keyed by
+    version rather than by time, so one reference always names the same bytes). Each cache entry
+    carries a content hash — a domain-separated sha256 over the package's file set — beside its
+    `source:system@version` key, so a republished version is caught rather than assumed away.
+    The library sits outside every project for the same reason the trust ledger does: a
+    repository can copy a reference but cannot copy the bytes it was verified against. Only the
+    `local` source and its adapter exist today (`store/design-systems/`); the install pipeline,
+    quarantine, the breakage preview, the picker UI, the provenance record, and the update check
+    are P10 work and nothing here is wired into the composition root yet.
+17. **Export.** `export/` is derived and may be committed by `/commit-all`.
     `ExportPublishTransaction` assembles and verifies an immutable generation under
     `generations/<generationId>/`, including `runtime-api.json`, then replaces
     `current.json` only after every
@@ -222,7 +235,7 @@ flowchart TB
     `current.json` before a project reopens (`null` — no export yet — never
     blocks), and the headless `termcraft export` CLI drives the whole sequence
     with no renderer.
-17. **Format versioning and migration.** Each TOML/JSON/JSONL kind has an
+18. **Format versioning and migration.** Each TOML/JSON/JSONL kind has an
     independent format counter. A page's entry file instead declares `kitApiVersion`.
     The shipped migration mints its own `migrationPlanId`/`migrationActionId` pair
     inside `migrateProject` at commit time (`store/model/factory.ts`); a separate,
@@ -243,14 +256,14 @@ flowchart TB
     migration itself: `MIGRATION_CHAIN` carries one real step — `project.toml`
     format 1 -> 2 — proven end to end by `src/store/model/migration-fixture.test.ts`.
     `flows/migration.md` has the whole path and what is still unbuilt.)
-18. **Operations log.** Bounded rotated local telemetry may record UUIDv7
+19. **Operations log.** Bounded rotated local telemetry may record UUIDv7
     `recordId`, backend name, model, `sessionStartMode`, timings, retries, Gate result, cancellation/exit reason,
     and host restarts. It never stores prompts, reasoning, credentials, file
     contents, `sessionScopeId`, raw vendor session ids, or full tool arguments and is
     not a source of truth. (v1; not yet implemented — no writer exists anywhere in the
     codebase. Only its resource-limit configuration keys, `operations_log_segment_bytes`
     and `operations_log_retention_segments`, are real in `workspace.local.toml`.)
-19. **First shipped schema.** UUID records, canonical page paths, local-state
+20. **First shipped schema.** UUID records, canonical page paths, local-state
     separation, pin events, and explicit `kitApiVersion` are the initial shipped
     formats — implemented across `entities/`, `store/`, and `infrastructure/` and
     exercised by their own test suites. No migration from the abandoned
@@ -406,9 +419,25 @@ flowchart TB
   `buildPagesManifestOperation` — split out of `src/store/model/factory.ts`,
   design-tree phase-1 closeout Task 9)
 - `src/store/trust/model/subject.ts` — item 14: the `TrustSubjectV1` canonical
-  byte encoding and SHA-256 keying
+  byte encoding and SHA-256 keying. The ledger now records two KINDS of subject
+  (project-design-systems §8.4). A project subject keeps its exact original byte
+  encoding — the `termcraft-trust-subject-v1` prefix and its positional tuple — so
+  every recorded grant survives unchanged. A design-system source subject uses a
+  second encoding under its own `termcraft-trust-subject-source-v1` prefix, over the
+  adapter family, the source id, the canonical location, and the location's
+  filesystem identity when it has one. The KIND discriminator is the prefix, not a
+  new first field: prepending a field would have changed every project digest and
+  silently revoked every grant, and two prefixes make a cross-kind collision
+  impossible by construction
 - `src/store/trust/model/trust-store.ts` — item 14: `buildSubject`/
-  `isGranted`/`grant`, the machine-local ledger under `{userStateRoot}/trust/`
+  `isGranted`/`grant`, the machine-local ledger under `{userStateRoot}/trust/`.
+  Stored records follow the same kind split as `subject.ts` above — project records
+  are still written with no `kind` field, source records carry `kind: "source"` —
+  and each kind refuses the other on read, so a wrong-kind record grants nothing.
+  Enforcing "an unrecorded remote source is never queried" in the code that
+  instantiates a configured source, and widening `core/ports/trust.ts` to source
+  subjects, are both P10 work — the store-side ledger capability is complete, but it
+  has no `core`-side caller yet; the built-in `local` source needs no grant
 - `src/store/sandbox/model/staging-store.ts` — item 15: `createTurnWorkspace`,
   the create-new turn directory, design-tree/runtime-doc staging (every tree file
   copied at the SAME tree-relative path, which is what makes an import specifier
@@ -416,41 +445,64 @@ flowchart TB
   and `turn.json` persistence
 - `src/store/sandbox/model/project-key.ts` — item 15: `computeProjectKey`, the
   SHA-256 sandbox-parent-directory derivation
-- `src/core/export/model/package.ts` — item 16: `assembleExportPackage`, the
+- `src/store/design-systems/model/layout.ts` — item 16: the `{userStateRoot}/design-systems/`
+  paths (`sources.json`, `local/<systemId>/`, `cache/<sourceIdSegment>/<systemId>@<version>/`)
+- `src/store/design-systems/model/content-hash.ts` — item 16: `designSystemContentHash`,
+  the domain-separated sha256 fold over a package's file set, stable across a
+  re-walk of the same bytes
+- `src/store/design-systems/model/sources-config.ts` — item 16: `sources.json`'s
+  schema and the re-insertion of the built-in `local` source on every read, so it
+  can never be configured away
+- `src/store/design-systems/model/cache-entry.ts` — item 16: the cache-entry record
+  paired with each materialized remote package, carrying its content hash beside
+  its `source:system@version` key
+- `src/store/design-systems/model/summary.ts` — item 16: a minimal, NON-EXECUTING
+  manifest read (the §7 Gate fatals are out of scope here) over a deliberately
+  PRIVATE manifest schema — P2's `entities/design-system` has not merged on this
+  branch, so this file carries its own narrow picker-visible-facts schema and drops
+  it for P2's real decoder at that sync point
+- `src/store/design-systems/model/{list,fetch,publish,local-source}.ts` — item 16:
+  the one stage-1 source, a local directory: `list` (never opens a `.tsx`),
+  `fetch`/`publish` against the admission boundary (`model/walk.ts`), and
+  `local-source.ts`'s assembly of the three into one `DesignSystemSource`
+- `src/store/adapters/design-system-source.ts` — item 16: the production
+  `core/ports/design-system-source.ts` adapter over the module above, mapping every
+  `SourceError` onto `FailureDtoV1` (`store/adapters/failure.ts`)
+- `src/core/export/model/package.ts` — item 17: `assembleExportPackage`, the
   in-memory export file list — `design-prompt.md`, `runtime-api.json`, the WHOLE
   canonical tree once under `design/<treeRelPath>`, one `closures/<slug>.json` per
   page listing what that page reaches, `snapshots/<slug>/<w>x<h>.txt`, and the real,
   non-empty, size-keyed `layout/<slug>.json` per page; the one remaining
   divergence is that a `LayoutNode` carries no `text` field yet, pending the
   runtime element catalog
-- `src/core/export/model/publish-plan.ts` — item 16:
+- `src/core/export/model/publish-plan.ts` — item 17:
   `buildExportPublishOperations` and `serializeExportPointer` — the real
   create-generation → replace-`current.json` → delete-old-generation operations
   and the canonical `export/current.json` bytes
-- `src/core/export/model/publish.ts` — item 16: `publishExport`, the
+- `src/core/export/model/publish.ts` — item 17: `publishExport`, the
   reacquire-revalidate-then-intent publication window that reads the previous
   pointer under the write permit, builds the plan, and publishes before releasing
-- `src/core/ports/export-publish.ts` — item 16:
+- `src/core/ports/export-publish.ts` — item 17:
   `ExportPointerV1`/`exportPointerV1Schema`/`EXPORT_POINTER_TARGET` — the durable
   `export/current.json` shape (schema version, generation id, per-file SHA-256
   manifest) shared by writer and reader, plus the runtime-api declaration types
-- `src/host/protocol/model/embedded-declaration.ts` — item 16:
+- `src/host/protocol/model/embedded-declaration.ts` — item 17:
   `EMBEDDED_RUNTIME_DECLARATION`, the `runtime-api.json` content source (module
   name plus current/supported `kitApiVersion`) — a real producer now exists,
   closing the earlier gap
-- `src/store/adapters/export-publish.ts` — item 16: the production
+- `src/store/adapters/export-publish.ts` — item 17: the production
   `ExportPublishPort` — durably publishes a generation through
   `buildExportPublishTransaction`, and `readPointer` validates `current.json` on
   both open paths (shallow structural parse plus a referenced-generation-dir
   existence check; `null` — never published — never blocks)
-- `src/store/migration/model/registry.ts` — item 17: the format-counter
+- `src/store/migration/model/registry.ts` — item 18: the format-counter
   too-new gate shared by every durable-file kind, and `MIGRATION_CHAIN` — no
   longer empty: one step, `project.toml` format 1 -> 2 (design-tree phase 1b,
   `flows/migration.md`)
-- `src/store/migration/model/legacy-scan.ts`, `model/v1-to-v2.ts` — item 17: the
+- `src/store/migration/model/legacy-scan.ts`, `model/v1-to-v2.ts` — item 18: the
   retired-layout reader and the plan/transaction builder for that one step
   (`flows/migration.md` has the full walkthrough)
-- `src/store/migration/model/backup-store.ts` — item 17: the verified-backup
+- `src/store/migration/model/backup-store.ts` — item 18: the verified-backup
   protocol (copy → manifest → flush → reopen-verify → `VERIFIED` marker) under
   `{userStateRoot}/backups/<projectId>/<migrationActionId>/`, with its first
   production caller as of design-tree phase 1b (`store/model/factory.ts`'s
@@ -459,7 +511,7 @@ flowchart TB
   kind, admitting the retired `pages/<slug>/{page.tsx,comments.jsonl}` layout
   only there (`flows/migration.md`)
 - `docs/superpowers/specs/2026-07-16-projections-observability-scale-design.md`
-  — item 18: the bounded rotated operations log (`logs/operational.jsonl` +
+  — item 19: the bounded rotated operations log (`logs/operational.jsonl` +
   rotation) — no writer exists anywhere in the codebase yet; only its
   resource-limit configuration keys are implemented (`workspace-toml.ts`,
   above)

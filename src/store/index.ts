@@ -137,3 +137,44 @@ export { createTrustAdapter } from "./adapters/trust";
 export { createRecoveryAdapter } from "./adapters/recovery";
 export { createSessionCheckpointAdapter } from "./adapters/session-checkpoint";
 export { ExportSnapshotStaleError, createExportPublishAdapter } from "./adapters/export-publish";
+
+// ---- design systems (project-design-systems §8, Track C / P3) --------------------------
+//
+// `core` may not import a submodule directly (module DAG), so the design-system library and its
+// local source are re-exported at this top level. NOTHING IS WIRED INTO THE COMPOSITION ROOT
+// HERE: P10 owns `createShell` wiring because P10 owns the first consumer.
+export type {
+  CacheEntryRecordV1,
+  ConfiguredSourceV1,
+  DesignSystemFsDeps,
+  DesignSystemSource,
+  DesignSystemSummary,
+  FetchedPackage,
+  LocalDesignSystemSourceDeps,
+  LocalPackage,
+  PackageAdmission,
+  PackageFile,
+  PublishReceipt,
+  SourceError,
+  SourcesConfigV1,
+  TokenSwatch,
+} from "./design-systems";
+export {
+  BUILT_IN_LOCAL_SOURCE,
+  DEFAULT_SOURCES_CONFIG,
+  DesignSystemPackageInvalidError,
+  DesignSystemPackageTooLargeError,
+  DesignSystemPublishRefusedError,
+  DesignSystemRefRejectedError,
+  DesignSystemSourceIoError,
+  DuplicatePackageFileError,
+  LOCAL_SOURCE_ID,
+  LOCAL_SOURCE_LABEL,
+  SourcesConfigInvalidError,
+  createLocalDesignSystemSource,
+  designSystemContentHash,
+  nodeDesignSystemFsDeps,
+  readSourcesConfig,
+  writeSourcesConfig,
+} from "./design-systems";
+export { createDesignSystemSourceAdapter } from "./adapters/design-system-source";

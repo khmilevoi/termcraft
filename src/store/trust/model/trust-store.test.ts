@@ -372,6 +372,105 @@ describe("isGranted / grant", () => {
   });
 });
 
+describe("source grants (project-design-systems §8.4)", () => {
+  const PROJECT_ROOT = "C:\\work\\termcraft";
+  const sourceInput = {
+    sourceKind: "github",
+    sourceId: "github:acme/design-systems",
+    canonicalLocation: "github.com/acme/design-systems",
+    locationFilesystemIdentity: null,
+  };
+
+  let currentMemory: ReturnType<typeof memoryFs>;
+
+  /** A fresh store over a fresh in-memory ledger, mirroring `grantedStore()` above. */
+  function createStoreForTest() {
+    currentMemory = memoryFs({
+      identities: { [PROJECT_ROOT]: "windows:1a2b3c4d:0011223344" },
+    });
+    return storeOver(currentMemory);
+  }
+
+  /** Reach into the in-memory ledger and decode the raw bytes filed under `key`. */
+  function readGrantRecordForTest(key: string): Record<string, unknown> {
+    const bytes = currentMemory.files.get(trustGrantPath(USER_STATE_ROOT, key));
+    if (bytes === undefined) throw new Error("grant not written");
+    return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+  }
+
+  /** Poison the ledger entry at `key` with arbitrary record bytes — the tamper case. */
+  function overwriteGrantRecordForTest(key: string, record: Record<string, unknown>): void {
+    currentMemory.poison(trustGrantPath(USER_STATE_ROOT, key), JSON.stringify(record));
+  }
+
+  test("an ungranted source is not granted", async () => {
+    const store = createStoreForTest();
+    const subject = store.buildSourceSubject(sourceInput);
+    expect(await store.isSourceGranted(subject)).toBe(false);
+  });
+
+  test("a granted source is granted, and the record is durably written under {userStateRoot}", async () => {
+    const store = createStoreForTest();
+    const subject = store.buildSourceSubject(sourceInput);
+    expect(await store.grantSource(subject)).toBeUndefined();
+    expect(await store.isSourceGranted(subject)).toBe(true);
+  });
+
+  test("the stored record is kind-discriminated and re-derives its own key", async () => {
+    const store = createStoreForTest();
+    const subject = store.buildSourceSubject(sourceInput);
+    await store.grantSource(subject);
+
+    const raw = readGrantRecordForTest(subject.key);
+    expect(raw.kind).toBe("source");
+    expect(raw.schemaVersion).toBe(1);
+    expect(raw.key).toBe(subject.key);
+    expect(raw.canonicalProjectPath).toBeUndefined();
+  });
+
+  test("a changed location is a different subject and is not granted", async () => {
+    const store = createStoreForTest();
+    await store.grantSource(store.buildSourceSubject(sourceInput));
+    const moved = store.buildSourceSubject({
+      ...sourceInput,
+      canonicalLocation: "github.com/acme/other",
+    });
+    expect(await store.isSourceGranted(moved)).toBe(false);
+  });
+
+  test("a tampered record grants nothing — the key must derive from the record's own fields", async () => {
+    const store = createStoreForTest();
+    const subject = store.buildSourceSubject(sourceInput);
+    await store.grantSource(subject);
+    overwriteGrantRecordForTest(subject.key, {
+      ...readGrantRecordForTest(subject.key),
+      sourceId: "github:evil/ds",
+    });
+    expect(await store.isSourceGranted(subject)).toBe(false);
+  });
+
+  test("a project grant and a source grant never satisfy each other", async () => {
+    const store = createStoreForTest();
+    const projectSubject = await store.buildSubject(PROJECT_ROOT, PROJECT_ID, null);
+    if (projectSubject instanceof Error) throw projectSubject;
+    await store.grant(projectSubject);
+
+    // Keys differ by construction (§8.4's prefix separation), so neither lookup can find the
+    // other's record — assert the OUTCOME, which is what a caller actually depends on.
+    const sourceSubject = store.buildSourceSubject(sourceInput);
+    expect(await store.isSourceGranted(sourceSubject)).toBe(false);
+    expect(sourceSubject.key).not.toBe(projectSubject.key);
+  });
+
+  test("every existing project grant still works unchanged", async () => {
+    const store = createStoreForTest();
+    const subject = await store.buildSubject(PROJECT_ROOT, PROJECT_ID, null);
+    if (subject instanceof Error) throw subject;
+    expect(await store.grant(subject)).toBeUndefined();
+    expect(await store.isGranted(subject)).toBe(true);
+  });
+});
+
 // ---- the production wiring, against a real volume -------------------------------
 
 const realRoots: string[] = [];

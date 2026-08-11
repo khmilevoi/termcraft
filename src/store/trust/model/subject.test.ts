@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import crypto from "node:crypto";
 
-import type { GitIdentity, TrustSubjectInput } from "../types";
+import type { GitIdentity, SourceTrustSubjectInput, TrustSubjectInput } from "../types";
 import {
+  TRUST_SUBJECT_SOURCE_V1_PREFIX,
   TRUST_SUBJECT_V1_PREFIX,
   canonicalizeRepoRelativePath,
   canonicalizeTrustPath,
+  encodeSourceTrustSubjectV1,
   encodeTrustSubjectV1,
+  sourceTrustSubjectKey,
   trustSubjectKey,
 } from "./subject";
 
@@ -267,5 +270,133 @@ describe("canonicalizeRepoRelativePath", () => {
 
   test("normalizes to NFC", () => {
     expect(canonicalizeRepoRelativePath(`pr${NFD_O_UMLAUT}ject`)).toBe(`pr${NFC_O_UMLAUT}ject`);
+  });
+});
+
+// ---- the source subject variant (project-design-systems §8.4) ------------------
+
+const localSource: SourceTrustSubjectInput = {
+  sourceKind: "local",
+  sourceId: "local",
+  canonicalLocation: "C:/Users/alice/AppData/Local/termcraft/design-systems/local",
+  locationFilesystemIdentity: "windows:1a2b3c4d:00112233445566778899aabbccddeeff",
+};
+
+const remoteSource: SourceTrustSubjectInput = {
+  sourceKind: "github",
+  sourceId: "github:acme/design-systems",
+  canonicalLocation: "github.com/acme/design-systems",
+  locationFilesystemIdentity: null,
+};
+
+/** Pinned in Step 4 by running this file once and copying the printed digests. */
+const LOCAL_SOURCE_KEY = "e07471d8137dc2a253d26affde361a86d90eba072ea2d3158c040f6adbaead46";
+const REMOTE_SOURCE_KEY = "647c8ed3714b9bb8cedc08023f885618d09b8ba042f74016f6f77e09140be1d4";
+
+/** Reads the length-prefixed fields back out, so layout is asserted rather than assumed. */
+function decodeSourceFields(bytes: Uint8Array): string[] {
+  const buf = Buffer.from(bytes);
+  const prefix = Buffer.concat([
+    Buffer.from(TRUST_SUBJECT_SOURCE_V1_PREFIX, "utf8"),
+    Buffer.from([0x00]),
+  ]);
+  expect(buf.subarray(0, prefix.length)).toEqual(prefix);
+
+  const fields: string[] = [];
+  let offset = prefix.length;
+  while (offset < buf.length) {
+    const length = buf.readUInt32BE(offset);
+    offset += 4;
+    fields.push(buf.subarray(offset, offset + length).toString("utf8"));
+    offset += length;
+  }
+  expect(offset).toBe(buf.length);
+  return fields;
+}
+
+describe("encodeSourceTrustSubjectV1 (project-design-systems §8.4)", () => {
+  test("carries its OWN domain-separation prefix, distinct from the project one", () => {
+    expect(TRUST_SUBJECT_SOURCE_V1_PREFIX).toBe("termcraft-trust-subject-source-v1");
+    expect(TRUST_SUBJECT_SOURCE_V1_PREFIX).not.toBe(TRUST_SUBJECT_V1_PREFIX);
+  });
+
+  test("encodes the five present-identity fields in order", () => {
+    expect(decodeSourceFields(encodeSourceTrustSubjectV1(localSource))).toEqual([
+      "local",
+      "local",
+      "C:/Users/alice/AppData/Local/termcraft/design-systems/local",
+      "present",
+      "windows:1a2b3c4d:00112233445566778899aabbccddeeff",
+    ]);
+  });
+
+  test("encodes the four absent-identity fields in order", () => {
+    expect(decodeSourceFields(encodeSourceTrustSubjectV1(remoteSource))).toEqual([
+      "github",
+      "github:acme/design-systems",
+      "github.com/acme/design-systems",
+      "absent",
+    ]);
+  });
+
+  test("the `absent` tag cannot be forged by an empty identity string", () => {
+    expect(sourceTrustSubjectKey({ ...remoteSource, locationFilesystemIdentity: "" })).not.toBe(
+      sourceTrustSubjectKey(remoteSource),
+    );
+  });
+
+  test("normalizes decomposed input to NFC before measuring and hashing", () => {
+    const composed = { ...localSource, canonicalLocation: `C:/pr${NFC_O_UMLAUT}ject` };
+    const decomposed = { ...localSource, canonicalLocation: `C:/pr${NFD_O_UMLAUT}ject` };
+    expect(Buffer.from(encodeSourceTrustSubjectV1(decomposed))).toEqual(
+      Buffer.from(encodeSourceTrustSubjectV1(composed)),
+    );
+  });
+});
+
+describe("sourceTrustSubjectKey", () => {
+  test("is the lowercase-hex SHA-256 of the complete encoded byte string", () => {
+    const digest = crypto
+      .createHash("sha256")
+      .update(encodeSourceTrustSubjectV1(localSource))
+      .digest("hex");
+    expect(sourceTrustSubjectKey(localSource)).toBe(digest);
+    expect(sourceTrustSubjectKey(localSource)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("is pinned — the key of a recorded grant may not drift", () => {
+    expect(sourceTrustSubjectKey(localSource)).toBe(LOCAL_SOURCE_KEY);
+    expect(sourceTrustSubjectKey(remoteSource)).toBe(REMOTE_SOURCE_KEY);
+  });
+
+  test("each of the four fields moves the key", () => {
+    expect(sourceTrustSubjectKey({ ...localSource, sourceKind: "github" })).not.toBe(
+      LOCAL_SOURCE_KEY,
+    );
+    expect(sourceTrustSubjectKey({ ...localSource, sourceId: "other" })).not.toBe(LOCAL_SOURCE_KEY);
+    expect(sourceTrustSubjectKey({ ...localSource, canonicalLocation: "C:/elsewhere" })).not.toBe(
+      LOCAL_SOURCE_KEY,
+    );
+    expect(
+      sourceTrustSubjectKey({ ...localSource, locationFilesystemIdentity: "windows:1:2" }),
+    ).not.toBe(LOCAL_SOURCE_KEY);
+  });
+
+  test("a source subject can never collide with a project subject, even field for field", () => {
+    // Same texts in the same positions, different KIND — the prefix is what separates them.
+    const mirroredProject: TrustSubjectInput = {
+      canonicalProjectPath: "local",
+      projectFilesystemIdentity: "local",
+      projectId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10",
+      git: null,
+    };
+    expect(sourceTrustSubjectKey(localSource)).not.toBe(trustSubjectKey(mirroredProject));
+  });
+});
+
+describe("the project encoding is untouched by the source variant", () => {
+  test("both normative §8 vectors still produce their recorded keys", () => {
+    expect(trustSubjectKey(unixNoGit)).toBe(UNIX_NO_GIT_KEY);
+    expect(trustSubjectKey(windowsGit)).toBe(WINDOWS_GIT_KEY);
   });
 });
