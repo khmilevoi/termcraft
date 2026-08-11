@@ -92,3 +92,5 @@ export type { SparklineProps } from "./ui/sparkline";
 // `hostMode === "export"` (§6.3).
 export { Select } from "./ui/select";
 export type { SelectProps, SelectItem } from "./ui/select";
+export { Textarea } from "./ui/textarea";
+export type { TextareaProps } from "./ui/textarea";
