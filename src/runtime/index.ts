@@ -87,3 +87,8 @@ export { Gauge } from "./ui/gauge";
 export type { GaugeProps } from "./ui/gauge";
 export { Sparkline } from "./ui/sparkline";
 export type { SparklineProps } from "./ui/sparkline";
+
+// Input and scrolling wrappers (spec §6.1). Each renders a defined static state under
+// `hostMode === "export"` (§6.3).
+export { Select } from "./ui/select";
+export type { SelectProps, SelectItem } from "./ui/select";

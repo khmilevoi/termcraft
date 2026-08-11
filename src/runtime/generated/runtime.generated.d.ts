@@ -500,6 +500,61 @@ declare module "@termcraft/runtime" {
    */
   function Row(props: RowProps): React.ReactNode;
 
+  // ── src/runtime/ui/select
+  /** One selectable row in a `Select` (spec §6.1). */
+  interface SelectItem {
+      /** Stable per-item id; what `onSelect`/`onHighlight` report. */
+      readonly id: string;
+      /** The rendered row label. */
+      readonly label: string;
+  }
+  /** Props for the themed `Select` component. `id` is the mandatory stable id (§3.2). */
+  interface SelectProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      /** The choices, in display order. */
+      readonly items: readonly SelectItem[];
+      /**
+       * The highlighted item's id. A `Select` is a CURSOR, not an optional highlight: an absent or
+       * unmatched id lands on the first item, unlike `List`, where no `selectedId` means no
+       * selection band at all.
+       */
+      readonly selectedId?: string;
+      /** Whether the list holds keyboard focus. Always false under export (§6.3). */
+      readonly focused?: boolean;
+      /** Viewport height in rows; defaults to the item count (one row per item). */
+      readonly height?: number;
+      /** Invoked with an item id when the cursor MOVES onto it (the intrinsic's `onChange`). */
+      readonly onHighlight?: (id: string) => void;
+      /** Invoked with an item id when it is COMMITTED (the intrinsic's `onSelect`, i.e. Enter). */
+      readonly onSelect?: (id: string) => void;
+  }
+  /**
+   * Themed single-choice list (design-system §3.2, spec §6.1). Renders one OpenTUI `<select>`,
+   * one line per item, with the design's selection recipe: a `selection` back-fill and
+   * `selectionFg` text on the cursor row (`design/termcraft-engine.js:499-503`, the agent/model
+   * picker), `foreground` on the rest, over the terminal `background`. A focused list lifts its
+   * body onto `surface` — the role its own definition calls the "lifted input body" fill; the
+   * design ships no screen of an authored page's focused select, so that is a MAPPING onto
+   * existing vocabulary, recorded here rather than invented as a new hue.
+   *
+   * CONTROLLED, WITH NO REF. `SelectRenderable`'s `selectedIndex` and `options` setters both clamp
+   * and emit nothing (measured against `@opentui/core@0.4.5`), so re-passing them every render can
+   * never loop back into `onHighlight`. `options` is written before `selectedIndex` so the clamp
+   * sees the new list.
+   *
+   * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: the cursor marker is OpenTUI's own `▶ `
+   * (U+25B6). The design's marker is `▸` (U+25B8) — the glyph `List` and `Tabs` render — but
+   * `SelectRenderableOptions` exposes no marker character. Descriptions are off (upstream defaults
+   * them ON, which would paint a blank line per item) and the scroll indicator is off (upstream
+   * draws it in a hard-coded `#666666` that no theme can reach).
+   *
+   * EXPORT DETERMINISM (§6.3): under `hostMode === "export"` the widget is blurred and its focused
+   * fill collapses onto the unfocused one, so the frame is a function of `items` + `selectedId`
+   * alone.
+   */
+  function Select(props: SelectProps): React.ReactNode;
+
   // ── src/runtime/ui/separator
   /** Props for the `Separator` rule. `id` is the mandatory stable id (§3.2). */
   interface SeparatorProps {
@@ -684,6 +739,8 @@ declare module "@termcraft/runtime" {
   export type { GaugeProps };
   export { Sparkline };
   export type { SparklineProps };
+  export { Select };
+  export type { SelectProps, SelectItem };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {
