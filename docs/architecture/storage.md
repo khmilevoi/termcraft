@@ -13,6 +13,7 @@ flowchart TB
             manifest["pages.json — ordered slug to entry bindings + requested active page"]
             entries["{entry} — each page's own file, anywhere in the tree"]
             shared["shared modules — anything no entry names"]
+            dsmanifest["system/design-system.json — OPTIONAL project design-system manifest<br/>(themes + component catalog)"]
         end
         pins["pins/{stable-slug}.jsonl — append-only pin events"]
         subgraph local["machine-local and hard-excluded"]
@@ -86,6 +87,17 @@ flowchart TB
      claimed by no manifest entry at all is refused before any page is validated. A
      brand-new project is seeded with `pages.json` and an EMPTY `pages` array — never a
      starter page, which would be a design nobody asked for.
+   - *Design system (P2 `manifest-and-gate`, OPTIONAL).* A project may additionally own
+     `system/design-system.json` — a TREE-relative path exactly like a page's own `entry`,
+     never a second vocabulary — declaring the project's themes (a required core set of
+     token roles plus any project tokens) and a component catalog. It is an ordinary
+     file of the tree in every sense that matters here: it is part of the tree
+     inventory the closure walk and `computeTreeRevision`'s Merkle fold both see, and
+     its declared `components[]`, once resolved, become ADDITIONAL closure roots
+     the Gate walks — a component no page yet imports still counts as reached, rather
+     than reading as dead. The whole check is transitional: every design-system rule
+     the Gate applies activates if and only if the tree names this manifest, so a
+     project with none is validated exactly as it always was.
 4. **Non-page identities.** Chat, turn, command, record, pin, action, and
    transaction identities use canonical lowercase UUIDv7. Chats are stored as
    `chats/<chatId>.jsonl`; display names and any friendly ordinal are derived and
@@ -373,6 +385,19 @@ flowchart TB
   `computeClosureHash` and `computeTreeRevision`
 - `src/store/safe-fs/model/limits.ts` — item 3: the `design-source` namespace covering
   `design/**` and the `pins/<slug>.jsonl` grammar
+- `src/entities/design-system/types.ts` — item 3 (P2 `manifest-and-gate`): the OPTIONAL
+  `system/design-system.json` manifest's own TREE-relative path
+  (`DESIGN_SYSTEM_MANIFEST_RELPATH`) and shape (`DesignSystemManifestV1`) — themes,
+  core token roles, and the component catalog
+- `src/entities/design-system/model/manifest.ts` — item 3 (P2 `manifest-and-gate`):
+  `decodeDesignSystemManifest`, the manifest's schema plus its cross-field rules
+  (token-name parity across themes, `defaultTheme` naming a declared theme, no
+  duplicate component name)
+- `src/entities/design-system/model/components.ts` — item 3 (P2 `manifest-and-gate`):
+  `designSystemComponentRelPath`/`findUnresolvedComponents` resolve a declared
+  component against the SAME tree inventory a page's own `entry` is resolved against;
+  `isInsideDesignSystem` is the `system/`-folder membership test the Gate's
+  containment boundary and the closure's extra roots both key on
 - `src/store/model/factory.ts` — item 1: `createProject` writing the
   format-2 `project.toml` and the seeded empty `design/pages.json` in ONE
   project-creation transaction
