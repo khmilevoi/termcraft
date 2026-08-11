@@ -61,11 +61,32 @@ function endsDeclaratorList(kind: SyntaxKind): boolean {
  * reject a legal design-system component for a shape this scan cannot enumerate, not for anything
  * the author did wrong. Failing OPEN on that rare shape, loudly modelled in the return type as
  * `exhaustive: false`, beats a false fatal: a caller checks `exhaustive` and, when it is `false`,
- * MUST NOT report a missing name as a fatal. `exhaustive` goes `false` on exactly two triggers:
+ * MUST NOT report a missing name as a fatal. `exhaustive` goes `false` on THREE triggers:
  * a destructuring export target (`export const { … } = …` / `export const [ … ] = …`, in either
- * a `const`, `let` or `var` declaration), and a star re-export (`export * from "…"`). The import
- * allowlist, which IS a perimeter, is untouched by this file — a `REEXPORT`/`DYNAMIC_IMPORT`
- * violation this scan happens to see through is still `scanImportAllowlist`'s call to make.
+ * a `const`, `let` or `var` declaration); a star re-export (`export * from "…"`); and a bare
+ * `function`/`class`/`async` keyword as the FIRST declarator's own initializer in a `const`/
+ * `let`/`var` list (`export const a = function () {}, b = 2` — see below). The import allowlist,
+ * which IS a perimeter, is untouched by this file — a `REEXPORT`/`DYNAMIC_IMPORT` violation this
+ * scan happens to see through is still `scanImportAllowlist`'s call to make.
+ *
+ * THE THIRD TRIGGER (fix round 1, task review Important finding). This scanner tracks bracket
+ * balance, not expressions, so it cannot tell where a bare `function`/`class`/`async` initializer
+ * ends without becoming a body parser; continuing to search for a comma past it risks reading
+ * INTO the function/class body (a nested `,` there is not a declarator separator) or, worse,
+ * silently stopping before a LATER declarator's name is ever seen — `export const a = function ()
+ * {}, b = 2` used to report `{a}`, `exhaustive: true`, silently dropping the real export `b`.
+ * Fixed by treating this exactly like a destructuring target: fail open on the FIRST declarator's
+ * bare keyword initializer rather than risk it.
+ *
+ * Deliberately scoped to the FIRST declarator only. `export const a = 1, b = function(){}` — the
+ * bare keyword on a LATER declarator, with nothing after it — stays `exhaustive: true`: the
+ * existing declarator-list walk already stops cleanly there with every name so far intact, and
+ * widening the trigger to fire on every declarator (not only the first) would falsely flag that
+ * safe shape too. A bare keyword on a later, NON-final declarator (`export const a = 1, b =
+ * function(){}, c = 2`) remains a KNOWN RESIDUAL GAP: `c` is silently lost while `exhaustive`
+ * stays `true`. Recorded rather than fixed here — the task review's reproduction only exercises
+ * the first-declarator shape, and closing the general case needs the same body-skipping this fix
+ * was deliberately told not to attempt.
  *
  * SUPPORTED FORMS, each contributing zero or more names to `names`:
  * - `export const|let|var <name>[ = …][, <name>[ = …] …]` — every top-level declarator name in
@@ -83,23 +104,16 @@ function endsDeclaratorList(kind: SyntaxKind): boolean {
  * Only a top-level `export` counts — depth tracking excludes `export` keywords nested inside a
  * function/class/block body, matching `import-scan.ts`'s own approach to "what counts as a module
  * edge" for the same structural reason.
- *
- * KNOWN LIMITATION, inherited directly from the brief's stated stopping rule for a multi-name
- * declarator list: a `const`/`let`/`var` list stops collecting names at ANY token whose kind is a
- * `DECLARATION_STARTS` member, `ExportKeyword` or `ImportKeyword` — wherever it sits, not only at
- * the list's own top level. `export const a = function () {}, b = 2` therefore stops at the
- * inline function expression's own `function` keyword and never collects `b`, silently
- * under-reporting rather than setting `exhaustive: false`. Not pinned by a test here because the
- * brief's own algorithm calls for this exact stopping condition and no test exercises the shape;
- * recorded so a future reader does not mistake the gap for an oversight.
  */
 export interface NamedExportScanV1 {
   /** Every top-level NAMED export binding this scan is confident about. */
   readonly names: ReadonlySet<string>;
   /**
    * False when a form this scanner cannot read exhaustively was seen — a destructuring export
-   * (`export const { a } = x`), or `export * from`. A caller must then NOT report a missing
-   * name as a fatal.
+   * (`export const { a } = x`), an `export * from`, or a bare `function`/`class`/`async`
+   * keyword as the first declarator's own initializer in a multi-name `const`/`let`/`var` list
+   * (`export const a = function () {}, b = 2`). A caller must then NOT report a missing name as
+   * a fatal.
    */
   readonly exhaustive: boolean;
 }
@@ -174,6 +188,20 @@ export function scanNamedExports(
 
     if (!isDeclaratorForm) continue;
 
+    // The FIRST declarator's own initializer opens with a bare `function`/`class`/`async`
+    // keyword (`export const a = function () {}, b = 2`) — this scanner tracks bracket
+    // balance, not expressions, so it cannot safely tell where that initializer ends. Reading
+    // on risks either wandering into the body's own tokens or, as measured (fix round 1),
+    // silently stopping at the keyword itself — `DECLARATION_STARTS` matches all three — before
+    // a later declarator (`b`) is ever seen. Fail open exactly like a destructuring target.
+    if (
+      toks[nameIdx + 1]?.kind === SK.EqualsToken &&
+      isBareInitializerKeyword(toks[nameIdx + 2]?.kind)
+    ) {
+      exhaustive = false;
+      continue;
+    }
+
     // `const`/`let`/`var` may declare more than one binding: keep collecting names at this
     // declaration's own top level until the declarator list ends.
     let k = nameIdx + 1;
@@ -198,6 +226,16 @@ export function scanNamedExports(
   }
 
   return { names, exhaustive };
+}
+
+/**
+ * `function`/`class`/`async` — the three `DECLARATION_STARTS` members that can legally open a
+ * VALUE expression (a function/class expression, or an async arrow) rather than only a
+ * statement. Used only to detect a declarator's bare initializer; see the fix-round-1 note on
+ * `NamedExportScanV1.exhaustive` and its call site above.
+ */
+function isBareInitializerKeyword(kind: SyntaxKind | undefined): boolean {
+  return kind === SK.FunctionKeyword || kind === SK.ClassKeyword || kind === SK.AsyncKeyword;
 }
 
 /** `{`/`(`/`[` — every opener the depth counter tracks. */

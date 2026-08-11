@@ -80,3 +80,30 @@ describe("scanNamedExports", () => {
     expect(result === null).toBe(false);
   });
 });
+
+// Fix round 1 (task review Important finding): a bare `function`/`class`/`async` keyword in the
+// FIRST declarator's own initializer used to end the declarator-list walk silently, dropping any
+// later declarator name while still reporting `exhaustive: true`. See the doc comment on
+// `NamedExportScanV1.exhaustive` and on `scanNamedExports` for the full rationale.
+describe("scanNamedExports — declarator initializer edge cases (fix round 1)", () => {
+  test.each([
+    "export const a = function () {}, b = 2",
+    "export const a = class {}, b = 2",
+    "export const a = async () => 1, b = 2",
+    "export var a = function () {}, b = 2",
+    "export const a = function* () {}, b = 2",
+  ])("%s fails open (exhaustive: false) instead of silently dropping a later name", (source) => {
+    expect(names(source).exhaustive).toBe(false);
+  });
+
+  test.each([
+    "export const a = 1, b = function(){}",
+    "export const a = (function () {})(), b = 2",
+    "export const a = { const: 1 }, b = 2",
+    "export const a = () => { const x = function(){}; return x }, b = 2",
+  ])("%s still names both bindings and stays exhaustive", (source) => {
+    const result = names(source);
+    expect([...result.names].sort()).toEqual(["a", "b"]);
+    expect(result.exhaustive).toBe(true);
+  });
+});
