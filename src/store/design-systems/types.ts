@@ -1,3 +1,5 @@
+import type { Clock } from "infrastructure/clock";
+
 /**
  * An OS-absolute path handed in by the composition root — never a caller-built managed relative
  * path. Declared locally, exactly as `store/trust/types.ts` declares it, so this submodule stays
@@ -89,4 +91,20 @@ export interface DesignSystemSummary {
   readonly defaultTheme: string;
   readonly defaultThemeTokens: readonly TokenSwatch[];
   readonly componentNames: readonly string[];
+}
+
+/**
+ * Everything the local design-system source needs; every impure boundary is injected, the same
+ * way `TrustStoreDeps` injects the trust ledger's.
+ *
+ * `admission` is REQUIRED and has no default (design §8.3, §13): P10 hands in a budget over
+ * `store/safe-fs`'s `createLimitBudget` at the fetch boundary, and a required field is what
+ * makes forgetting it a compile error rather than an unbounded read.
+ */
+export interface LocalDesignSystemSourceDeps {
+  /** The OS per-user termcraft state root that owns the design-system library (design §8.2). */
+  readonly userStateRoot: AbsPath;
+  readonly fs: DesignSystemFsDeps;
+  readonly admission: PackageAdmission;
+  readonly clock: Clock;
 }
