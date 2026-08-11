@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
 
-import { DESIGN_SYSTEM_MANIFEST_RELPATH } from "entities/design-system";
+import { DESIGN_SYSTEM_MANIFEST_RELPATH, decodeDesignSystemManifest } from "entities/design-system";
 import { validManifestObject } from "entities/design-system/model/manifest.fixture";
+import type { PageSlug } from "entities/page";
 
-import { checkDesignSystemSlice, hasDesignSystem, scanSystemContainment } from "./design-system";
+import {
+  checkDesignSystemSlice,
+  checkPageThemes,
+  hasDesignSystem,
+  scanSystemContainment,
+} from "./design-system";
 
 const BUTTON = `export const Button = (props: { id: string }) => props.id\n`;
 const SHELL = `export function PageShell() { return null }\n`;
@@ -274,5 +280,63 @@ describe("scanSystemContainment (spec §5.1)", () => {
       "lib/b.ts": "export default 1\n",
     });
     expect(errors.map((e) => e.file)).toEqual(["system/a.ts", "system/a.ts", "system/b.ts"]);
+  });
+});
+
+describe("checkPageThemes (spec §7)", () => {
+  const manifest = (() => {
+    const m = decodeDesignSystemManifest(JSON.stringify(validManifestObject()));
+    if (m instanceof Error) throw new Error("fixture manifest must decode");
+    return m;
+  })();
+
+  const page = (theme: string) => `import { definePage, reatomComponent } from "@termcraft/runtime"
+export const meta = definePage({ kitApiVersion: 1, title: "T", minSize: { w: 80, h: 24 }, theme: "${theme}" })
+export default reatomComponent(() => null)
+`;
+
+  test("a page pinned to a declared theme is clean", () => {
+    expect(
+      checkPageThemes({
+        manifest,
+        pages: [{ slug: "home" as PageSlug, entry: "pages/home.tsx" }],
+        files: new Map([["pages/home.tsx", page("dark")]]),
+      }),
+    ).toEqual([]);
+  });
+
+  test("a page naming an undeclared theme is UNDECLARED_PAGE_THEME on that page", () => {
+    const errors = checkPageThemes({
+      manifest,
+      pages: [{ slug: "home" as PageSlug, entry: "pages/home.tsx" }],
+      files: new Map([["pages/home.tsx", page("solar")]]),
+    });
+    expect(errors.length).toBe(1);
+    expect(errors[0]?.kind).toBe("manifest");
+    expect(errors[0]?.code).toBe("UNDECLARED_PAGE_THEME");
+    expect(errors[0]?.file).toBe("pages/home.tsx");
+    expect(errors[0]?.blockedPages).toEqual(["home"] as PageSlug[]);
+    expect(errors[0]?.message).toContain("solar");
+    expect(errors[0]?.message).toContain("dark"); // names what IS declared
+  });
+
+  test("a page whose contract does not parse yields no theme diagnostic (D7)", () => {
+    expect(
+      checkPageThemes({
+        manifest,
+        pages: [{ slug: "home" as PageSlug, entry: "pages/home.tsx" }],
+        files: new Map([["pages/home.tsx", "export default 1\n"]]),
+      }),
+    ).toEqual([]);
+  });
+
+  test("a page whose source this pass does not hold yields no theme diagnostic", () => {
+    expect(
+      checkPageThemes({
+        manifest,
+        pages: [{ slug: "home" as PageSlug, entry: "pages/home.tsx" }],
+        files: new Map(),
+      }),
+    ).toEqual([]);
   });
 });

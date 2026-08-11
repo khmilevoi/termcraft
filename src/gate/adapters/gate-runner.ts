@@ -21,6 +21,11 @@ import { log } from "infrastructure/debug-log";
 // Relative (not `gate`'s own barrel): `gate/index.ts` re-exports this adapter (Task 6's own
 // change), so importing the barrel back from here would be a self-referencing cycle.
 import {
+  checkDesignSystemSlice,
+  checkPageThemes,
+  scanSystemContainment,
+} from "../model/design-system";
+import {
   PageSourceUnscannableError,
   hasTreePath,
   runGate,
@@ -601,17 +606,36 @@ function filesReportedUnder(
  * `closures.push` branch — i.e. at least one entry's closure could not be proved complete).
  * Neither costs a second file read or a second edge reader; both are read straight off state
  * this loop maintains for its own, pre-existing purpose.
+ *
+ * ALSO WALKS `input.systemRoots` (design-systems §7, Task 6) — the design system's own declared
+ * `components[]`, resolved as TREE-relative module paths by `gate/model/design-system.ts`'s
+ * `checkDesignSystemSlice`. Each root is walked with the SAME `resolveClosure`/`readClosureEdges`
+ * machinery a page uses, over the SAME shared `edgeMap` — the loop below runs AFTER the page loop
+ * above, so by the time it starts `edgeMap` is already warm for every shared module and nothing is
+ * re-tokenized. A root this pass could not prove complete (a rejected specifier, a missing source,
+ * an unreadable edge list) contributes NOTHING to `systemReachable` — never a partial file list —
+ * and sets `anyClosureBlocked`, for the identical honesty reason a blocked page closure does: a
+ * design system this pass could not fully verify must not silently make `findDeadModules` report
+ * on a partial picture of the tree.
  */
 export function resolveTreeClosures(input: {
   readonly pages: readonly PageEntryV1[];
   readonly files: ReadonlyMap<string, string>;
   readonly treePaths: readonly string[];
   readonly scanErrors: readonly GateError[];
+  /** The design system's own resolved component roots (design-systems §7) — additional closure
+   *  walk starting points alongside every page entry. Empty or omitted when the tree declares no
+   *  design system. */
+  readonly systemRoots?: readonly string[];
 }): {
   readonly closures: readonly GateClosureV1[];
   readonly errors: readonly GateError[];
   readonly edges: ReadonlyMap<string, ReadonlySet<string>>;
   readonly anyClosureBlocked: boolean;
+  /** Every file reached from a `systemRoots` entry (design-systems §7) — the union
+   *  {@link findDeadModules} folds into its own reachable set so a declared-but-unimported
+   *  component (and everything it imports) does not read as dead. */
+  readonly systemReachable: ReadonlySet<string>;
 } {
   const has = hasTreePath(input.treePaths);
   const unscannable = filesReportedUnder(input.scanErrors, (code) => code === "UNSCANNABLE_SOURCE");
@@ -673,19 +697,61 @@ export function resolveTreeClosures(input: {
     }
   }
 
+  // The design system's own component roots (design-systems §7, Task 6) — walked AFTER every
+  // page above, sharing the SAME `edgeMap` so a module reachable both from a page and from a
+  // component root is read once. Deliberately a SEPARATE loop rather than folded into the page
+  // loop above: a system root blocks no PAGE (decision D6 — `slugs` stays empty for it), so
+  // routing it through `walkPageClosure`'s slug-carrying blockers would be the wrong shape.
+  const systemReachable = new Set<string>();
+  for (const root of input.systemRoots ?? []) {
+    const walk = createClosureWalk();
+    const resolved = resolveClosure({
+      entry: root,
+      has,
+      edgesOf: (relPath) => readClosureEdges(input.files, relPath, walk, has, edgeMap),
+    });
+    if (resolved instanceof Error || walk.sourceMissing.size > 0 || walk.edgesUnreadable.size > 0) {
+      // A root this pass could not prove complete contributes NOTHING to `systemReachable` —
+      // never a partial file list — and suppresses `dead-module` for the whole tree, for the
+      // identical reason a blocked page closure does (see `findDeadModules`).
+      anyClosureBlocked = true;
+      raised.set(JSON.stringify(["system-root", root]), {
+        file: root,
+        kind: "manifest",
+        code: "DESIGN_SYSTEM_COMPONENT_UNWALKABLE",
+        message: `the design system declares "${root}", but this pass could not walk its closure to the end, so the folder cannot be verified self-contained`,
+        slugs: new Set<PageSlug>(), // D6: a design-system component blocks no page
+      });
+      continue;
+    }
+    for (const file of resolved.files) systemReachable.add(file);
+  }
+
   const attributed = input.scanErrors.map((error) => {
     const slugs = error.file === undefined ? undefined : blockedAt.get(error.file);
     return slugs === undefined ? error : { ...error, blockedPages: sortedSlugs(slugs) };
   });
-  const walkErrors = [...raised.values()].map((entry) => ({
-    kind: entry.kind,
-    code: entry.code,
-    message: entry.message,
-    file: entry.file,
-    blockedPages: sortedSlugs(entry.slugs),
-  }));
+  // `blockedPages` is ABSENT, never `[]`, when the fact's slug set is empty (its own contract in
+  // `gate/types.ts` and `core/ports/gate-runner.ts`) — a `system-root` fact never names a page
+  // (decision D6), so this map must not manufacture an empty array for it.
+  const walkErrors = [...raised.values()].map((entry) => {
+    const blockedPages = entry.slugs.size === 0 ? undefined : sortedSlugs(entry.slugs);
+    return {
+      kind: entry.kind,
+      code: entry.code,
+      message: entry.message,
+      file: entry.file,
+      ...(blockedPages === undefined ? {} : { blockedPages }),
+    };
+  });
 
-  return { closures, errors: [...attributed, ...walkErrors], edges: edgeMap, anyClosureBlocked };
+  return {
+    closures,
+    errors: [...attributed, ...walkErrors],
+    edges: edgeMap,
+    anyClosureBlocked,
+    systemReachable,
+  };
 }
 
 /**
@@ -711,11 +777,15 @@ export function resolveTreeClosures(input: {
 function findDeadModules(input: {
   readonly files: ReadonlyMap<string, string>;
   readonly closures: readonly GateClosureV1[];
+  /** Files reached from the design system's own `components[]` roots (design-systems §7) —
+   *  the union that keeps a declared-but-unimported design-system component from reading as
+   *  dead. The SAME union-of-closures computation, reaching a module a second way. */
+  readonly extraReachable: ReadonlySet<string>;
   readonly anyClosureBlocked: boolean;
 }): readonly GateWarning[] {
   if (input.anyClosureBlocked) return [];
 
-  const reachable = new Set<string>();
+  const reachable = new Set<string>(input.extraReachable);
   for (const closure of input.closures) for (const file of closure.files) reachable.add(file);
 
   const deadRelPaths = [...input.files.keys()]
@@ -1037,13 +1107,28 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
    * text, and an agent fixing a rejected turn is better served by both the import violation and
    * the type errors in one report than by discovering them one attempt at a time — there are
    * only four attempts.
+   *
+   * ALSO RUNS THE DESIGN-SYSTEM SLICE (design-systems §7, Task 6), gated by the transitional rule
+   * (§9, decision D8): `checkDesignSystemSlice` is this method's own first line, and every
+   * downstream design-system check activates if and only if it found a manifest. `resolveClosure`
+   * gains the manifest's resolved `components[]` as ADDITIONAL closure roots (`systemRoots`) so a
+   * declared-but-unimported component does not read as `dead-module`, and `scanSystemContainment`/
+   * `checkPageThemes` run ONLY on a DECODED manifest (`designSystem.manifest !== null`) — reporting
+   * the folder's imports or a page's theme before the author knows the folder is not even being
+   * read at all would name the wrong fix (see `checkDesignSystemSlice`'s own doc on why an
+   * unsupported `kitApiVersion` also yields `manifest: null`).
    */
   async function runTree(input: {
     readonly files: ReadonlyMap<string, string>;
     readonly treePaths: readonly string[];
     readonly pages: readonly PageEntryV1[];
   }): Promise<RunTreeResultV1> {
-    const resolved = resolveTreeClosures({ ...input, scanErrors: runTreeImports(input) });
+    const designSystem = checkDesignSystemSlice(input);
+    const resolved = resolveTreeClosures({
+      ...input,
+      scanErrors: runTreeImports(input),
+      systemRoots: designSystem.componentRoots,
+    });
     // HOISTED ABOVE EVERYTHING THAT ATTRIBUTES A DIAGNOSTIC (final whole-branch review,
     // Important; hoisted one step further by design-agent-feedback-loop repair Task 5). THREE
     // consumers now read this SAME index rather than each deriving their own: the scan stage's
@@ -1061,14 +1146,37 @@ export function createGateRunnerAdapter(deps: GateRunnerAdapterDeps): GateRunner
       ...findDeadModules({
         files: input.files,
         closures: resolved.closures,
-        anyClosureBlocked: resolved.anyClosureBlocked,
+        extraReachable: resolved.systemReachable,
+        // A design system this pass could not verify leaves the reachable set partial exactly the
+        // way a blocked page closure does, so the same whole-tree suppression applies.
+        anyClosureBlocked: resolved.anyClosureBlocked || designSystem.unverified,
       }),
       // See `lintWholeTreeDeterminism`'s own doc for the measured defect this closes and the
       // Step 3 duplication decision recorded at its call site (not merely in this file's git
       // history — the comment lives at the function itself).
       ...lintWholeTreeDeterminism({ files: input.files, blockedBy }),
     ];
-    const passErrors = resolved.errors.map((error) => attributeToReachingPages(error, blockedBy));
+
+    // The ordering rule this branch encodes (design-systems §7, decision D8): containment and
+    // `meta.theme` run ONLY over a manifest this pass actually decoded — see this method's own
+    // doc above and `checkDesignSystemSlice`'s doc for why `manifest` is `null` on BOTH a decode
+    // failure AND an unsupported `kitApiVersion`.
+    const designSystemErrors =
+      designSystem.manifest === null
+        ? designSystem.errors
+        : [
+            ...designSystem.errors,
+            ...scanSystemContainment(input),
+            ...checkPageThemes({
+              manifest: designSystem.manifest,
+              pages: input.pages,
+              files: input.files,
+            }),
+          ];
+
+    const passErrors = [...resolved.errors, ...designSystemErrors].map((error) =>
+      attributeToReachingPages(error, blockedBy),
+    );
     if (treeTypeCheck === undefined) {
       return { errors: passErrors, warnings, closures: resolved.closures };
     }

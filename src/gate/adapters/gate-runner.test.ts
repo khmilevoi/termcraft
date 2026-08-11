@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { GateErrorV1 } from "core/ports";
 import { createFakeGateRunner } from "core/ports/fakes";
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
@@ -1652,5 +1653,152 @@ describe("runTree() — the SAME closure index attributes the scan stage's fatal
         message: expect.stringContaining("lib/orphan.ts"),
       },
     ]);
+  });
+});
+
+describe("the design system in the whole-tree pass (design-systems §7)", () => {
+  const adapter = () => createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
+
+  const MANIFEST = JSON.stringify(validManifestObject(), null, 2) + "\n";
+  const BUTTON = `export const Button = (p: { id: string }) => p.id\n`;
+  const SHELL = `export function PageShell() { return null }\n`;
+  const PAGE = (theme: string) =>
+    `import { definePage, reatomComponent } from "@termcraft/runtime"
+export const meta = definePage({ kitApiVersion: 1, title: "D", minSize: { w: 80, h: 24 }, theme: "${theme}" })
+export default reatomComponent(() => null)
+`;
+
+  /** A tree carrying one page plus a complete, valid design system. */
+  const withSystem = (extra: Record<string, string> = {}) =>
+    new Map<string, string>([
+      ["pages/dash.tsx", PAGE("dark")],
+      ["system/design-system.json", MANIFEST],
+      ["system/components/Button.tsx", BUTTON],
+      ["system/components/PageShell.tsx", SHELL],
+      ...Object.entries(extra),
+    ]);
+
+  const run = (files: Map<string, string>) =>
+    adapter().runTree({
+      files,
+      treePaths: [...files.keys()],
+      pages: [{ slug: "dash" as PageSlug, entry: "pages/dash.tsx" }],
+    });
+
+  test("a tree with NO design system produces no new diagnostic (transitional rule, D8)", async () => {
+    // `system/` files present, manifest absent: nothing about them is checked, including an
+    // import that WOULD escape the folder if a manifest declared one.
+    const files = new Map([
+      ["pages/dash.tsx", PAGE("dark")],
+      [
+        "system/components/Button.tsx",
+        `import { fmt } from "../../lib/time"\nexport const Button = fmt\n`,
+      ],
+      ["lib/time.ts", `export const fmt = 1\n`],
+    ]);
+    const result = await run(files);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a valid design system adds no diagnostic", async () => {
+    const result = await run(withSystem());
+    expect(result.errors).toEqual([]);
+  });
+
+  test("an invalid manifest is one fatal, named TREE-relative", async () => {
+    const files = withSystem();
+    files.set("system/design-system.json", "{ not json");
+    const result = await run(files);
+    expect(result.errors.map((e) => e.code)).toContain("JSON_PARSE");
+    const fatal = result.errors.find((e) => e.code === "JSON_PARSE");
+    expect(fatal?.kind).toBe("manifest");
+    expect(fatal?.file).toBe("system/design-system.json"); // NOT "design/system/…"
+  });
+
+  test("a declared component no page imports does NOT trip dead-module", async () => {
+    const result = await run(withSystem());
+    expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
+  });
+
+  test("a module reached ONLY from a declared component does not trip dead-module either", async () => {
+    const files = withSystem({
+      "system/components/Button.tsx": `import { tone } from "../tone"\nexport const Button = tone\n`,
+      "system/tone.ts": `export const tone = 1\n`,
+    });
+    const result = await run(files);
+    expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
+  });
+
+  test("a file NEITHER a page NOR a component reaches still trips dead-module", async () => {
+    const files = withSystem({ "lib/orphan.ts": `export const x = 1\n` });
+    const result = await run(files);
+    expect(result.warnings.filter((w) => w.kind === "dead-module").map((w) => w.file)).toEqual([
+      "lib/orphan.ts",
+    ]);
+  });
+
+  test("an unresolvable component entry is fatal, unattributed, and suppresses dead-module", async () => {
+    const files = withSystem();
+    files.delete("system/components/PageShell.tsx");
+    const result = await run(files);
+    const fatal = result.errors.find((e) => e.code === "DESIGN_SYSTEM_COMPONENT_UNRESOLVED");
+    expect(fatal).toBeDefined();
+    expect(fatal?.blockedPages).toBeUndefined(); // D6
+    expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
+  });
+
+  test("a component whose own closure cannot be walked is DESIGN_SYSTEM_COMPONENT_UNWALKABLE", async () => {
+    const files = withSystem({
+      "system/components/Button.tsx": `import { gone } from "./missing"\nexport const Button = gone\n`,
+    });
+    const result = await run(files);
+    const fatal = result.errors.find((e) => e.code === "DESIGN_SYSTEM_COMPONENT_UNWALKABLE");
+    expect(fatal?.file).toBe("system/components/Button.tsx");
+    expect(fatal?.blockedPages).toBeUndefined();
+  });
+
+  test("an escaping import inside system/ is a fatal in runTree's own errors", async () => {
+    const files = withSystem({
+      "system/components/Button.tsx": `import { fmt } from "../../lib/time"\nexport const Button = fmt\n`,
+      "lib/time.ts": `export const fmt = 1\n`,
+    });
+    const result = await run(files);
+    const fatal = result.errors.find((e) => e.code === "SYSTEM_IMPORT_ESCAPES");
+    expect(fatal?.kind).toBe("import");
+    expect(fatal?.file).toBe("system/components/Button.tsx");
+  });
+
+  test("a page pinned to an undeclared theme is fatal and names that page", async () => {
+    const files = withSystem();
+    files.set("pages/dash.tsx", PAGE("solar"));
+    const result = await run(files);
+    const fatal = result.errors.find((e) => e.code === "UNDECLARED_PAGE_THEME");
+    expect(fatal?.file).toBe("pages/dash.tsx");
+    expect(fatal?.blockedPages).toEqual(["dash" as PageSlug]);
+  });
+
+  test("containment and theme checks do NOT run when the manifest fails to decode", async () => {
+    // Reporting the folder's imports before the author knows the folder is not being read at all
+    // would name the wrong fix.
+    const files = withSystem({
+      "system/components/Button.tsx": `import { fmt } from "../../lib/time"\nexport const Button = fmt\n`,
+      "lib/time.ts": `export const fmt = 1\n`,
+    });
+    files.set("system/design-system.json", "{ not json");
+    const result = await run(files);
+    expect(result.errors.map((e) => e.code)).toEqual(["JSON_PARSE"]);
+  });
+
+  test("the manifest present in treePaths but with no source text is DESIGN_SYSTEM_SOURCE_MISSING", async () => {
+    const files = withSystem();
+    const treePaths = [...files.keys()];
+    files.delete("system/design-system.json");
+    const result = await adapter().runTree({
+      files,
+      treePaths,
+      pages: [{ slug: "dash" as PageSlug, entry: "pages/dash.tsx" }],
+    });
+    expect(result.errors.map((e) => e.code)).toContain("DESIGN_SYSTEM_SOURCE_MISSING");
+    expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
   });
 });

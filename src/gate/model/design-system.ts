@@ -13,12 +13,13 @@ import type {
   DesignSystemManifestV1,
 } from "entities/design-system";
 import { isCodeFile, parsesJsx, resolveDesignSpecifier } from "entities/design-tree";
+import type { PageEntryV1 } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
 
 import type { GateError } from "../types";
 import { scanNamedExports } from "./exports-scan";
 import { hasTreePath } from "./gate";
-import { SUPPORTED_KIT_API_VERSIONS } from "./page-contract";
+import { SUPPORTED_KIT_API_VERSIONS, checkPageContract } from "./page-contract";
 import { scanModuleEdges } from "./tree-scan";
 
 /** What the design-system slice check needs: the tree's full file inventory (design-systems §5, §7). */
@@ -76,6 +77,19 @@ class DesignSystemExportScanUnreadableError extends errore.createTaggedError({
 class DesignSystemEdgeScanUnreadableError extends errore.createTaggedError({
   name: "DesignSystemEdgeScanUnreadableError",
   message: 'the system/ containment scan could not read "$file" to the end',
+}) {}
+
+/**
+ * A page's own contract could not be read to the end while {@link checkPageThemes} re-parsed it
+ * for `meta.theme` — `checkPageContract` shares the recursive-descent JSX reader that can throw
+ * (see `gate/model/lexer.ts:454`'s `./jsx` reader). Mirrors `gate/adapters/gate-runner.ts`'s
+ * `extractPageMeta` boundary around the identical call: the page's own contract stage already
+ * carries its own diagnostic for an unreadable source, so this check simply yields no theme
+ * diagnostic for it (decision D7).
+ */
+class PageThemeContractUnreadableError extends errore.createTaggedError({
+  name: "PageThemeContractUnreadableError",
+  message: 'checkPageThemes could not read "$file" to the end',
 }) {}
 
 /** A manifest-level fatal (design-systems §7): `file` is the manifest itself, mirroring
@@ -321,6 +335,68 @@ export function scanSystemContainment(input: DesignSystemScanInput): readonly Ga
         file: relPath,
       });
     }
+  }
+
+  return errors;
+}
+
+/**
+ * Every page's declared `meta.theme` names a theme the manifest actually declares (design-systems
+ * §7). Only runs from `runTree` when `checkDesignSystemSlice` returned a DECODED manifest — see
+ * that function's own doc and `runTree`'s ordering comment for why.
+ *
+ * THE CONTRACT IS PARSED A SECOND TIME HERE (decision D7), and that is deliberate rather than an
+ * oversight. `runTree` holds `pages` and `files` but no `meta` — the per-page contract stage
+ * (`gate/adapters/gate-runner.ts`'s `extractPageMeta`) runs separately, keyed by slug, and this
+ * whole-tree pass never sees its output. The alternative would widen the `GateRunner` port so
+ * `runPage` passes the declared theme set through to this pass, but that changes `core/ports` and
+ * every caller of it, for the sake of one string comparison. The cost of re-parsing instead is one
+ * extra token scan per PAGE ENTRY (not per tree file) — the measured whole-tree budget is 2.3 MB
+ * across 128 files in 453 ms (`core/turns/model/validation.ts`'s own `files` doc), so a handful of
+ * entry re-scans is noise next to that. The call is wrapped in `errore.try` exactly the way
+ * `extractPageMeta` wraps the identical `checkPageContract` call
+ * (`gate/adapters/gate-runner.ts:1111-1114`): an unreadable source (thrown past
+ * `checkPageContract`'s own return type, or a returned `SourceStreamTruncatedError`) yields no
+ * theme diagnostic here, because that page already carries its own contract fatal from the
+ * per-page stage.
+ *
+ * `meta.theme` stays REQUIRED in this plan (decision D5), but this check is written to be correct
+ * either way: it fires ONLY when a page's parsed `meta` carries a NON-EMPTY `theme` string that
+ * names no declared theme. An absent or empty theme simply skips the check, so the day another
+ * plan makes `PageMeta.theme` optional, this function needs no edit.
+ */
+export function checkPageThemes(input: {
+  readonly manifest: DesignSystemManifestV1;
+  readonly pages: readonly PageEntryV1[];
+  readonly files: ReadonlyMap<string, string>;
+}): readonly GateError[] {
+  const declared = Object.keys(input.manifest.themes).sort();
+  const errors: GateError[] = [];
+
+  for (const page of input.pages) {
+    const source = input.files.get(page.entry);
+    if (source === undefined) continue; // this pass was given no text for it — not this check's business
+
+    const contract = errore.try({
+      try: () => checkPageContract(source, parsesJsx(page.entry)),
+      catch: (cause) => new PageThemeContractUnreadableError({ file: page.entry, cause }),
+    });
+    // Both error arms — the THROWN case wrapped above, and the RETURNED `SourceStreamTruncatedError`
+    // — collapse to one skip: the page's own contract stage already reports this file's fatal.
+    if (contract instanceof Error) continue;
+    if (contract.meta === null) continue;
+
+    const theme = contract.meta.theme;
+    if (theme.length === 0) continue;
+    if (theme in input.manifest.themes) continue;
+
+    errors.push({
+      kind: "manifest",
+      code: "UNDECLARED_PAGE_THEME",
+      message: `page "${page.entry}" declares theme "${theme}", which the design system does not declare — declared themes: ${declared.join(", ")}`,
+      file: page.entry,
+      blockedPages: [page.slug],
+    });
   }
 
   return errors;
