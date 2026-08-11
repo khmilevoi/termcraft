@@ -6,6 +6,8 @@ import type {
 } from "entities/design-system-ref";
 import type { Clock } from "infrastructure/clock";
 
+import type { DesignSystemSourceIoError, SourceError } from "./model/errors";
+
 /**
  * An OS-absolute path handed in by the composition root — never a caller-built managed relative
  * path. Declared locally, exactly as `store/trust/types.ts` declares it, so this submodule stays
@@ -44,14 +46,23 @@ export interface DirEntry {
  * cache are both normal — and is deliberately distinct from an `Error`, which is a fault.
  */
 export interface DesignSystemFsDeps {
-  readonly listDir: (absDir: AbsPath) => readonly DirEntry[] | null | Error;
-  readonly statFile: (absPath: AbsPath) => { readonly size: number } | null | Error;
-  readonly readFile: (absPath: AbsPath) => Uint8Array | null | Error;
-  readonly mkdirAll: (absDir: AbsPath) => Error | undefined;
+  readonly listDir: (absDir: AbsPath) => readonly DirEntry[] | null | DesignSystemSourceIoError;
+  readonly statFile: (
+    absPath: AbsPath,
+  ) => { readonly size: number } | null | DesignSystemSourceIoError;
+  readonly readFile: (absPath: AbsPath) => Uint8Array | null | DesignSystemSourceIoError;
+  readonly mkdirAll: (absDir: AbsPath) => DesignSystemSourceIoError | undefined;
+  /**
+   * `Error`, not `DesignSystemSourceIoError`: this delegates straight to
+   * `infrastructure/durability`'s `durableFileWrite`, whose own error union
+   * (`DurableWriteError | DirectoryFlushError | DurabilityUnavailableError`) is not a
+   * `SourceError` member. Every caller wraps a failure here into a `DesignSystemSourceIoError`
+   * before returning it — see `publish.ts`, `cache-entry.ts`, `sources-config.ts`.
+   */
   readonly durableWrite: (absPath: AbsPath, bytes: Uint8Array) => Error | undefined;
   /** Recursive; a directory that is already gone is success, not a fault. */
-  readonly removeDir: (absDir: AbsPath) => Error | undefined;
-  readonly renameDir: (from: AbsPath, to: AbsPath) => Error | undefined;
+  readonly removeDir: (absDir: AbsPath) => DesignSystemSourceIoError | undefined;
+  readonly renameDir: (from: AbsPath, to: AbsPath) => DesignSystemSourceIoError | undefined;
 }
 
 /**
@@ -156,7 +167,7 @@ export interface DesignSystemSource {
   readonly label: string;
   readonly canPublish: boolean;
 
-  list(): Promise<Error | readonly DesignSystemSummary[]>;
-  fetch(ref: DesignSystemRef): Promise<Error | FetchedPackage>;
-  publish(pkg: LocalPackage): Promise<Error | PublishReceipt>;
+  list(): Promise<SourceError | readonly DesignSystemSummary[]>;
+  fetch(ref: DesignSystemRef): Promise<SourceError | FetchedPackage>;
+  publish(pkg: LocalPackage): Promise<SourceError | PublishReceipt>;
 }

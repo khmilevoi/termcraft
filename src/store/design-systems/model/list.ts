@@ -30,7 +30,10 @@ export async function listLocalSystems(deps: LocalDesignSystemSourceDeps) {
 
   const summaries: DesignSystemSummary[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory || entry.isSymbolicLink) continue;
+    if (!entry.isDirectory || entry.isSymbolicLink) {
+      log.warn("design-systems: skipping non-directory or symlinked library entry:", entry.name);
+      continue;
+    }
 
     const systemId = parseDesignSystemId(entry.name);
     if (systemId instanceof Error) {

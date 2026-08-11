@@ -140,4 +140,15 @@ describe("readSourcesConfig / writeSourcesConfig", () => {
       SourcesConfigInvalidError,
     );
   });
+
+  test("a sources.json that is a directory is a failure, never silently the default (M8)", () => {
+    // Regression: `statFile` used to fold "present but not a regular file" into `null`
+    // alongside true absence (ENOENT), so a directory at the config path was silently read as
+    // "no config yet" — contradicting this function's own doc comment.
+    const root = freshScratch();
+    fs.mkdirSync(sourcesConfigPath(root), { recursive: true });
+    expect(readSourcesConfig(nodeDesignSystemFsDeps, root)).toBeInstanceOf(
+      SourcesConfigInvalidError,
+    );
+  });
 });

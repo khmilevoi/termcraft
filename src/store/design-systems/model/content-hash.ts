@@ -18,13 +18,20 @@ export class DuplicatePackageFileError extends errore.createTaggedError({
 }) {}
 
 /**
- * The canonical package-relative path: `/` separators, no leading `./`, no surrounding
- * separators, NFC. Two spellings of one file must not hash differently, and must not both
- * survive into the file set.
+ * The canonical package-relative path: `/` separators, no leading `./`, no surrounding or
+ * repeated separators, NFC. Two spellings of one file must not hash differently, and must not
+ * both survive into the file set — `a/b.ts` and `a//b.ts` collapse to the same path, matching
+ * `path.join`'s own collapse of an empty segment on disk (otherwise a package publishes
+ * "successfully" with one file silently overwriting the other while the hash still describes
+ * both as distinct).
  */
 export function normalizePackageRelPath(raw: string): string {
   const forwardSlashed = raw.replace(/\\/g, "/").normalize("NFC");
-  return forwardSlashed.replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "");
+  return forwardSlashed
+    .replace(/^\.\//, "")
+    .replace(/\/+/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
 }
 
 /**

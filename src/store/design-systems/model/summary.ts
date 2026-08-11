@@ -47,7 +47,7 @@ const ARRAY_INDEX_KEY = /^(0|[1-9]\d*)$/;
 
 export function readDesignSystemSummary(bytes: Uint8Array, manifestPath: AbsPath) {
   const parsed = errore.try({
-    try: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+    try: () => JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>,
     catch: (cause) =>
       new DesignSystemPackageInvalidError({
         path: manifestPath,

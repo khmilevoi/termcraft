@@ -7,7 +7,7 @@ import type { SourceId } from "entities/design-system-ref";
 import { parseSourceId } from "entities/design-system-ref";
 
 import type { AbsPath, DesignSystemFsDeps } from "../types";
-import { SourcesConfigInvalidError } from "./errors";
+import { DesignSystemSourceIoError, SourcesConfigInvalidError } from "./errors";
 import { LOCAL_SOURCE_ID, LOCAL_SOURCE_LABEL, sourcesConfigPath } from "./layout";
 
 /**
@@ -84,7 +84,7 @@ function withBuiltInLocal(sources: readonly ConfiguredSourceV1[]): readonly Conf
 // The parameter is `configPath`, never `path` — `path` is the `node:path` import in this file.
 export function decodeSourcesConfig(bytes: Uint8Array, configPath: AbsPath) {
   const parsed = errore.try({
-    try: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+    try: () => JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>,
     catch: (cause) =>
       new SourcesConfigInvalidError({ path: configPath, reason: "not valid JSON", cause }),
   });
@@ -120,12 +120,24 @@ export function encodeSourcesConfig(config: SourcesConfigV1): Uint8Array {
   return new TextEncoder().encode(`${JSON.stringify(config, null, 2)}\n`);
 }
 
-/** An ABSENT file is the default configuration; an unreadable or corrupt one is a failure. */
+/**
+ * An ABSENT file is the default configuration; an unreadable or corrupt one is a failure —
+ * including a `sources.json` that exists but is a directory or a symlink rather than a
+ * regular file (M8: `statFile` folds ENOENT to `null`, but reports every other stat outcome,
+ * including "present but not a regular file", as an `Error`, so that case can never be
+ * silently misread as "absent").
+ */
 export function readSourcesConfig(fs: DesignSystemFsDeps, userStateRoot: AbsPath) {
   const configPath = sourcesConfigPath(userStateRoot);
 
   const stat = fs.statFile(configPath);
-  if (stat instanceof Error) return stat;
+  if (stat instanceof Error) {
+    return new SourcesConfigInvalidError({
+      path: configPath,
+      reason: "sources configuration path is unreadable or not a regular file",
+      cause: stat,
+    });
+  }
   if (stat === null) return DEFAULT_SOURCES_CONFIG;
   if (stat.size > MAX_SOURCES_CONFIG_BYTES) {
     return new SourcesConfigInvalidError({
@@ -152,6 +164,13 @@ export function writeSourcesConfig(
   if (created instanceof Error) return created;
 
   const wrote = fs.durableWrite(configPath, encodeSourcesConfig(config));
-  if (wrote instanceof Error) return wrote;
+  if (wrote instanceof Error) {
+    return new DesignSystemSourceIoError({
+      operation: "write",
+      path: configPath,
+      detail: wrote.message,
+      cause: wrote,
+    });
+  }
   return undefined;
 }

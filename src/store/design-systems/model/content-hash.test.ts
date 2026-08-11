@@ -86,6 +86,22 @@ describe("designSystemContentHash", () => {
     ).toBeInstanceOf(DuplicatePackageFileError);
   });
 
+  test("a repeated separator is the same duplicate, not a second file with a different hash", () => {
+    // Regression: `a/b.ts` and `a//b.ts` used to normalize to two DIFFERENT relPaths (only
+    // `path.join` collapsed the empty segment on disk), so a package listing both "published
+    // successfully" with one file silently overwriting the other while the content hash still
+    // described two distinct files — a fetch of the same reference then returned a different
+    // hash than the one `publish` handed back. Collapsing repeated separators in
+    // `normalizePackageRelPath` makes the two spellings the SAME path, so this is now caught as
+    // an ordinary duplicate, exactly like the `./tokens.ts` case above.
+    expect(
+      designSystemContentHash([
+        { relPath: "a/b.ts", bytes: utf8("a") },
+        { relPath: "a//b.ts", bytes: utf8("b") },
+      ]),
+    ).toBeInstanceOf(DuplicatePackageFileError);
+  });
+
   test("is stable across calls and across the pinned vector", () => {
     expect(hashOf(PACKAGE)).toBe(hashOf(PACKAGE));
     expect(hashOf(PACKAGE)).toBe(MIDNIGHT_CONTENT_HASH);
@@ -97,6 +113,13 @@ describe("normalizePackageRelPath", () => {
     expect(normalizePackageRelPath("components\\Button.tsx")).toBe("components/Button.tsx");
     expect(normalizePackageRelPath("./tokens.ts")).toBe("tokens.ts");
     expect(normalizePackageRelPath("/tokens.ts")).toBe("tokens.ts");
+  });
+
+  test("collapses repeated separators, so a/b.ts and a//b.ts normalize identically", () => {
+    expect(normalizePackageRelPath("a//b.ts")).toBe("a/b.ts");
+    expect(normalizePackageRelPath("a///b.ts")).toBe("a/b.ts");
+    expect(normalizePackageRelPath("./a//b.ts")).toBe("a/b.ts");
+    expect(normalizePackageRelPath("//a//b.ts//")).toBe("a/b.ts");
   });
 
   test("normalizes to NFC so two spellings of one filename hash alike", () => {

@@ -7,7 +7,7 @@ import { parseDesignSystemId, parseDesignSystemVersion } from "entities/design-s
 import { systemClock } from "infrastructure/clock";
 
 import type { PackageAdmission, PackageFile } from "../types";
-import { designSystemContentHash } from "./content-hash";
+import { DuplicatePackageFileError, designSystemContentHash } from "./content-hash";
 import { DesignSystemPackageInvalidError, DesignSystemPackageTooLargeError } from "./errors";
 import { fetchLocalPackage } from "./fetch";
 import { allowAllPackageAdmission, nodeDesignSystemFsDeps } from "./fs-deps";
@@ -160,5 +160,26 @@ describe("publishLocalPackage", () => {
         files: [manifestFile("midnight", "1.2.0"), { relPath: "../escape.ts", bytes: utf8("x") }],
       }),
     ).toBeInstanceOf(DesignSystemPackageInvalidError);
+  });
+
+  test("refuses a package listing two spellings of the same path via a repeated separator", async () => {
+    // Regression for the review finding: `a/b.ts` and `a//b.ts` used to survive as two distinct
+    // relPaths through the content hash while `path.join` silently collapsed them into ONE file
+    // on disk — publish "succeeded" with a receipt whose hash described bytes that did not match
+    // what a subsequent fetch would read back. `normalizePackageRelPath` now collapses repeated
+    // separators, so this is caught as an ordinary duplicate-file refusal instead.
+    const root = freshScratch();
+    expect(
+      await publishLocalPackage(depsFor(root), {
+        systemId: systemId("midnight"),
+        version: version("1.2.0"),
+        files: [
+          manifestFile("midnight", "1.2.0"),
+          { relPath: "a/b.ts", bytes: utf8("one") },
+          { relPath: "a//b.ts", bytes: utf8("two") },
+        ],
+      }),
+    ).toBeInstanceOf(DuplicatePackageFileError);
+    expect(fs.existsSync(localSystemDir(root, systemId("midnight")))).toBe(false);
   });
 });

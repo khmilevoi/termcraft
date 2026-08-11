@@ -2,6 +2,7 @@ import path from "node:path";
 
 import type { DesignSystemFsDeps, PackageAdmission, PackageFile } from "../types";
 import { normalizePackageRelPath } from "./content-hash";
+import type { SourceError } from "./errors";
 import { DesignSystemPackageInvalidError, DesignSystemPackageTooLargeError } from "./errors";
 
 /**
@@ -22,7 +23,7 @@ export function readPackageDirectory(
 ) {
   const files: PackageFile[] = [];
 
-  function walk(absDir: string, relPrefix: string, depth: number): Error | null {
+  function walk(absDir: string, relPrefix: string, depth: number): SourceError | null {
     const entries = fs.listDir(absDir);
     if (entries instanceof Error) return entries;
     if (entries === null) {

@@ -4,7 +4,12 @@ import type { DesignSystemRef } from "entities/design-system-ref";
 
 import type { LocalDesignSystemSourceDeps, LocalPackage, PublishReceipt } from "../types";
 import { designSystemContentHash, normalizePackageRelPath } from "./content-hash";
-import { DesignSystemPackageInvalidError, DesignSystemPackageTooLargeError } from "./errors";
+import type { SourceError } from "./errors";
+import {
+  DesignSystemPackageInvalidError,
+  DesignSystemPackageTooLargeError,
+  DesignSystemSourceIoError,
+} from "./errors";
 import { LOCAL_SOURCE_ID, MANIFEST_FILENAME, localLibraryDir, localSystemDir } from "./layout";
 import { readDesignSystemSummary } from "./summary";
 
@@ -25,7 +30,7 @@ import { readDesignSystemSummary } from "./summary";
 export async function publishLocalPackage(
   deps: LocalDesignSystemSourceDeps,
   pkg: LocalPackage,
-): Promise<Error | PublishReceipt> {
+): Promise<SourceError | PublishReceipt> {
   const manifest = pkg.files.find(
     (file) => normalizePackageRelPath(file.relPath) === MANIFEST_FILENAME,
   );
@@ -36,7 +41,10 @@ export async function publishLocalPackage(
     });
   }
 
-  const summary = readDesignSystemSummary(manifest.bytes, MANIFEST_FILENAME);
+  const summary = readDesignSystemSummary(
+    manifest.bytes,
+    `${pkg.systemId}@${pkg.version}/${MANIFEST_FILENAME}`,
+  );
   if (summary instanceof Error) return summary;
 
   if (summary.id !== pkg.systemId || summary.version !== pkg.version) {
@@ -54,7 +62,12 @@ export async function publishLocalPackage(
 
   for (const file of normalized) {
     const segments = file.relPath.split("/");
-    if (file.relPath === "" || segments.includes("..") || segments.includes(".")) {
+    if (
+      file.relPath === "" ||
+      segments.includes("..") ||
+      segments.includes(".") ||
+      segments.includes("")
+    ) {
       return new DesignSystemPackageInvalidError({
         path: file.relPath,
         reason: "package paths must stay inside the package root",
@@ -99,7 +112,14 @@ export async function publishLocalPackage(
     const created = deps.fs.mkdirAll(path.dirname(absPath));
     if (created instanceof Error) return created;
     const wrote = deps.fs.durableWrite(absPath, file.bytes);
-    if (wrote instanceof Error) return wrote;
+    if (wrote instanceof Error) {
+      return new DesignSystemSourceIoError({
+        operation: "write",
+        path: absPath,
+        detail: wrote.message,
+        cause: wrote,
+      });
+    }
   }
 
   const removed = deps.fs.removeDir(target);

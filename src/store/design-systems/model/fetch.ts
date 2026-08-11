@@ -1,8 +1,11 @@
+import path from "node:path";
+
 import type { DesignSystemRef } from "entities/design-system-ref";
 import { formatDesignSystemRef } from "entities/design-system-ref";
 
 import type { FetchedPackage, LocalDesignSystemSourceDeps } from "../types";
 import { designSystemContentHash } from "./content-hash";
+import type { SourceError } from "./errors";
 import { DesignSystemPackageInvalidError, DesignSystemRefRejectedError } from "./errors";
 import { LOCAL_SOURCE_ID, MANIFEST_FILENAME, localSystemDir } from "./layout";
 import { readDesignSystemSummary } from "./summary";
@@ -24,7 +27,7 @@ import { readPackageDirectory } from "./walk";
 export async function fetchLocalPackage(
   deps: LocalDesignSystemSourceDeps,
   ref: DesignSystemRef,
-): Promise<Error | FetchedPackage> {
+): Promise<SourceError | FetchedPackage> {
   if (ref.sourceId !== LOCAL_SOURCE_ID) {
     return new DesignSystemRefRejectedError({
       ref: formatDesignSystemRef(ref),
@@ -53,7 +56,10 @@ export async function fetchLocalPackage(
     });
   }
 
-  const summary = readDesignSystemSummary(manifest.bytes, MANIFEST_FILENAME);
+  const summary = readDesignSystemSummary(
+    manifest.bytes,
+    path.join(packageRoot, MANIFEST_FILENAME),
+  );
   if (summary instanceof Error) return summary;
 
   if (summary.id !== ref.systemId || summary.version !== ref.version) {

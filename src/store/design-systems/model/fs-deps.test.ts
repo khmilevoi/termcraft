@@ -60,6 +60,14 @@ describe("nodeDesignSystemFsDeps", () => {
     expect(nodeDesignSystemFsDeps.statFile(path.join(root, "missing.txt"))).toBeNull();
   });
 
+  test("statFile is an Error — not null — for a path that exists but is not a regular file (M8)", () => {
+    // Absence (ENOENT) and "present but the wrong kind of thing" must stay distinguishable:
+    // callers that read `null` as "absent, use the default" must not be handed a directory.
+    const root = freshScratch();
+    fs.mkdirSync(path.join(root, "a-directory"));
+    expect(nodeDesignSystemFsDeps.statFile(path.join(root, "a-directory"))).toBeInstanceOf(Error);
+  });
+
   test("mkdirAll then durableWrite lands bytes on disk", () => {
     const root = freshScratch();
     const target = path.join(root, "deep", "nested", "file.json");

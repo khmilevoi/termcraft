@@ -158,7 +158,7 @@ export type {
   SourceError,
   SourcesConfigV1,
   TokenSwatch,
-} from "store/design-systems";
+} from "./design-systems";
 export {
   BUILT_IN_LOCAL_SOURCE,
   DEFAULT_SOURCES_CONFIG,
@@ -176,5 +176,5 @@ export {
   nodeDesignSystemFsDeps,
   readSourcesConfig,
   writeSourcesConfig,
-} from "store/design-systems";
+} from "./design-systems";
 export { createDesignSystemSourceAdapter } from "./adapters/design-system-source";

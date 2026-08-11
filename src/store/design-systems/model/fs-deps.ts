@@ -44,12 +44,8 @@ export const nodeDesignSystemFsDeps: DesignSystemFsDeps = {
   },
 
   statFile(absPath) {
-    const stat = errore.try({
-      try: () => {
-        const info = fs.lstatSync(absPath);
-        if (!info.isFile()) return null;
-        return { size: info.size };
-      },
+    const info = errore.try({
+      try: () => fs.lstatSync(absPath),
       catch: (cause) =>
         new DesignSystemSourceIoError({
           operation: "stat",
@@ -58,8 +54,19 @@ export const nodeDesignSystemFsDeps: DesignSystemFsDeps = {
           cause,
         }),
     });
-    if (stat instanceof Error && isMissing(stat.cause)) return null;
-    return stat;
+    if (info instanceof Error) return isMissing(info.cause) ? null : info;
+    // Present, but not a regular file (a directory or — on a platform without O_NOFOLLOW —
+    // a symlink `lstat` still resolved this far into): distinct from ENOENT, and the caller
+    // must not read it as "absent" (M8: a present-but-wrong-type sources.json is a failure,
+    // not silently the default).
+    if (!info.isFile()) {
+      return new DesignSystemSourceIoError({
+        operation: "stat",
+        path: absPath,
+        detail: "not a regular file",
+      });
+    }
+    return { size: info.size };
   },
 
   readFile(absPath) {

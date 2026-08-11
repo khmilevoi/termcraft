@@ -8,7 +8,7 @@ import { designSystemRefSchema, formatDesignSystemRef } from "entities/design-sy
 import { rfc3339UtcSchema } from "infrastructure/clock";
 
 import type { AbsPath, DesignSystemFsDeps, Sha256Hex } from "../types";
-import { DesignSystemPackageInvalidError } from "./errors";
+import { DesignSystemPackageInvalidError, DesignSystemSourceIoError } from "./errors";
 import { cacheEntryRecordPath } from "./layout";
 
 /**
@@ -39,7 +39,7 @@ const cacheEntryRecordSchema = z.strictObject({
 
 export function decodeCacheEntryRecord(bytes: Uint8Array, recordPath: AbsPath) {
   const parsed = errore.try({
-    try: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+    try: () => JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>,
     catch: (cause) =>
       new DesignSystemPackageInvalidError({
         path: recordPath,
@@ -105,6 +105,13 @@ export function writeCacheEntryRecord(
   if (created instanceof Error) return created;
 
   const wrote = fs.durableWrite(recordPath, encodeCacheEntryRecord(record));
-  if (wrote instanceof Error) return wrote;
+  if (wrote instanceof Error) {
+    return new DesignSystemSourceIoError({
+      operation: "write",
+      path: recordPath,
+      detail: wrote.message,
+      cause: wrote,
+    });
+  }
   return undefined;
 }
