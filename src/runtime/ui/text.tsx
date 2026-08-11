@@ -7,7 +7,13 @@ import type { Color } from "../types";
 export interface TextProps {
   /** Stable id selection and pins key on (§3.2). Mandatory on every catalog component. */
   readonly id: string;
-  readonly children?: string | number;
+  /**
+   * Literal text, or the inline wrappers of `ui/inline` (`Span`, `Bold`, `Italic`, `Underline`,
+   * `Link`, `LineBreak`). `unknown` rather than a named node union: the React/OpenTUI node type
+   * is a private identity this facade must not leak into authored source (runtime-api §3.3), and
+   * `BoxProps.children` already takes the same shape for the same reason.
+   */
+  readonly children?: unknown;
   /** The text hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
   readonly color?: Color;
   readonly bold?: boolean;

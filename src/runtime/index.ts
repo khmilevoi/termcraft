@@ -92,3 +92,8 @@ export type { SparklineProps } from "./ui/sparkline";
 // purpose: P5/P7/P8/P9 append to this file from their own worktrees, and appended lines merge
 // where an edited line conflicts.
 export type { BorderGlyphs, BorderSide, Dimension } from "./types";
+
+// Inline text wrappers (§6.1). Valid only inside a `Text` — see `./ui/inline`'s module note for
+// the family contract and for the documented id/geometry divergence.
+export { Span } from "./ui/inline";
+export type { SpanProps } from "./ui/inline";
