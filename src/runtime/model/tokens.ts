@@ -12,8 +12,6 @@ import { action, atom } from "./reatom";
  */
 export type SeedThemeId = "dark-default";
 
-// Implementation note (plan P4): job 1 below is also where plan P4 imports this constant
-// from this module by path.
 /**
  * The `dark-default` seed palette. These are the design system's REAL hues, taken 1:1 from
  * `design/termcraft-engine.js`'s `pal` object (a warm amber-on-near-black terminal theme) — not
