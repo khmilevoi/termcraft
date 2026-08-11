@@ -89,3 +89,5 @@ export { Sparkline } from "./ui/sparkline";
 export type { SparklineProps } from "./ui/sparkline";
 export { Code } from "./ui/code";
 export type { CodeProps } from "./ui/code";
+export { Markdown } from "./ui/markdown";
+export type { MarkdownProps } from "./ui/markdown";
