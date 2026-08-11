@@ -18,15 +18,23 @@ const frame = (runs: StyledRun[]) => ({ width: runs.length, height: 1, rows: [ru
 function createDriver(snapshots: readonly string[], pending: readonly Promise<void>[] = []) {
   let index = 0;
   let clock = 0;
+  let pendingCalls = 0;
   const passes: number[] = [];
   return {
     passes,
+    // Exposed so a test can pin "the loop actually consulted `pending()`" instead of inferring
+    // it indirectly from a promise that would resolve on its own regardless of whether anything
+    // ever awaited it (see the "awaited before the first comparison" test below).
+    pendingCalls: () => pendingCalls,
     driver: {
       render: async () => {
         passes.push(index);
       },
       snapshot: () => snapshots[Math.min(index++, snapshots.length - 1)] ?? "",
-      pending: () => pending,
+      pending: () => {
+        pendingCalls += 1;
+        return pending;
+      },
       now: () => clock,
       sleep: async (ms: number) => {
         clock += ms;
@@ -85,9 +93,14 @@ describe("settleFrames", () => {
         resolve();
       });
     });
-    const { driver } = createDriver(["A", "A", "A"], [pending]);
+    const { driver, pendingCalls } = createDriver(["A", "A", "A"], [pending]);
     await settleFrames(driver);
     expect(resolved).toBe(true);
+    // `resolved` alone would pass even if `pending()` were never called — the promise resolves
+    // via `queueMicrotask` on its own, on ANY await inside `settleFrames`. Pin that the loop
+    // actually consulted the pending promises at least once, which is the behavior this test is
+    // named for.
+    expect(pendingCalls()).toBeGreaterThan(0);
   });
 
   test("a pending promise that never resolves cannot outlast the budget", async () => {
@@ -96,6 +109,19 @@ describe("settleFrames", () => {
     const result = await settleFrames(driver);
     // It settles on content even though the promise is still open — the promise is an
     // accelerator, never a gate.
+    expect(result.settled).toBe(true);
+  });
+
+  test("a rejecting pending promise cannot make the loop throw", async () => {
+    const broken = Promise.reject(new Error("highlight worker crashed"));
+    // Attach a handler outside the race too, so this promise is never "unhandled" independent
+    // of settleFrames's own internal `.catch`.
+    broken.catch(() => {});
+    const { driver } = createDriver(["A", "A", "A"], [broken]);
+    // The assertion is that this resolves at all — a rejected `highlightingDone` must not
+    // propagate out of `settleFrames` (its doc comment promises it "never throws"). A failed
+    // highlight is exactly the case the quiet-frames backstop exists to fall through to.
+    const result = await settleFrames(driver);
     expect(result.settled).toBe(true);
   });
 });

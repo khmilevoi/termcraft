@@ -93,7 +93,13 @@ export async function settleFrames(input: SettleDriver): Promise<FrameSettleResu
     // a promise open forever, so the race is against ONE poll interval — never against the whole
     // remaining budget, which would spend the entire budget on the first pass. The `while`
     // condition is what bounds the total.
-    await Promise.race([Promise.all(input.pending()), input.sleep(pollMs)]);
+    //
+    // `.catch(() => {})` on the `Promise.all` swallows a rejected `highlightingDone` (this
+    // function's doc comment promises it never throws, and a failed highlight is exactly the
+    // case the quiet-frames backstop below exists to fall through to). Not re-logged here:
+    // `CodeRenderable.startHighlight` already warns on its own failure — this is only the
+    // accelerator declining to gate on a signal that turned out bad.
+    await Promise.race([Promise.all(input.pending()).catch(() => {}), input.sleep(pollMs)]);
     await input.render();
     passes += 1;
     const next = input.snapshot();
