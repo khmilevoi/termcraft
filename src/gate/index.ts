@@ -27,6 +27,10 @@ export {
 export type { TypeCheckerConfig } from "./model/type-check";
 export { checkManifestSlice } from "./model/manifest";
 export type { ManifestScanInput, ManifestScanResult } from "./model/manifest";
+export { checkDesignSystemSlice, hasDesignSystem } from "./model/design-system";
+export type { DesignSystemScanInput, DesignSystemScanResultV1 } from "./model/design-system";
+export { scanNamedExports } from "./model/exports-scan";
+export type { NamedExportScanV1 } from "./model/exports-scan";
 export { lintDeterminism, lintSilencingAny } from "./model/lints";
 export { createSmokeRender } from "./model/smoke";
 export { smokeResultToErrors } from "./ports/smoke-renderer";

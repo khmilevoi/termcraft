@@ -3,8 +3,11 @@ import type { PageMeta } from "entities/page";
 import { SK, lineColOf, tokenize } from "./lexer";
 import type { SourceStreamTruncatedError, SourceSyntax, SyntaxKind, Tok } from "./lexer";
 
-/** kit API versions this gate accepts (runtime-api §7.1). MVP ships version 1 only. */
-const SUPPORTED_KIT_API_VERSIONS = new Set<number>([1]);
+/** kit API versions this gate accepts (runtime-api §7.1). MVP ships version 1 only.
+ *  EXPORTED (design-systems §3.3): a design system's components are authored against the same
+ *  runtime component catalog, so `gate/model/design-system.ts` compares the manifest's own
+ *  `kitApiVersion` against THIS set rather than keeping a second list that could drift. */
+export const SUPPORTED_KIT_API_VERSIONS = new Set<number>([1]);
 
 /** A fatal page-contract violation (runtime-api §4). */
 export interface PageContractError {
