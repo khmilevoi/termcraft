@@ -6,6 +6,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
 import { hostModeAtom } from "../model/capabilities";
+import { atom, reatomComponent } from "../model/reatom";
 import { activeTokens } from "../model/tokens";
 import { TextTable } from "./text-table";
 
@@ -16,6 +17,7 @@ afterEach(() => {
   hostModeAtom.set("preview");
 });
 
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const allRuns = (frame: { rows: StyledRun[][] }): StyledRun[] => frame.rows.flat();
 const frameText = (frame: { rows: StyledRun[][] }): string =>
   frame.rows.map((row) => row.map((run) => run.text).join("")).join("\n");
@@ -67,14 +69,17 @@ describe("TextTable (spec §6.1)", () => {
     expect(cell && extractRgb(cell.fg)).toBe<string>(activeTokens().danger);
   });
 
-  test("borders are off by default and draw in the border token when enabled", async () => {
-    expect(await renderTableText()).not.toMatch(/[┌┐└┘│]/);
+  test("borders are off by default and draw ROUNDED corners in the border token when enabled", async () => {
+    expect(await renderTableText()).not.toMatch(/[╭╮╰╯│]/);
 
     const handle = await createHeadlessRenderer({ w: 24, h: 6 });
     open = handle;
     handle.mount(<TextTable id="t" rows={ROWS} borders width={24} height={6} />);
     await handle.render();
-    const border = allRuns(handle.capture()).find((run) => /[┌┐└┘│─]/.test(run.text));
+    // `─` is shared by both `rounded` and `single`, so it cannot tell them apart; the rounded
+    // CORNER glyphs (`╭╮╰╯`) are what proves the design's rounded frame (I2) rather than a
+    // square one — `┌┐└┘` would never match here.
+    const border = allRuns(handle.capture()).find((run) => /[╭╮╰╯]/.test(run.text));
     expect(border && extractRgb(border.fg)).toBe<string>(activeTokens().border);
   });
 
@@ -82,6 +87,32 @@ describe("TextTable (spec §6.1)", () => {
     // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().border`.
     const rejected = <TextTable id="x" rows={ROWS} borderColor="border" />;
     expect(rejected).toBeDefined();
+  });
+
+  test("a background change follows through a theme switch (I3: the missing vendor setter)", async () => {
+    // `TextTableRenderable` has no `backgroundColor` setter, so this can only be observed
+    // through a genuine in-place re-render — a `reatomComponent` reacting to an atom write, the
+    // same mechanism `../model/tokens.reactivity.test.tsx` uses — not by calling `handle.mount()`
+    // a second time, which (`host/render/model/renderer.ts` → `@opentui/react`'s `createRoot`)
+    // rebuilds the whole reconciler container on every call and would always remount fresh.
+    const bg = atom(activeTokens().surface, "test.textTable.background");
+    const Probe = reatomComponent(
+      () => <TextTable id="t" rows={ROWS} background={bg()} width={24} height={4} />,
+      "test.textTable.Probe",
+    );
+
+    const handle = await createHeadlessRenderer({ w: 24, h: 4 });
+    open = handle;
+    handle.mount(<Probe />);
+    await handle.render();
+    const before = allRuns(handle.capture()).find((run) => run.text.includes("name"));
+    expect(before && extractRgb(before.bg)).toBe<string>(activeTokens().surface);
+
+    bg.set(activeTokens().background);
+    await tick();
+    await handle.render();
+    const after = allRuns(handle.capture()).find((run) => run.text.includes("name"));
+    expect(after && extractRgb(after.bg)).toBe<string>(activeTokens().background);
   });
 });
 

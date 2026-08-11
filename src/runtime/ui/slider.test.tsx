@@ -6,6 +6,7 @@ import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
 import { hostModeAtom } from "../model/capabilities";
+import { atom, reatomComponent } from "../model/reatom";
 import { activeTokens } from "../model/tokens";
 import { Slider } from "./slider";
 
@@ -16,6 +17,7 @@ afterEach(() => {
   hostModeAtom.set("preview");
 });
 
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const THUMB = /[█▌▐]/;
 const allRuns = (frame: { rows: StyledRun[][] }): StyledRun[] => frame.rows.flat();
 const rowText = (frame: { rows: StyledRun[][] }, row: number): string =>
@@ -102,5 +104,45 @@ describe("Slider export determinism (spec §6.3)", () => {
     const first = await renderSliderRow(37);
     const second = await renderSliderRow(37);
     expect(second.text).toBe(first.text);
+  });
+
+  test("re-rendering IN PLACE with min and value changed together lands the thumb at the new value", async () => {
+    // Regression for I1. `handle.mount()` calls `@opentui/react`'s `root.render()`, which this
+    // vendor version implements as `reconciler.createContainer(...)` on EVERY call — i.e. a
+    // fresh mount, not a diffed update — so calling `handle.mount()` twice cannot reproduce
+    // this bug (confirmed empirically: it always re-runs `setInitialProperties`, which writes
+    // every prop from a freshly-constructed instance whose constructor already took min/max/value
+    // together). A genuine in-place update — the one `updateProperties`'s `newProp !== oldProp`
+    // diff actually runs on — instead comes from a `reatomComponent` re-rendering after an atom
+    // write, the same mechanism `../model/tokens.reactivity.test.tsx` and
+    // `host/render/model/reactive.test.tsx` use to drive one.
+    const state = atom({ min: 50, max: 100, value: 60 }, "test.slider.boundsAndValue");
+    const Probe = reatomComponent(() => {
+      const s = state();
+      return (
+        <Slider
+          id="s"
+          orientation="horizontal"
+          value={s.value}
+          min={s.min}
+          max={s.max}
+          width={20}
+          height={1}
+        />
+      );
+    }, "test.slider.Probe");
+
+    const handle = await createHeadlessRenderer({ w: 20, h: 1 });
+    open = handle;
+    handle.mount(<Probe />);
+    await handle.render();
+
+    state.set({ min: 0, max: 100, value: 10 });
+    await tick();
+    await handle.render();
+    const inPlace = rowText(handle.capture(), 0);
+
+    const fresh = await renderSliderRow(10);
+    expect(inPlace.search(THUMB)).toBe(fresh.text.search(THUMB));
   });
 });

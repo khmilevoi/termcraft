@@ -86,8 +86,10 @@ function toContent(
  *
  * BORDERS ARE OFF BY DEFAULT because the design's tables are borderless column layouts (the
  * shape `./table.tsx` implements from `design/termcraft-engine.js`). With `borders` set, the
- * style is `single` in the `border` token — the same frame vocabulary the design engine draws
- * every panel with.
+ * style is `rounded` in the `border` token: `design/termcraft-engine.js:47` — `box()`'s own
+ * default is ROUNDED (`const r = o.rounded !== false`), and no design call site opts out
+ * (`rounded:false` appears zero times in the file). `square` corners are the opt-out here too,
+ * matching `./panel.tsx`'s house rule for the same reason: no design screen takes it.
  *
  * THE RENDERABLE'S OWN DEFAULTS ARE A HARDCODED `#FFFFFF` for both `borderColor` and `fg`, so
  * this wrapper always passes both from the active theme: no raw white can reach a frame.
@@ -106,9 +108,19 @@ export function TextTable(props: TextTableProps) {
       content={toContent(props.rows, tokens, props.textColor)}
       border={props.borders ?? false}
       showBorders={props.borders ?? false}
-      borderStyle="single"
+      borderStyle="rounded"
       borderColor={props.borderColor ?? tokens.border}
       fg={props.textColor ?? tokens.foreground}
+      // `TextTableRenderable` exposes NO `backgroundColor` setter — `_backgroundColor` is read
+      // once in the constructor and only ever used by the renderable's own `buffer.clear()`
+      // call (`@opentui/core`'s `TextTableRenderable`). An update writes `instance.backgroundColor
+      // = …` as a stray own property nothing reads, so the back-fill never follows a theme
+      // change. `key`ing on the value forces a remount — a fresh constructor call — whenever it
+      // changes, which is the only path that reaches `_backgroundColor`. `fg` has the identical
+      // dead-setter shape but needs no key: `toChunk` above stamps an explicit `fg` on every
+      // chunk, and `content` (unlike `backgroundColor`) IS a real setter, so a re-render's fresh
+      // `content` array already carries the new colour through the chunks themselves.
+      key={props.background ?? "no-bg"}
       backgroundColor={props.background}
       columnGap={props.columnGap ?? 1}
       wrapMode={props.wrap ?? "word"}

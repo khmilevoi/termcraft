@@ -18,9 +18,22 @@ export interface FrameBufferSurface {
   readonly height: number;
   /** Fill the whole buffer with one hue. */
   clear(color: Color): void;
-  /** Paint one cell. */
+  /**
+   * Paint one cell.
+   *
+   * ASYMMETRY WITH {@link drawText}, DOCUMENTED (CLAUDE.md): an omitted `background` here
+   * defaults to the OPAQUE {@link TRANSPARENT} constant, which ERASES whatever a prior
+   * `clear()` painted at that cell. `drawText`'s omitted `background` instead defaults to
+   * `undefined`, which PRESERVES it. The difference is forced by the vendor FFI, not a choice
+   * made here: `OptimizedBuffer.setCell` takes a required `rgbaPtr` for its background
+   * argument, while `drawText` takes an `optionalRgbaPtr` that can mean "leave it alone" — see
+   * `createSurface`'s call sites below.
+   */
   setCell(x: number, y: number, glyph: string, color: Color, background?: Color): void;
-  /** Paint a run of text starting at `x`,`y`. */
+  /**
+   * Paint a run of text starting at `x`,`y`. An omitted `background` PRESERVES whatever is
+   * already there — see {@link setCell}'s doc comment for why the two methods differ here.
+   */
   drawText(text: string, x: number, y: number, color: Color, background?: Color): void;
   /** Fill a rectangle with one hue. */
   fillRect(x: number, y: number, width: number, height: number, color: Color): void;

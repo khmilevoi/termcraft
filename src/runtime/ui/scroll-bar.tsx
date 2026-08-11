@@ -41,7 +41,14 @@ export interface ScrollBarProps {
   readonly thumbColor?: Color;
   /** Step arrows at both ends; OFF by default, matching the design's scrollbar. */
   readonly showArrows?: boolean;
-  /** The arrow hue when `showArrows` is set. Defaults to `foregroundFaint`. */
+  /**
+   * The arrow hue when `showArrows` is set. Defaults to `foregroundFaint`.
+   *
+   * DESIGN GAP, FLAGGED (CLAUDE.md): `design/termcraft-engine.js`'s `scrollbar()` draws its
+   * track and thumb only — arrows are OFF unconditionally (its own comment: "Arrows off") — so
+   * the design supplies no arrow hue anywhere for this control. `foregroundFaint` is chosen for
+   * a case the design does not cover, not read off it.
+   */
   readonly arrowColor?: Color;
   readonly width?: number;
   readonly height?: number;

@@ -369,9 +369,22 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly height: number;
       /** Fill the whole buffer with one hue. */
       clear(color: Color): void;
-      /** Paint one cell. */
+      /**
+       * Paint one cell.
+       *
+       * ASYMMETRY WITH {@link drawText}, DOCUMENTED (CLAUDE.md): an omitted \`background\` here
+       * defaults to the OPAQUE {@link TRANSPARENT} constant, which ERASES whatever a prior
+       * \`clear()\` painted at that cell. \`drawText\`'s omitted \`background\` instead defaults to
+       * \`undefined\`, which PRESERVES it. The difference is forced by the vendor FFI, not a choice
+       * made here: \`OptimizedBuffer.setCell\` takes a required \`rgbaPtr\` for its background
+       * argument, while \`drawText\` takes an \`optionalRgbaPtr\` that can mean "leave it alone" — see
+       * \`createSurface\`'s call sites below.
+       */
       setCell(x: number, y: number, glyph: string, color: Color, background?: Color): void;
-      /** Paint a run of text starting at \`x\`,\`y\`. */
+      /**
+       * Paint a run of text starting at \`x\`,\`y\`. An omitted \`background\` PRESERVES whatever is
+       * already there — see {@link setCell}'s doc comment for why the two methods differ here.
+       */
       drawText(text: string, x: number, y: number, color: Color, background?: Color): void;
       /** Fill a rectangle with one hue. */
       fillRect(x: number, y: number, width: number, height: number, color: Color): void;
@@ -610,7 +623,14 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly thumbColor?: Color;
       /** Step arrows at both ends; OFF by default, matching the design's scrollbar. */
       readonly showArrows?: boolean;
-      /** The arrow hue when \`showArrows\` is set. Defaults to \`foregroundFaint\`. */
+      /**
+       * The arrow hue when \`showArrows\` is set. Defaults to \`foregroundFaint\`.
+       *
+       * DESIGN GAP, FLAGGED (CLAUDE.md): \`design/termcraft-engine.js\`'s \`scrollbar()\` draws its
+       * track and thumb only — arrows are OFF unconditionally (its own comment: "Arrows off") — so
+       * the design supplies no arrow hue anywhere for this control. \`foregroundFaint\` is chosen for
+       * a case the design does not cover, not read off it.
+       */
       readonly arrowColor?: Color;
       readonly width?: number;
       readonly height?: number;
@@ -695,12 +715,20 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   /**
    * A draggable value track (spec §6.1). Renders the OpenTUI \`SliderRenderable\` — a renderable
    * with no intrinsic tag, registered by {@link registerRenderableTags} — as a solid track filled
-   * with \`trackColor\` and a \`█\`/\`▌\`/\`▐\` thumb drawn in \`fillColor\` at half-cell precision.
+   * with \`trackColor\` and a thumb drawn in \`fillColor\` at half-cell precision: \`█\`/\`▌\`/\`▐\` on the
+   * horizontal path, \`█\`/\`▀\`/\`▄\` on the vertical path (\`renderVertical\` in \`@opentui/core\`).
    *
    * DESIGN GAP, FLAGGED RATHER THAN GUESSED (CLAUDE.md): the design system has NO standalone
    * slider. Its nearest covered element is the gauge (\`design/termcraft-engine.js\`'s gauge draw,
    * implemented in \`./gauge.tsx\`), which fills in \`accent\` over a track in \`border\`; those two
    * roles are reused here as the closest faithful mapping, not invented.
+   *
+   * DIVERGENCE, DOCUMENTED RATHER THAN SUBSTITUTED (CLAUDE.md): the gauge whose colour mapping is
+   * reused here draws its track as a \`╌\` dashed glyph rule in \`border\` (\`design/termcraft-engine.js\`'s
+   * gauge draw method, \`./gauge.tsx\`'s \`EMPTY_GLYPH\`), while \`SliderRenderable\` paints its track as
+   * a solid \`border\` BACKGROUND band — the same glyph-rule-vs-colour-band gap \`./scroll-bar.tsx\`
+   * documents for its own track. The glyph half cannot be reproduced through this renderable, so
+   * the closest faithful mapping is used: track BACKGROUND \`border\`, thumb FOREGROUND \`accent\`.
    *
    * The thumb's SIZE follows OpenTUI's own proportional rule (its \`viewPortSize\` defaults to 10% of
    * the range). No prop is exposed for it: naming that number in termcraft's vocabulary would mean
@@ -711,6 +739,20 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * changes after mount keeps invoking the first one. The wrapper cannot fix that without reaching
    * the instance through a \`ref\`, which §6 forbids exposing; it is recorded here instead. The
    * interactive path is inert in the current static render either way.
+   *
+   * PROP ORDER IS LOAD-BEARING, and this is measured rather than assumed — the same hazard
+   * \`./scroll-bar.tsx\` documents and handles for its own three ordered props. \`@opentui/react\`'s
+   * \`updateProperties\` applies changed props as plain property writes, iterating \`for (const
+   * propKey in newProps)\` — i.e. in JSX attribute order. \`SliderRenderable\`'s \`value\` setter
+   * clamps against the CURRENT \`_min\`/\`_max\`, while the \`min\`/\`max\` setters' own re-clamp is
+   * ASYMMETRIC: \`min\`'s setter only pushes \`_value\` UP when it now falls below the new floor, and
+   * \`max\`'s setter only pushes it DOWN when it now exceeds the new ceiling — neither ever moves
+   * \`_value\` the other direction. Written \`value\` first (as this attribute list once was), an
+   * in-place re-render that changes bounds and value together clamps the new \`value\` against the
+   * STALE bounds, then the bounds settle afterwards without re-touching \`_value\` — the thumb lands
+   * on the wrong cell, and because export re-mounts fresh, preview then renders a DIFFERENT frame
+   * from export, breaking the §6.3 determinism property. Writing \`min\`, then \`max\`, then \`value\`
+   * last means the bounds are already settled before the final \`value\` write clamps against them.
    */
   function Slider(props: SliderProps): React.ReactNode;
 
@@ -866,8 +908,10 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    *
    * BORDERS ARE OFF BY DEFAULT because the design's tables are borderless column layouts (the
    * shape \`./table.tsx\` implements from \`design/termcraft-engine.js\`). With \`borders\` set, the
-   * style is \`single\` in the \`border\` token — the same frame vocabulary the design engine draws
-   * every panel with.
+   * style is \`rounded\` in the \`border\` token: \`design/termcraft-engine.js:47\` — \`box()\`'s own
+   * default is ROUNDED (\`const r = o.rounded !== false\`), and no design call site opts out
+   * (\`rounded:false\` appears zero times in the file). \`square\` corners are the opt-out here too,
+   * matching \`./panel.tsx\`'s house rule for the same reason: no design screen takes it.
    *
    * THE RENDERABLE'S OWN DEFAULTS ARE A HARDCODED \`#FFFFFF\` for both \`borderColor\` and \`fg\`, so
    * this wrapper always passes both from the active theme: no raw white can reach a frame.
