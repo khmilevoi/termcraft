@@ -21,10 +21,10 @@ export interface PanelProps {
  * frame (`box()`'s own default, `design/termcraft-engine.js:47`) with an optional `title`
  * space-padded into the top border (`:52`'s `' '+title+' '`), or no caption at all when
  * `title` is absent or empty — matching the engine's own `if(o.title){…}` guard.
- * `borderColor`/`titleColor` accept semantic tokens so a caller renders the design's variants
- * (an active/popup panel uses an `accent` border + `accentHi` title; an error panel a
- * `danger` border; a welded sub-panel a `foregroundMuted` title). Colors resolve from
- * tokens; the mandatory `id` flows to the element for host geometry.
+ * `borderColor`/`titleColor` are `Color`s read off `useTokens()`: an active/popup panel
+ * uses border `t.accent` + title `t.accentHi`; an error panel uses border `t.danger`; a
+ * welded sub-panel uses title `t.foregroundMuted`. The mandatory `id` flows to the element
+ * for host geometry.
  */
 export function Panel(props: PanelProps) {
   const tokens = activeTokens();

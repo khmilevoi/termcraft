@@ -16,8 +16,9 @@ export interface SeparatorProps {
  * full-width, single-row band; a `vertical` one is a full-height, single-column
  * band. It defaults to the theme's `line` hue — the design's subtle interior
  * divider (`border` is reserved for actual box frames drawn by Panel) — and takes
- * an optional `color` token so a caller can pick `border` for an active-frame rule
- * or `accentHi` for a focused one. The mandatory `id` flows to the element.
+ * an optional `color`, a `Color` a caller reads off `useTokens()`, so a caller can pick
+ * `t.border` for an active-frame rule or `t.accentHi` for a focused one. The mandatory
+ * `id` flows to the element.
  * (MVP simplification: the design draws glyph rules `─`/`│` with `├┤┬┴` weld tees;
  * this renders a color band — a known divergence pending the phase-7 UI pass.)
  */

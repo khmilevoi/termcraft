@@ -352,10 +352,10 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
        * manifest's \`defaultTheme\`, which is the ordinary case; present, it pins the page to one
        * declared theme. The Gate checks the name against the project's manifest.
        *
-       * KNOWN GAP until plan P4 lands: the host child's own \`pageMetaSchema\`
-       * (\`src/host/session/model/source-mount.ts\`) still REQUIRES \`theme\`, so a page that omits it
-       * type-checks here and is refused at mount with \`MALFORMED_PROTOCOL\`. P4 relaxes that schema
-       * as part of the host wiring; nothing in the repository omits \`theme\` today.
+       * KNOWN GAP until plan P4 lands: the Gate's own \`src/gate/model/page-contract.ts\` requires
+       * \`theme\` FIRST (\`MISSING_META_FIELD\`) — a themeless page never reaches the host. The host
+       * child's \`pageMetaSchema\` (\`src/host/session/model/source-mount.ts\`) requires it too, SECOND,
+       * with \`MALFORMED_PROTOCOL\`. P4 relaxes both; nothing in the repository omits \`theme\` today.
        */
       readonly theme?: ThemeId;
   }
@@ -502,10 +502,10 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * frame (\`box()\`'s own default, \`design/termcraft-engine.js:47\`) with an optional \`title\`
    * space-padded into the top border (\`:52\`'s \`' '+title+' '\`), or no caption at all when
    * \`title\` is absent or empty — matching the engine's own \`if(o.title){…}\` guard.
-   * \`borderColor\`/\`titleColor\` accept semantic tokens so a caller renders the design's variants
-   * (an active/popup panel uses an \`accent\` border + \`accentHi\` title; an error panel a
-   * \`danger\` border; a welded sub-panel a \`foregroundMuted\` title). Colors resolve from
-   * tokens; the mandatory \`id\` flows to the element for host geometry.
+   * \`borderColor\`/\`titleColor\` are \`Color\`s read off \`useTokens()\`: an active/popup panel
+   * uses border \`t.accent\` + title \`t.accentHi\`; an error panel uses border \`t.danger\`; a
+   * welded sub-panel uses title \`t.foregroundMuted\`. The mandatory \`id\` flows to the element
+   * for host geometry.
    */
   function Panel(props: PanelProps): React.ReactNode;
 
@@ -550,7 +550,7 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       /** The fill hue. Read one off \`useTokens()\` (spec §4.5). */
       readonly background?: Color;
   }
-  /** The low-level box escape hatch (§3.2). Renders one OpenTUI \`<box>\` from token-resolved props. */
+  /** The low-level box escape hatch (§3.2). Renders one OpenTUI \`<box>\` from \`Color\`-typed props. */
   function Box(props: BoxProps): React.ReactNode;
 
   // ── src/runtime/ui/row
@@ -591,8 +591,9 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * full-width, single-row band; a \`vertical\` one is a full-height, single-column
    * band. It defaults to the theme's \`line\` hue — the design's subtle interior
    * divider (\`border\` is reserved for actual box frames drawn by Panel) — and takes
-   * an optional \`color\` token so a caller can pick \`border\` for an active-frame rule
-   * or \`accentHi\` for a focused one. The mandatory \`id\` flows to the element.
+   * an optional \`color\`, a \`Color\` a caller reads off \`useTokens()\`, so a caller can pick
+   * \`t.border\` for an active-frame rule or \`t.accentHi\` for a focused one. The mandatory
+   * \`id\` flows to the element.
    * (MVP simplification: the design draws glyph rules \`─\`/\`│\` with \`├┤┬┴\` weld tees;
    * this renders a color band — a known divergence pending the phase-7 UI pass.)
    */
@@ -714,7 +715,7 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   }
   /**
    * Themed inline text (design-system, runtime-api §3.2). Renders a single OpenTUI
-   * \`<text>\` with a token-resolved foreground and an attribute mask; the mandatory
+   * \`<text>\` with a \`Color\` foreground read off the theme and an attribute mask; the mandatory
    * \`id\` flows to the element so the host can answer geometry queries (checkHit/
    * rectOf) and the shell can select/pin it. The hue is a \`Color\` the caller supplies
    * — a page reads one off its own \`useTokens()\` (spec §4.5), so the project's design

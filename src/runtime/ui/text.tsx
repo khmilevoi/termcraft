@@ -16,7 +16,7 @@ export interface TextProps {
 
 /**
  * Themed inline text (design-system, runtime-api §3.2). Renders a single OpenTUI
- * `<text>` with a token-resolved foreground and an attribute mask; the mandatory
+ * `<text>` with a `Color` foreground read off the theme and an attribute mask; the mandatory
  * `id` flows to the element so the host can answer geometry queries (checkHit/
  * rectOf) and the shell can select/pin it. The hue is a `Color` the caller supplies
  * — a page reads one off its own `useTokens()` (spec §4.5), so the project's design

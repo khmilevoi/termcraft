@@ -1317,10 +1317,13 @@ Each of these is a spec-sanctioned consequence, not an oversight. They are liste
 does not "fix" them into another plan's scope, and so the reviewer at sync point 1 can check them
 off.
 
-1. **A page that omits `meta.theme` type-checks but will not mount.** The host child's
-   `pageMetaSchema` (`src/host/session/model/source-mount.ts:541-546`) still requires `theme`.
-   **P4** relaxes it. Recorded in `PageMeta.theme`'s own doc comment. Nothing in the repository
-   omits `theme` today, so no test covers the gap.
+1. **A page that omits `meta.theme` type-checks but will not mount.** The FIRST, fatal blocker is
+   the Gate's own `src/gate/model/page-contract.ts` (`theme?.kind !== "string"`), which reports
+   `MISSING_META_FIELD` — a themeless page never reaches the host at all. Even past the Gate, the
+   host child's `pageMetaSchema` (`src/host/session/model/source-mount.ts:541-546`) still requires
+   `theme` and would refuse the mount with `MALFORMED_PROTOCOL` as a second blocker. **P4** relaxes
+   both. Recorded in `PageMeta.theme`'s own doc comment. Nothing in the repository omits `theme`
+   today, so no test covers the gap.
 2. **Nothing calls `seedThemeCapability` yet.** The atoms hold the compiled seed for the whole
    process, exactly as `hostModeAtom` holds `"preview"` today. **P4** wires the mount.
 3. **`theme:${DEFAULT_THEME_ID}` is still in the declaration bundle.**

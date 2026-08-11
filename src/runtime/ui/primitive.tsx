@@ -42,7 +42,7 @@ export interface BoxProps {
   readonly background?: Color;
 }
 
-/** The low-level box escape hatch (§3.2). Renders one OpenTUI `<box>` from token-resolved props. */
+/** The low-level box escape hatch (§3.2). Renders one OpenTUI `<box>` from `Color`-typed props. */
 export function Box(props: BoxProps) {
   return (
     <box

@@ -113,10 +113,10 @@ export interface PageMeta {
    * manifest's `defaultTheme`, which is the ordinary case; present, it pins the page to one
    * declared theme. The Gate checks the name against the project's manifest.
    *
-   * KNOWN GAP until plan P4 lands: the host child's own `pageMetaSchema`
-   * (`src/host/session/model/source-mount.ts`) still REQUIRES `theme`, so a page that omits it
-   * type-checks here and is refused at mount with `MALFORMED_PROTOCOL`. P4 relaxes that schema
-   * as part of the host wiring; nothing in the repository omits `theme` today.
+   * KNOWN GAP until plan P4 lands: the Gate's own `src/gate/model/page-contract.ts` requires
+   * `theme` FIRST (`MISSING_META_FIELD`) — a themeless page never reaches the host. The host
+   * child's `pageMetaSchema` (`src/host/session/model/source-mount.ts`) requires it too, SECOND,
+   * with `MALFORMED_PROTOCOL`. P4 relaxes both; nothing in the repository omits `theme` today.
    */
   readonly theme?: ThemeId;
 }
