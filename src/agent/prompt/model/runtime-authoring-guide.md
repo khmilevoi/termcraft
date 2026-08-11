@@ -86,3 +86,27 @@ advance itself. That is the runtime's shape, not a missing feature.
 See "Time and the sealed render" above for the determinism rule. No imports beyond
 `@termcraft/runtime` — see `runtime.d.ts` and this turn's system prompt for the exact
 allowlist.
+
+## Element catalog additions
+
+Beyond the components named above, the runtime exposes these wrappers over OpenTUI's remaining
+elements. `runtime.d.ts` alongside this file carries their exact prop types; every one takes a
+mandatory `id`.
+
+- `Slider` — a draggable value track. Required: `id`, `orientation` (`"horizontal"` |
+  `"vertical"`), `value`. Optional `min`/`max` (0/100), `trackColor`/`fillColor`,
+  `width`/`height`, `onChange(value)`. Its rendered position always comes from `value`, so an
+  export snapshot is deterministic.
+- `ScrollBar` — a proportional scroll indicator; a leaf, it takes no children. Required: `id`,
+  `orientation`, `contentSize`, `viewportSize`, `position` (all in cells). Optional
+  `trackColor`/`thumbColor`/`arrowColor`, `showArrows` (off by default), `width`/`height`,
+  `onScroll(position)`.
+- `TextTable` — a grid of styled text cells that measures its own column widths and wraps inside
+  a cell. Required: `id`, `rows` (a matrix whose cells are a plain string or a list of
+  `{ text, color?, background?, bold?, italic?, underline? }` runs). Optional `borders` (off),
+  `borderColor`, `textColor`, `background`, `columnGap` (1), `wrap` (`"word"`), `cellPadding`,
+  `width`/`height`. Row selection belongs to `Table`, not here.
+- `FrameBuffer` — a raw cell buffer for bespoke graphics; the last escape hatch. Required: `id`,
+  `width`, `height`, and `draw(surface)`, which paints through `clear`, `setCell`, `drawText` and
+  `fillRect`. It renders nothing until `draw` paints into it, and writes outside the buffer are
+  dropped.

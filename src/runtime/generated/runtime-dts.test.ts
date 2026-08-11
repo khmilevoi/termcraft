@@ -82,12 +82,15 @@ describe("the prompt copy and the gate copy are separate artifacts (Task 7)", ()
     // this pins "still a prompt-sized attachment", not "unchanged", so an ordinary surface change
     // to `src/runtime` does not have to touch this number.
     //
-    // Raised from 40_000 (2026-08-11, spec 2026-08-11-project-design-systems-design §6): wave 2
-    // adds ~15 new wrapper components to the runtime facade, which will grow this file
-    // substantially beyond the old ceiling. 80_000 keeps deliberate headroom for that expansion
-    // while still failing on a runaway/copy-paste regression; it is not a hard prompt-budget
-    // number, just a comfortable multiple of the pre-wave-2 size.
-    expect(fs.readFileSync(PROMPT_COPY).length).toBeLessThan(80_000);
+    // Raised from 40_000, then 80_000 (2026-08-11, spec
+    // 2026-08-11-project-design-systems-design §6): wave 2 adds ~15 new wrapper components to
+    // the runtime facade. With P5/P6/P7/P9 merged the copy sits at ~90 KB (~3.2 KB per
+    // component); P8 adds Code/Markdown and P4 adds design-system prose on top. 120_000 keeps
+    // deliberate headroom for the completed wave while still failing on a runaway/copy-paste
+    // regression; it is not a hard prompt-budget number. A planned JSDoc tightening pass
+    // (moving renderer-internal prose to `//` comments, which declaration emit drops) is
+    // tracked for the wave closeout and should claw back a good share of this.
+    expect(fs.readFileSync(PROMPT_COPY).length).toBeLessThan(120_000);
   });
 
   test("the PROMPT copy carries no inlined @reatom/core block", () => {

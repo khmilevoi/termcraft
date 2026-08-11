@@ -489,6 +489,73 @@ declare module "@termcraft/runtime" {
    */
   function Diff(props: DiffProps): React.ReactNode;
 
+  // ── src/runtime/ui/frame-buffer
+  /**
+   * The cell surface a `FrameBuffer`'s `draw` callback paints into (spec §6.1's "raw drawing …
+   * the last escape hatch"). Every colour is a `Color` value read off `useTokens()`; the
+   * underlying `OptimizedBuffer` is never handed out, so a page cannot reach the renderer.
+   * Coordinates are buffer-local, origin top-left; a write outside the buffer is DROPPED.
+   */
+  interface FrameBufferSurface {
+      /** The buffer's width in cells — the `width` prop. */
+      readonly width: number;
+      /** The buffer's height in cells — the `height` prop. */
+      readonly height: number;
+      /** Fill the whole buffer with one hue. */
+      clear(color: Color): void;
+      /**
+       * Paint one cell.
+       *
+       * ASYMMETRY WITH {@link drawText}, DOCUMENTED (CLAUDE.md): an omitted `background` here
+       * defaults to the OPAQUE {@link TRANSPARENT} constant, which ERASES whatever a prior
+       * `clear()` painted at that cell. `drawText`'s omitted `background` instead defaults to
+       * `undefined`, which PRESERVES it. The difference is forced by the vendor FFI, not a choice
+       * made here: `OptimizedBuffer.setCell` takes a required `rgbaPtr` for its background
+       * argument, while `drawText` takes an `optionalRgbaPtr` that can mean "leave it alone" — see
+       * `createSurface`'s call sites below.
+       */
+      setCell(x: number, y: number, glyph: string, color: Color, background?: Color): void;
+      /**
+       * Paint a run of text starting at `x`,`y`. An omitted `background` PRESERVES whatever is
+       * already there — see {@link setCell}'s doc comment for why the two methods differ here.
+       */
+      drawText(text: string, x: number, y: number, color: Color, background?: Color): void;
+      /** Fill a rectangle with one hue. */
+      fillRect(x: number, y: number, width: number, height: number, color: Color): void;
+  }
+  /** Props for the low-level `FrameBuffer`. `id` is the mandatory stable id (§3.2). */
+  interface FrameBufferProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      /** Buffer width in cells. REQUIRED by the underlying renderable (spec §6.1's spike). */
+      readonly width: number;
+      /** Buffer height in cells. REQUIRED by the underlying renderable (spec §6.1's spike). */
+      readonly height: number;
+      /**
+       * Paints the buffer. REQUIRED: the renderable renders NOTHING until it is drawn into (spec
+       * §6.1's spike), so an optional `draw` would make the blank render the default.
+       */
+      readonly draw: (surface: FrameBufferSurface) => void;
+  }
+  /**
+   * A raw cell buffer for bespoke graphics — spec §6.1's "last escape hatch". Renders the OpenTUI
+   * `FrameBufferRenderable`, a renderable with no intrinsic tag, registered by
+   * {@link registerRenderableTags}.
+   *
+   * HOW `draw` REACHES THE BUFFER, and why a `ref` is used INTERNALLY. The renderable exposes its
+   * buffer only as an instance field and renders nothing until something paints into it (spec
+   * §6.1's spike), so an instance handle is the only path. §6 forbids PASSING `ref` through to an
+   * authored page, which this does not do: the callback ref below is termcraft's own, the page sees
+   * only {@link FrameBufferSurface}, and the renderable never escapes. Because the inline callback's
+   * identity changes on every render, React re-invokes it on every re-render, so a theme change
+   * repaints the buffer.
+   *
+   * DETERMINISM (spec §6.3): the whole rendered state is a pure function of `draw`, `width` and
+   * `height`, with no internal offset, focus or selection — so the export frame equals the preview
+   * frame for the same props, which is what `./frame-buffer.test.tsx` asserts.
+   */
+  function FrameBuffer(props: FrameBufferProps): React.ReactNode;
+
   // ── src/runtime/ui/gauge
   /** Props for the themed `Gauge` component. `id` is the mandatory stable id (§3.2). */
   interface GaugeProps {
@@ -913,6 +980,16 @@ declare module "@termcraft/runtime" {
   /** The low-level box escape hatch (§3.2). Renders one OpenTUI `<box>` from `Color`-typed props. */
   function Box(props: BoxProps): React.ReactNode;
 
+  // ── src/runtime/ui/renderable-tags
+  /**
+   * Register the four tagless renderables as JSX tags. Idempotent, and called as the FIRST
+   * statement of each wrapper's component body rather than at module scope: React runs a component
+   * function during render and creates its host instances during commit, so a call in the body is
+   * provably ordered before the reconciler looks the tag up in `getComponentCatalogue()`, without
+   * making `src/runtime/ui/*` import-order-sensitive.
+   */
+  function registerRenderableTags(): void;
+
   // ── src/runtime/ui/row
   /** Props for the `Row` layout container. `id` is the mandatory stable id (§3.2). */
   interface RowProps {
@@ -935,6 +1012,68 @@ declare module "@termcraft/runtime" {
    * host can answer geometry queries and the shell can select/pin it.
    */
   function Row(props: RowProps): React.ReactNode;
+
+  // ── src/runtime/ui/scroll-bar
+  /**
+   * Props for the themed `ScrollBar`. `id` is the mandatory stable id (§3.2); `orientation` is
+   * REQUIRED by the underlying renderable's constructor, and the scroll state is required because
+   * an export snapshot must render it from props rather than from the renderable's own mutable
+   * offset (spec §6.3). There is deliberately NO `children`: the renderable is a leaf (spec §6.1's
+   * spike).
+   */
+  interface ScrollBarProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      readonly orientation: "horizontal" | "vertical";
+      /** The full scrollable extent, in cells. */
+      readonly contentSize: number;
+      /** The visible window's extent, in cells. */
+      readonly viewportSize: number;
+      /** The window's offset into the content, in cells; clamped to `0..contentSize - viewportSize`. */
+      readonly position: number;
+      /** The track hue. Read one off `useTokens()` (spec §4.5). Defaults to `line`. */
+      readonly trackColor?: Color;
+      /** The thumb hue. Read one off `useTokens()` (spec §4.5). Defaults to `accentDim`. */
+      readonly thumbColor?: Color;
+      /** Step arrows at both ends; OFF by default, matching the design's scrollbar. */
+      readonly showArrows?: boolean;
+      /**
+       * The arrow hue when `showArrows` is set. Defaults to `foregroundFaint`.
+       *
+       * DESIGN GAP, FLAGGED (CLAUDE.md): `design/termcraft-engine.js`'s `scrollbar()` draws its
+       * track and thumb only — arrows are OFF unconditionally (its own comment: "Arrows off") — so
+       * the design supplies no arrow hue anywhere for this control. `foregroundFaint` is chosen for
+       * a case the design does not cover, not read off it.
+       */
+      readonly arrowColor?: Color;
+      readonly width?: number;
+      readonly height?: number;
+      /** Invoked with the new offset when the bar is dragged; inert in the static render. */
+      readonly onScroll?: (position: number) => void;
+  }
+  /**
+   * A proportional scroll indicator (spec §6.1). Renders the OpenTUI `ScrollBarRenderable` — a
+   * renderable with no intrinsic tag, registered by {@link registerRenderableTags} — whose inner
+   * track is a `SliderRenderable` drawing a `█`/`▀`/`▄` thumb at half-cell precision.
+   *
+   * COLOURS AND ARROWS COME FROM THE DESIGN (`design/termcraft-engine.js`'s `scrollbar()`): a track
+   * in `line`, a thumb in `amberDim` (the `accentDim` role), arrows off.
+   *
+   * DIVERGENCE, DOCUMENTED RATHER THAN SUBSTITUTED (CLAUDE.md): the design draws the track as a
+   * `│` glyph rule, while `SliderRenderable` paints its track as a solid background fill. The glyph
+   * half cannot be reproduced through this renderable, so the closest faithful mapping is used —
+   * track BACKGROUND `line`, thumb FOREGROUND `accentDim`.
+   *
+   * PROP ORDER IS LOAD-BEARING, and this is measured rather than assumed. `scrollSize`,
+   * `viewportSize` and `scrollPosition` are not constructor options; `@opentui/react`'s
+   * `setInitialProperties` applies them as plain property writes, iterating `for (const propKey in
+   * props)` — i.e. in the order written below. `scrollPosition`'s setter clamps against
+   * `scrollSize - viewportSize`, so a position written before its bounds would clamp to 0.
+   *
+   * The same constructor-captured-handler divergence recorded on `./slider.tsx` applies to
+   * `onChange` here.
+   */
+  function ScrollBar(props: ScrollBarProps): React.ReactNode;
 
   // ── src/runtime/ui/scroll-box
   /** Props for the `ScrollBox` scrolling viewport. `id` is the mandatory stable id (§3.2). */
@@ -1084,6 +1223,78 @@ declare module "@termcraft/runtime" {
    */
   function Separator(props: SeparatorProps): React.ReactNode;
 
+  // ── src/runtime/ui/slider
+  /**
+   * Props for the themed `Slider`. `id` is the mandatory stable id (§3.2); `orientation` is
+   * REQUIRED by the underlying renderable's constructor (spec §6.1's spike), and `value` is
+   * required because a slider's rendered state must come from props rather than from the
+   * renderable's own mutable `_value` (spec §6.3).
+   */
+  interface SliderProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      readonly orientation: "horizontal" | "vertical";
+      /** The current value, clamped by the renderable into `min`..`max`. */
+      readonly value: number;
+      /** Range floor; defaults to 0. */
+      readonly min?: number;
+      /** Range ceiling; defaults to 100. */
+      readonly max?: number;
+      /** The unfilled track hue. Read one off `useTokens()` (spec §4.5). Defaults to `border`. */
+      readonly trackColor?: Color;
+      /** The thumb hue. Read one off `useTokens()` (spec §4.5). Defaults to `accent`. */
+      readonly fillColor?: Color;
+      /** Track length in cells for a horizontal slider. */
+      readonly width?: number;
+      /** Track length in cells for a vertical slider. */
+      readonly height?: number;
+      /** Invoked with the new value when the slider is dragged; inert in the static render. */
+      readonly onChange?: (value: number) => void;
+  }
+  /**
+   * A draggable value track (spec §6.1). Renders the OpenTUI `SliderRenderable` — a renderable
+   * with no intrinsic tag, registered by {@link registerRenderableTags} — as a solid track filled
+   * with `trackColor` and a thumb drawn in `fillColor` at half-cell precision: `█`/`▌`/`▐` on the
+   * horizontal path, `█`/`▀`/`▄` on the vertical path (`renderVertical` in `@opentui/core`).
+   *
+   * DESIGN GAP, FLAGGED RATHER THAN GUESSED (CLAUDE.md): the design system has NO standalone
+   * slider. Its nearest covered element is the gauge (`design/termcraft-engine.js`'s gauge draw,
+   * implemented in `./gauge.tsx`), which fills in `accent` over a track in `border`; those two
+   * roles are reused here as the closest faithful mapping, not invented.
+   *
+   * DIVERGENCE, DOCUMENTED RATHER THAN SUBSTITUTED (CLAUDE.md): the gauge whose colour mapping is
+   * reused here draws its track as a `╌` dashed glyph rule in `border` (`design/termcraft-engine.js`'s
+   * gauge draw method, `./gauge.tsx`'s `EMPTY_GLYPH`), while `SliderRenderable` paints its track as
+   * a solid `border` BACKGROUND band — the same glyph-rule-vs-colour-band gap `./scroll-bar.tsx`
+   * documents for its own track. The glyph half cannot be reproduced through this renderable, so
+   * the closest faithful mapping is used: track BACKGROUND `border`, thumb FOREGROUND `accent`.
+   *
+   * The thumb's SIZE follows OpenTUI's own proportional rule (its `viewPortSize` defaults to 10% of
+   * the range). No prop is exposed for it: naming that number in termcraft's vocabulary would mean
+   * inventing a semantic the design does not have.
+   *
+   * DIVERGENCE, MEASURED: `SliderRenderable` captures `onChange` in its CONSTRUCTOR
+   * (`_onChange = options.onChange`) and exposes no setter for it, so a handler whose identity
+   * changes after mount keeps invoking the first one. The wrapper cannot fix that without reaching
+   * the instance through a `ref`, which §6 forbids exposing; it is recorded here instead. The
+   * interactive path is inert in the current static render either way.
+   *
+   * PROP ORDER IS LOAD-BEARING, and this is measured rather than assumed — the same hazard
+   * `./scroll-bar.tsx` documents and handles for its own three ordered props. `@opentui/react`'s
+   * `updateProperties` applies changed props as plain property writes, iterating `for (const
+   * propKey in newProps)` — i.e. in JSX attribute order. `SliderRenderable`'s `value` setter
+   * clamps against the CURRENT `_min`/`_max`, while the `min`/`max` setters' own re-clamp is
+   * ASYMMETRIC: `min`'s setter only pushes `_value` UP when it now falls below the new floor, and
+   * `max`'s setter only pushes it DOWN when it now exceeds the new ceiling — neither ever moves
+   * `_value` the other direction. Written `value` first (as this attribute list once was), an
+   * in-place re-render that changes bounds and value together clamps the new `value` against the
+   * STALE bounds, then the bounds settle afterwards without re-touching `_value` — the thumb lands
+   * on the wrong cell, and because export re-mounts fresh, preview then renders a DIFFERENT frame
+   * from export, breaking the §6.3 determinism property. Writing `min`, then `max`, then `value`
+   * last means the bounds are already settled before the final `value` write clamps against them.
+   */
+  function Slider(props: SliderProps): React.ReactNode;
+
   // ── src/runtime/ui/spacer
   /** Props for the `Spacer`. `id` is the mandatory stable id (§3.2). */
   interface SpacerProps {
@@ -1186,6 +1397,70 @@ declare module "@termcraft/runtime" {
    * interactive path and stays inert here. Colors + marker match the design engine.
    */
   function Tabs(props: TabsProps): React.ReactNode;
+
+  // ── src/runtime/ui/text-table
+  /** One styled run inside a table cell. Colours are `Color` values read off `useTokens()`. */
+  interface TextTableSpan {
+      readonly text: string;
+      /** Text hue; defaults to the table's `textColor`. */
+      readonly color?: Color;
+      /** Cell-run back-fill. */
+      readonly background?: Color;
+      readonly bold?: boolean;
+      readonly italic?: boolean;
+      readonly underline?: boolean;
+  }
+  /**
+   * A single cell: a plain string, or a run list when parts of it need their own style.
+   * The underlying renderable takes styled runs and nothing else (spec §6.1's spike); the plain
+   * string form is termcraft's own convenience over that, converted here.
+   */
+  type TextTableCell = string | readonly TextTableSpan[];
+  /** Props for the themed `TextTable`. `id` is the mandatory stable id (§3.2). */
+  interface TextTableProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      /** Rows of cells, positional. A short row simply renders fewer columns. */
+      readonly rows: readonly (readonly TextTableCell[])[];
+      /** Draw a single-line grid. OFF by default — the design's tables are borderless. */
+      readonly borders?: boolean;
+      /** The grid hue when `borders` is set. Defaults to `border`. */
+      readonly borderColor?: Color;
+      /** The default cell text hue. Defaults to `foreground`. */
+      readonly textColor?: Color;
+      /** The table's back-fill. */
+      readonly background?: Color;
+      /** Cells between columns; defaults to 1, matching the design's table gutter. */
+      readonly columnGap?: number;
+      /** Wrapping inside a cell; defaults to `word`. */
+      readonly wrap?: "none" | "char" | "word";
+      /** Padding inside every cell. */
+      readonly cellPadding?: number;
+      readonly width?: number;
+      readonly height?: number;
+  }
+  /**
+   * A grid of styled text cells (spec §6.1). Renders the OpenTUI `TextTableRenderable` — a
+   * renderable with no intrinsic tag, registered by {@link registerRenderableTags} — which
+   * measures its own column widths and wraps inside a cell, which is what it offers over the
+   * hand-composed `./table.tsx`.
+   *
+   * BORDERS ARE OFF BY DEFAULT because the design's tables are borderless column layouts (the
+   * shape `./table.tsx` implements from `design/termcraft-engine.js`). With `borders` set, the
+   * style is `rounded` in the `border` token: `design/termcraft-engine.js:47` — `box()`'s own
+   * default is ROUNDED (`const r = o.rounded !== false`), and no design call site opts out
+   * (`rounded:false` appears zero times in the file). `square` corners are the opt-out here too,
+   * matching `./panel.tsx`'s house rule for the same reason: no design screen takes it.
+   *
+   * THE RENDERABLE'S OWN DEFAULTS ARE A HARDCODED `#FFFFFF` for both `borderColor` and `fg`, so
+   * this wrapper always passes both from the active theme: no raw white can reach a frame.
+   *
+   * SELECTION IS DISABLED UNCONDITIONALLY (spec §6.3). `TextTableRenderable` defaults
+   * `selectable: true` and keeps its own `_lastLocalSelection`, which is exactly the kind of
+   * renderer-internal state an export snapshot must not depend on; row selection is `./table.tsx`'s
+   * job, driven from props.
+   */
+  function TextTable(props: TextTableProps): React.ReactNode;
 
   // ── src/runtime/ui/text
   /** Props for the themed `Text` component. `id` is the mandatory stable id (§3.2). */
@@ -1331,6 +1606,14 @@ declare module "@termcraft/runtime" {
   export type { LinkProps, LineBreakProps };
   export { AsciiFont };
   export type { AsciiFontProps, AsciiFontName };
+  export { Slider };
+  export type { SliderProps };
+  export { ScrollBar };
+  export type { ScrollBarProps };
+  export { TextTable };
+  export type { TextTableProps, TextTableCell, TextTableSpan };
+  export { FrameBuffer };
+  export type { FrameBufferProps, FrameBufferSurface };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {

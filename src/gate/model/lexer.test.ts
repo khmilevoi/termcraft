@@ -387,7 +387,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // `runtime/ui/ascii-font.tsx` and a test file beside each, taking it to 963.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(963);
+    // The project-design-systems P5 plan (tagless renderables) adds `runtime/ui/renderable-tags.ts`,
+    // four wrapper modules with a test beside each, and `renderable-tags.test.tsx`, taking it to 974.
+    // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
+    // grows.
+    expect(files.length).toBe(974);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

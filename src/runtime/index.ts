@@ -119,3 +119,12 @@ export type { LinkProps, LineBreakProps } from "./ui/inline";
 // Display text (§6.1).
 export { AsciiFont } from "./ui/ascii-font";
 export type { AsciiFontProps, AsciiFontName } from "./ui/ascii-font";
+
+export { Slider } from "./ui/slider";
+export type { SliderProps } from "./ui/slider";
+export { ScrollBar } from "./ui/scroll-bar";
+export type { ScrollBarProps } from "./ui/scroll-bar";
+export { TextTable } from "./ui/text-table";
+export type { TextTableProps, TextTableCell, TextTableSpan } from "./ui/text-table";
+export { FrameBuffer } from "./ui/frame-buffer";
+export type { FrameBufferProps, FrameBufferSurface } from "./ui/frame-buffer";
