@@ -377,6 +377,53 @@ declare module "@termcraft/runtime" {
    */
   function Input(props: InputProps): React.ReactNode;
 
+  // ── src/runtime/ui/line-number
+  /** Props for the themed `LineNumber` gutter. `id` is the mandatory stable id (§3.2). */
+  interface LineNumberProps {
+      /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */
+      readonly id: string;
+      /**
+       * The content whose lines are numbered — EXACTLY ONE text-like child (`Text` today; `Input`,
+       * and later `Textarea`/`Code`, qualify too). A second child is silently dropped and a child
+       * that is not text-like leaves the gutter unbuilt, so nothing renders at all. See the
+       * component's own note.
+       */
+      readonly children?: unknown;
+      /** The gutter digits' hue; defaults to the theme's `foregroundFaint`. */
+      readonly color?: Color;
+      /** The gutter's fill; defaults to the theme's `background` (the design paints no gutter fill). */
+      readonly background?: Color;
+      /** The number the first line carries; defaults to `1`. */
+      readonly startAt?: number;
+      /** Minimum gutter width in cells, so a growing file does not shift the content sideways. */
+      readonly minWidth?: number;
+      /** Cells of space between the digits and the content. */
+      readonly gap?: number;
+  }
+  /**
+   * A themed line-number gutter around one text-like child (design-system §6.1, the "Documents and
+   * code" group). Renders an OpenTUI `<line-number>` whose numbering target is wired from the child
+   * itself — the underlying `target` is a renderer object and is deliberately never a prop (spec
+   * §6). The mandatory `id` flows to the element so the host can answer geometry queries and the
+   * shell can select/pin it.
+   *
+   * ONE CHILD, AND IT MUST BE TEXT-LIKE. The renderable adopts the FIRST child that reports line
+   * information (`Text`, `Input`, and later `Textarea`/`Code`) as its numbering target; every later
+   * child is refused and never appears. A child that reports no line information — a `Row`, a
+   * `Panel`, a `Box` — leaves the gutter unbuilt and the whole component draws nothing. Neither
+   * case throws; both are covered by tests beside this file.
+   *
+   * `Diff` can NOT be a child: it carries no line information of its own (it composes its own
+   * internal gutters). Use `Diff`'s `showLineNumbers` instead.
+   *
+   * COLOURS. `color` defaults to `foregroundFaint` — the role the design gives placeholders, ghost
+   * rows and column headers, which is the weight a gutter reads at; the design draws no gutter of
+   * its own, so this is the closest faithful mapping rather than a quoted value. `background`
+   * defaults to the theme's `background`: the design paints no gutter fill, and passing the value
+   * explicitly is what stops `@opentui/core`'s own `#888888` default from reaching the frame.
+   */
+  function LineNumber(props: LineNumberProps): React.ReactNode;
+
   // ── src/runtime/ui/list
   /** One selectable row in a `List` (design-system §3.2). */
   interface ListItem {
@@ -684,6 +731,8 @@ declare module "@termcraft/runtime" {
   export type { GaugeProps };
   export { Sparkline };
   export type { SparklineProps };
+  export { LineNumber };
+  export type { LineNumberProps };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {
