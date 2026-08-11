@@ -27,7 +27,11 @@ export {
 export type { TypeCheckerConfig } from "./model/type-check";
 export { checkManifestSlice } from "./model/manifest";
 export type { ManifestScanInput, ManifestScanResult } from "./model/manifest";
-export { checkDesignSystemSlice, hasDesignSystem } from "./model/design-system";
+export {
+  checkDesignSystemSlice,
+  hasDesignSystem,
+  scanSystemContainment,
+} from "./model/design-system";
 export type { DesignSystemScanInput, DesignSystemScanResultV1 } from "./model/design-system";
 export { scanNamedExports } from "./model/exports-scan";
 export type { NamedExportScanV1 } from "./model/exports-scan";

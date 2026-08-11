@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { DESIGN_SYSTEM_MANIFEST_RELPATH } from "entities/design-system";
 import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 
-import { checkDesignSystemSlice, hasDesignSystem } from "./design-system";
+import { checkDesignSystemSlice, hasDesignSystem, scanSystemContainment } from "./design-system";
 
 const BUTTON = `export const Button = (props: { id: string }) => props.id\n`;
 const SHELL = `export function PageShell() { return null }\n`;
@@ -191,5 +191,88 @@ describe("checkDesignSystemSlice", () => {
       }),
     );
     for (const error of result.errors) expect(error.blockedPages).toBeUndefined();
+  });
+});
+
+describe("scanSystemContainment (spec §5.1)", () => {
+  const contained = (extra: Record<string, string>) => {
+    const t = tree(extra);
+    return scanSystemContainment(t);
+  };
+
+  test("a sibling import inside system/ is allowed", () => {
+    expect(
+      contained({
+        "system/components/Button.tsx": `import { tone } from "../tokens"\nexport const Button = tone\n`,
+        "system/tokens.ts": `export const tone = 1\n`,
+      }),
+    ).toEqual([]);
+  });
+
+  test("the runtime facade is allowed", () => {
+    expect(
+      contained({
+        "system/components/Button.tsx": `import { Text } from "@termcraft/runtime"\nexport const Button = Text\n`,
+      }),
+    ).toEqual([]);
+  });
+
+  test("importing the manifest JSON is allowed", () => {
+    expect(
+      contained({
+        "system/tokens.ts": `import ds from "./design-system.json"\nexport const t = ds\n`,
+      }),
+    ).toEqual([]);
+  });
+
+  test("an import that leaves system/ is one SYSTEM_IMPORT_ESCAPES fatal on the importer", () => {
+    const errors = contained({
+      "system/components/Button.tsx": `import { fmt } from "../../lib/time"\nexport const Button = fmt\n`,
+      "lib/time.ts": `export const fmt = 1\n`,
+    });
+    expect(errors.length).toBe(1);
+    expect(errors[0]?.kind).toBe("import");
+    expect(errors[0]?.code).toBe("SYSTEM_IMPORT_ESCAPES");
+    expect(errors[0]?.file).toBe("system/components/Button.tsx");
+    expect(errors[0]?.message).toContain("../../lib/time");
+    expect(errors[0]?.message).toContain("lib/time.ts");
+  });
+
+  test("an import of a page from inside system/ is refused too", () => {
+    const errors = contained({
+      "system/components/Button.tsx": `import P from "../../pages/dashboard"\nexport const Button = P\n`,
+      "pages/dashboard.tsx": `export default 1\n`,
+    });
+    expect(errors.map((e) => e.code)).toEqual(["SYSTEM_IMPORT_ESCAPES"]);
+  });
+
+  test("a file OUTSIDE system/ importing INTO system/ is not this rule's business", () => {
+    expect(
+      contained({
+        "pages/dashboard.tsx": `import { Button } from "../system/components/Button"\nexport default Button\n`,
+      }),
+    ).toEqual([]);
+  });
+
+  test("EVERY system/ file is checked, reachable from a component root or not", () => {
+    const errors = contained({
+      "system/orphan.ts": `import { fmt } from "../lib/time"\nexport const x = fmt\n`,
+      "lib/time.ts": `export const fmt = 1\n`,
+    });
+    expect(errors.map((e) => e.file)).toEqual(["system/orphan.ts"]);
+  });
+
+  test("a non-code file inside system/ is never tokenized", () => {
+    expect(contained({ "system/notes.md": `import x from "../../lib/time"\n` })).toEqual([]);
+  });
+
+  test("results are ordered by file, then by the order the specifiers appear", () => {
+    const errors = contained({
+      "system/b.ts": `import a from "../lib/a"\nexport default a\n`,
+      "system/a.ts": `import a from "../lib/a"\nimport b from "../lib/b"\nexport default [a, b]\n`,
+      "lib/a.ts": "export default 1\n",
+      "lib/b.ts": "export default 1\n",
+    });
+    expect(errors.map((e) => e.file)).toEqual(["system/a.ts", "system/a.ts", "system/b.ts"]);
   });
 });

@@ -26,6 +26,20 @@ const sha256Of = inventorySha256(inventory);
 const edgesOf = (relPath: string) => EDGES[relPath] ?? [];
 
 describe("resolveClosure", () => {
+  test("a relative .json specifier resolves as a closure LEAF with no outgoing edges (design-systems §7)", () => {
+    const present = new Set(["system/tokens.ts", "system/design-system.json"]);
+    const closure = resolveClosure({
+      entry: "system/tokens.ts",
+      has: (p) => present.has(p),
+      // A `.json` is not a code file, so a real caller's `edgesOf` returns `[]` for it; this
+      // fixture reproduces that shape rather than asserting on the caller.
+      edgesOf: (p) => (p === "system/tokens.ts" ? ["./design-system.json"] : []),
+    });
+    expect(closure).not.toBeInstanceOf(Error);
+    if (closure instanceof Error) return;
+    expect(closure.files).toEqual(["system/design-system.json", "system/tokens.ts"]);
+  });
+
   test("returns the entry plus everything it transitively reaches, sorted", () => {
     const closure = resolveClosure({ entry: "pages/dashboard.tsx", has, edgesOf });
     if (closure instanceof Error) throw closure;

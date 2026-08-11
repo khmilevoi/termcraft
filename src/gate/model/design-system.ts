@@ -1,21 +1,25 @@
 import * as errore from "errore";
 
 import {
+  DESIGN_SYSTEM_DIRNAME,
   DESIGN_SYSTEM_MANIFEST_RELPATH,
   decodeDesignSystemManifest,
   designSystemComponentRelPath,
   findUnresolvedComponents,
+  isInsideDesignSystem,
 } from "entities/design-system";
 import type {
   DesignSystemManifestInvalidError,
   DesignSystemManifestV1,
 } from "entities/design-system";
-import { parsesJsx } from "entities/design-tree";
+import { isCodeFile, parsesJsx, resolveDesignSpecifier } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
 
 import type { GateError } from "../types";
 import { scanNamedExports } from "./exports-scan";
+import { hasTreePath } from "./gate";
 import { SUPPORTED_KIT_API_VERSIONS } from "./page-contract";
+import { scanModuleEdges } from "./tree-scan";
 
 /** What the design-system slice check needs: the tree's full file inventory (design-systems §5, §7). */
 export interface DesignSystemScanInput {
@@ -60,6 +64,18 @@ const NO_DESIGN_SYSTEM: DesignSystemScanResultV1 = {
 class DesignSystemExportScanUnreadableError extends errore.createTaggedError({
   name: "DesignSystemExportScanUnreadableError",
   message: 'the design-system component-export check could not read "$file" to the end',
+}) {}
+
+/**
+ * A `system/` file's own edges could not be read to the end — `scanModuleEdges` shares the
+ * recursive-descent JSX reader that can throw (see `gate/model/lexer.ts:454`'s `./jsx` reader).
+ * Mirrors `gate/adapters/gate-runner.ts`'s `readClosureEdges` treatment of the identical call:
+ * the file's own edges are unknowable, not empty, so {@link scanSystemContainment} skips it
+ * rather than reporting anything about its (unread) imports.
+ */
+class DesignSystemEdgeScanUnreadableError extends errore.createTaggedError({
+  name: "DesignSystemEdgeScanUnreadableError",
+  message: 'the system/ containment scan could not read "$file" to the end',
 }) {}
 
 /** A manifest-level fatal (design-systems §7): `file` is the manifest itself, mirroring
@@ -236,4 +252,76 @@ export function checkDesignSystemSlice(input: DesignSystemScanInput): DesignSyst
   }
 
   return { errors, manifest, unverified: errors.length > 0, componentRoots };
+}
+
+/**
+ * Every import inside `system/` that leaves `system/` (design-systems §5.1). `@termcraft/runtime`
+ * is allowed — it resolves to `kind: "runtime"` and leaves the tree by design; a sibling inside
+ * the folder is allowed; `../lib/time` and `../pages/…` are not.
+ *
+ * ITS OWN PASS, NOT A RIDE ON THE CLOSURE WALK (decision D1 — read that before touching this
+ * function). Spec §5.1 reads as if this check belongs inside the existing closure walk
+ * (`entities/design-tree/model/closure.ts`, driven from `gate/adapters/gate-runner.ts`). Taken
+ * literally, a containment violation would come back from `resolveClosure` as a
+ * `SpecifierRejectedError` and land in `walkPageClosure`'s `edge-rejected` blocker — whose `own`
+ * diagnostic is SUPPRESSED whenever `context.scannedInFull(from)` is true. That suppression is
+ * correct for every rejection code the flat allowlist scan already reports through the identical
+ * `resolveDesignSpecifier` — reporting it a second time from the closure walk would be a
+ * duplicate. It would be FALSE for containment: the flat scan knows nothing about `system/`, so
+ * routing the fatal through the closure walk would let the suppression eat it and the violation
+ * would silently vanish. Second reason: the closure walk only reaches files SOME page's entry
+ * walks to, and "the folder is self-contained" is a property of the WHOLE folder, not of
+ * whichever slice of it happens to be reachable from a page this turn. So containment gets its
+ * own pass here, over EVERY code file under `system/`, walked or not.
+ *
+ * NOT A SECOND READING OF THE IMPORT GRAPH. This pass uses the SAME `scanModuleEdges` (the raw
+ * specifier reader) and the SAME `resolveDesignSpecifier` (the resolver) that the closure walk
+ * and the flat allowlist scan both already use — so the three passes can never disagree about
+ * what one file's imports actually are; only what they DO with that agreement differs.
+ *
+ * A REJECTED specifier is skipped (not re-reported): the flat allowlist scan already carries that
+ * exact rejection, resolved through the identical function, naming the identical file — a second
+ * diagnostic for one fact would be noise, not a new finding.
+ */
+export function scanSystemContainment(input: DesignSystemScanInput): readonly GateError[] {
+  const has = hasTreePath(input.treePaths);
+  const errors: GateError[] = [];
+
+  for (const relPath of [...input.files.keys()].sort()) {
+    if (!isInsideDesignSystem(relPath) || !isCodeFile(relPath)) continue;
+
+    const source = input.files.get(relPath)!; // a key drawn from `input.files` itself
+    const edges = errore.try({
+      try: () => scanModuleEdges(source, parsesJsx(relPath)),
+      catch: (cause) => new DesignSystemEdgeScanUnreadableError({ file: relPath, cause }),
+    });
+    if (edges instanceof Error) {
+      // Swallowed deliberately (errore rule 21 still requires a trace): the flat allowlist scan
+      // already reads this exact file with the identical `scanModuleEdges` call and carries its
+      // own UNSCANNABLE_SOURCE fatal for it, so manufacturing a second diagnostic here for the
+      // same unreadable file would be noise, not a new finding.
+      log.warn(
+        `gate/model/design-system: could not verify "${relPath}"'s system/ containment — ${edges.message} — the flat allowlist scan already carries this file's own UNSCANNABLE_SOURCE fatal`,
+      );
+      continue;
+    }
+
+    for (const specifier of edges) {
+      const resolved = resolveDesignSpecifier({ from: relPath, specifier, has });
+      // A REJECTED specifier is the flat allowlist scan's own diagnostic, reported through the
+      // identical `resolveDesignSpecifier` — repeating it here would be a second diagnostic for
+      // one fact. A `"runtime"` resolution (`@termcraft/runtime`) is allowed by §5.1 outright.
+      if (resolved instanceof Error || resolved.kind !== "file") continue;
+      if (isInsideDesignSystem(resolved.relPath)) continue;
+
+      errors.push({
+        kind: "import",
+        code: "SYSTEM_IMPORT_ESCAPES",
+        message: `"${specifier}" resolves to "${resolved.relPath}", outside "${DESIGN_SYSTEM_DIRNAME}/" — a design system must be self-contained so it can be copied whole; move what it needs inside the folder`,
+        file: relPath,
+      });
+    }
+  }
+
+  return errors;
 }
