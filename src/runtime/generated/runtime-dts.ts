@@ -75,10 +75,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * The host-scoped viewport/terminal capability (§6): "reactive size and
    * color-capability values supplied by the host." Modeled like \`hostModeAtom\`/
    * \`interactionModeAtom\` above — named HOST-INPUT atoms a page reads and must not
-   * write; a future host handshake seeds them from the negotiated terminal
-   * capabilities (\`host/types.ts\`'s \`TerminalCapabilities\`, whose own comment names
-   * this exact model as its target). DORMANT in MVP: the host doesn't wire real
-   * viewport/color negotiation yet, so both atoms carry fixed defaults.
+   * write. DORMANT in MVP: the host doesn't wire real viewport/color negotiation yet,
+   * so both atoms carry fixed defaults.
    *
    * \`viewportSizeAtom\` defaults to 80x24 (columns x rows): the classic terminal size,
    * the first entry in the design's own preview-size preset list (design §8.1 item
@@ -89,11 +87,10 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    */
   const viewportSizeAtom: import("@reatom/core").Atom<Size, [newState: Size]>;
   /**
-   * \`colorDepthAtom\` mirrors \`host/types.ts\`'s own \`colorDepth: number\` vocabulary
-   * ("MVP carries the color depth only (4/8/24-bit)"). 24 (truecolor) is this
-   * task's own MVP default: the design's palette tokens are full \`#rrggbb\` values
-   * (§5.4) and OpenTUI targets truecolor terminals, but no spec section fixes a
-   * default numeric value for this capability — flagged here rather than assumed.
+   * The color-depth capability. 24 (truecolor) is this task's own MVP default: the
+   * design's palette tokens are full \`#rrggbb\` values (§5.4) and OpenTUI targets
+   * truecolor terminals, but no spec section fixes a default numeric value for this
+   * capability — flagged here rather than assumed.
    */
   const colorDepthAtom: import("@reatom/core").Atom<number, [newState: number]>;
 
@@ -136,12 +133,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
 
   // ── src/runtime/model/tokens
   /**
-   * The one theme id the COMPILED SEED carries. Deliberately NOT {@link ThemeId}, which spec §4.6
-   * widened to \`string\` because a project's theme names live in its own manifest: a
-   * \`Record<ThemeId, …>\` would become an index signature and, under this repository's
-   * \`noUncheckedIndexedAccess: true\`, make {@link themeTokens} return \`TokenMap | undefined\` —
-   * breaking three call sites outside this module for no gain. The seed registry is a closed,
-   * one-member thing and says so in its own type.
+   * The one theme id the COMPILED SEED carries. The seed registry is a closed, one-member
+   * thing and says so in its own type.
    */
   type SeedThemeId = "dark-default";
   /**
@@ -153,7 +146,7 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * the project's own \`design/system/design-system.json\`, delivered through
    * {@link themeTokensAtom}. Two jobs survive:
    *   1. the SEED the project-create scaffold and the mechanical migration copy into a new
-   *      project's manifest (plan P4 imports it from this module by path);
+   *      project's manifest;
    *   2. {@link themeTokensAtom}'s pre-mount default — see that atom's own note.
    */
   const DARK_DEFAULT: TokenMap;
@@ -161,47 +154,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   function themeTokens(id: SeedThemeId): TokenMap;
   /** The seed theme's id — the scaffold's starting point, not a project's active theme. */
   const DEFAULT_THEME_ID: SeedThemeId;
-  /**
-   * The active theme's id (spec §4.6). A HOST INPUT, exactly like \`hostModeAtom\` in
-   * \`./capabilities\`: the host child writes it once per mount from \`HostSessionSpec.theme\` through
-   * {@link seedThemeCapability}, and a page READS it (via \`themeCapability()\`) and must not write
-   * it.
-   */
   const themeIdAtom: import("@reatom/core").Atom<string, [newState: string]>;
-  /**
-   * The active theme's token map (spec §4.6) — the single source every colour default in the
-   * component catalog resolves against. A HOST INPUT, written once per mount through
-   * {@link seedThemeCapability}; the values come from the project's
-   * \`design/system/design-system.json\`, which is inside \`treeRoot\` and covered by \`expectedFiles\`,
-   * so no protocol change carries them.
-   *
-   * WHY THE DEFAULT IS THE COMPILED SEED AND NOT AN EMPTY MAP. Every catalog default reads a core
-   * role off this atom, so an empty map would render a page with no colours at all — §4.1's own
-   * argument ("a half-specified page reads as a broken render rather than an authored one"). The
-   * mount seeds before the first render, so in a real child this default is never what a frame is
-   * drawn from; it is what makes a runtime unit test and an un-seeded process coherent.
-   */
   const themeTokensAtom: import("@reatom/core").Atom<TokenMap, [newState: TokenMap]>;
-  /**
-   * THE SEAM the host wires (spec §4.6; plan P4). One named transition that moves BOTH theme
-   * atoms together, so a mount can never leave the id and the values describing different themes.
-   *
-   * It is an action rather than two \`atom.set\` calls at the call site because this is a grouped
-   * transition (Reatom RTM-S04), not an identity setter (RTM-S01) — it writes two atoms from one
-   * input and names the transition for tracing.
-   *
-   * P4 calls it from the host child's mount handler
-   * (\`src/host/session/model/host-state-machine.ts\`'s \`handleMount\`), BEFORE \`handle.mount(...)\`,
-   * importing it as \`runtime/model/tokens\` — the same deep-import shape
-   * \`src/entrypoint/model/create-shell.ts\` already uses for \`runtime/generated/runtime-dts\`. It is
-   * deliberately NOT on the \`@termcraft/runtime\` facade: an authored page must not be able to
-   * repaint its own theme.
-   *
-   * IT VALIDATES NOTHING. The manifest's \`#rrggbb\` form, its core-role completeness and its
-   * cross-theme parity are the Gate's checks (§7, plan P2), asserted once against the manifest
-   * before anything is mounted. A second, weaker check here would be a check that promises more
-   * than it can see.
-   */
   const seedThemeCapability: import("@reatom/core").GAction<(input: {
       readonly themeId: ThemeId;
       readonly tokens: TokenMap;
@@ -325,10 +279,7 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * project-declared name expressible at all.
    *
    * A page never indexes this type by a computed string — it reads a named field off its own
-   * manifest-derived \`Tokens\` type (§4.3), where every key is known, so
-   * \`noUncheckedIndexedAccess\` never widens a read to \`| undefined\`. The seventeen core roles
-   * stay declared PROPERTIES here for the same reason: the catalog's own defaults
-   * (\`activeTokens().border\`, \`.foreground\`, …) must be checked reads, not index accesses.
+   * manifest-derived \`Tokens\` type (§4.3), where every key is known.
    */
   interface TokenMap extends ThemeTokens {
       readonly [token: string]: Color;
@@ -351,11 +302,6 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
        * The declared theme this page pins to (spec §4.6). OPTIONAL: absent means the project
        * manifest's \`defaultTheme\`, which is the ordinary case; present, it pins the page to one
        * declared theme. The Gate checks the name against the project's manifest.
-       *
-       * KNOWN GAP until plan P4 lands: the Gate's own \`src/gate/model/page-contract.ts\` requires
-       * \`theme\` FIRST (\`MISSING_META_FIELD\`) — a themeless page never reaches the host. The host
-       * child's \`pageMetaSchema\` (\`src/host/session/model/source-mount.ts\`) requires it too, SECOND,
-       * with \`MALFORMED_PROTOCOL\`. P4 relaxes both; nothing in the repository omits \`theme\` today.
        */
       readonly theme?: ThemeId;
   }

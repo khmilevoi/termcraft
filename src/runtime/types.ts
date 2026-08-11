@@ -79,16 +79,17 @@ export interface ThemeTokens {
   readonly statusBg: Color;
 }
 
+// Implementation note: because that manifest-derived read is always a named field, this
+// repository's `noUncheckedIndexedAccess` never widens it to `| undefined`. The seventeen core
+// roles stay declared PROPERTIES here for the same reason: the catalog's own defaults
+// (`activeTokens().border`, `.foreground`, …) must be checked reads, not index accesses.
 /**
  * The active theme's whole token map (spec §4.1): the mandatory core roles above, plus any
  * number of token names the project declared. The index signature is what makes a
  * project-declared name expressible at all.
  *
  * A page never indexes this type by a computed string — it reads a named field off its own
- * manifest-derived `Tokens` type (§4.3), where every key is known, so
- * `noUncheckedIndexedAccess` never widens a read to `| undefined`. The seventeen core roles
- * stay declared PROPERTIES here for the same reason: the catalog's own defaults
- * (`activeTokens().border`, `.foreground`, …) must be checked reads, not index accesses.
+ * manifest-derived `Tokens` type (§4.3), where every key is known.
  */
 export interface TokenMap extends ThemeTokens {
   readonly [token: string]: Color;
@@ -108,15 +109,14 @@ export interface PageMeta {
   readonly title: string;
   /** Smallest export size and the status-bar warning threshold. */
   readonly minSize: Size;
+  // KNOWN GAP until plan P4 lands: the Gate's own `src/gate/model/page-contract.ts` requires
+  // `theme` FIRST (`MISSING_META_FIELD`) — a themeless page never reaches the host. The host
+  // child's `pageMetaSchema` (`src/host/session/model/source-mount.ts`) requires it too, SECOND,
+  // with `MALFORMED_PROTOCOL`. P4 relaxes both; nothing in the repository omits `theme` today.
   /**
    * The declared theme this page pins to (spec §4.6). OPTIONAL: absent means the project
    * manifest's `defaultTheme`, which is the ordinary case; present, it pins the page to one
    * declared theme. The Gate checks the name against the project's manifest.
-   *
-   * KNOWN GAP until plan P4 lands: the Gate's own `src/gate/model/page-contract.ts` requires
-   * `theme` FIRST (`MISSING_META_FIELD`) — a themeless page never reaches the host. The host
-   * child's `pageMetaSchema` (`src/host/session/model/source-mount.ts`) requires it too, SECOND,
-   * with `MALFORMED_PROTOCOL`. P4 relaxes both; nothing in the repository omits `theme` today.
    */
   readonly theme?: ThemeId;
 }

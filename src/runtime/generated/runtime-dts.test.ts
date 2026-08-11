@@ -81,7 +81,13 @@ describe("the prompt copy and the gate copy are separate artifacts (Task 7)", ()
     // The whole reason the split exists. A comfortable ceiling rather than an exact byte count:
     // this pins "still a prompt-sized attachment", not "unchanged", so an ordinary surface change
     // to `src/runtime` does not have to touch this number.
-    expect(fs.readFileSync(PROMPT_COPY).length).toBeLessThan(40_000);
+    //
+    // Raised from 40_000 (2026-08-11, spec 2026-08-11-project-design-systems-design §6): wave 2
+    // adds ~15 new wrapper components to the runtime facade, which will grow this file
+    // substantially beyond the old ceiling. 80_000 keeps deliberate headroom for that expansion
+    // while still failing on a runaway/copy-paste regression; it is not a hard prompt-budget
+    // number, just a comfortable multiple of the pre-wave-2 size.
+    expect(fs.readFileSync(PROMPT_COPY).length).toBeLessThan(80_000);
   });
 
   test("the PROMPT copy carries no inlined @reatom/core block", () => {
