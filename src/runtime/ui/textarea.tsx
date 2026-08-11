@@ -24,9 +24,19 @@ export interface TextareaProps {
   readonly grow?: number;
   /** Soft-wrap mode for long lines. Defaults to `word`. */
   readonly wrap?: "none" | "char" | "word";
-  /** Invoked with the whole buffer text on every edit (the intrinsic's `onContentChange`). */
+  /**
+   * Invoked with the whole buffer text on every edit (the intrinsic's `onContentChange`). The
+   * interactive path lands in phase 7; in the static headless render the handler is inert. Its
+   * value is read off the instance through the wrapper's own callback ref (see the component doc
+   * comment below), and that ref path has never been exercised — nothing delivers keystrokes to a
+   * page today, so it is covered only by a "mounts and renders with handlers attached" test.
+   * Whoever builds the interactive path must exercise it before relying on it.
+   */
   readonly onChange?: (value: string) => void;
-  /** Invoked when the editor's submit binding fires. */
+  /**
+   * Invoked when the editor's submit binding fires. The interactive path lands in phase 7; in the
+   * static headless render the handler is inert.
+   */
   readonly onSubmit?: () => void;
 }
 
@@ -95,6 +105,10 @@ export function Textarea(props: TextareaProps) {
       height={props.height}
       flexGrow={props.grow}
       wrapMode={props.wrap ?? "word"}
+      // `cursorStyle`, `attributes` and `tabIndicator`/`tabIndicatorColor` are DELIBERATELY left
+      // at their upstream `EditBufferOptions` defaults: the design ships no cursor-blink or
+      // tab-glyph recipe to pin them against. The export contract is unaffected — `showCursor`
+      // is forced false below under export, which makes the blinking default unreachable there.
       // §6.3: no cursor and no focus under export.
       showCursor={exporting ? false : props.focused === true}
       focused={exporting ? false : props.focused}

@@ -557,8 +557,11 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * A scrolling viewport (design-system §3.2, spec §6.1). Renders one OpenTUI \`<scrollbox>\`: a
    * fixed-size frame over content taller (or wider) than itself, with a proportional scrollbar
    * themed to the design's §28 recipe — a track in \`line\` and a thumb in \`accentDim\`, arrows off
-   * (\`design/termcraft-engine.js:1478-1483\`). A focused frame is drawn in \`accentHi\`, the hue the
-   * design's own palette legend labels \`focus\` (\`design/termcraft-engine.js:1876\`).
+   * (\`design/termcraft-engine.js:1478-1483\`); this is a REAL DESIGN FACT, drawn there. A focused
+   * frame is drawn in \`accentHi\`, the hue the design's own palette legend labels \`focus\`
+   * (\`design/termcraft-engine.js:1876\`) — but the design ships no screen of an authored page's
+   * focused scroll frame, so \`focusedBorderColor = accentHi\` is a MAPPING onto existing vocabulary,
+   * recorded here rather than invented as a new hue.
    *
    * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: the design's thumb is \`█\` with \`▀\`/\`▄\` at
    * half-cell precision, drawn by the engine itself. OpenTUI's \`SliderRenderable\` draws its own
@@ -600,9 +603,15 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly focused?: boolean;
       /** Viewport height in rows; defaults to the item count (one row per item). */
       readonly height?: number;
-      /** Invoked with an item id when the cursor MOVES onto it (the intrinsic's \`onChange\`). */
+      /**
+       * Invoked with an item id when the cursor MOVES onto it (the intrinsic's \`onChange\`). The
+       * interactive path lands in phase 7; in the static headless render the handler is inert.
+       */
       readonly onHighlight?: (id: string) => void;
-      /** Invoked with an item id when it is COMMITTED (the intrinsic's \`onSelect\`, i.e. Enter). */
+      /**
+       * Invoked with an item id when it is COMMITTED (the intrinsic's \`onSelect\`, i.e. Enter). The
+       * interactive path lands in phase 7; in the static headless render the handler is inert.
+       */
       readonly onSelect?: (id: string) => void;
   }
   /**
@@ -618,6 +627,13 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * and emit nothing (measured against \`@opentui/core@0.4.5\`), so re-passing them every render can
    * never loop back into \`onHighlight\`. \`options\` is written before \`selectedIndex\` so the clamp
    * sees the new list.
+   *
+   * THAT IS TRUE OF THE SETTER, NOT OF PREVIEW SYNC. \`@opentui/react\`'s \`updateProperties\` only
+   * re-applies a prop whose value CHANGED, and \`SelectRenderable\`'s own keyboard handling mutates
+   * \`_selectedIndex\` directly — so once the phase-7 input path lands, a user keyboard move followed
+   * by a re-render carrying the SAME \`selectedId\` will not correct the instance; the cursor stays
+   * where the user left it. This does not affect export (there is no keyboard there); the phase-7
+   * input path owes this a real controlled sync.
    *
    * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: the cursor marker is OpenTUI's own \`▶ \`
    * (U+25B6). The design's marker is \`▸\` (U+25B8) — the glyph \`List\` and \`Tabs\` render — but
@@ -799,9 +815,19 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly grow?: number;
       /** Soft-wrap mode for long lines. Defaults to \`word\`. */
       readonly wrap?: "none" | "char" | "word";
-      /** Invoked with the whole buffer text on every edit (the intrinsic's \`onContentChange\`). */
+      /**
+       * Invoked with the whole buffer text on every edit (the intrinsic's \`onContentChange\`). The
+       * interactive path lands in phase 7; in the static headless render the handler is inert. Its
+       * value is read off the instance through the wrapper's own callback ref (see the component doc
+       * comment below), and that ref path has never been exercised — nothing delivers keystrokes to a
+       * page today, so it is covered only by a "mounts and renders with handlers attached" test.
+       * Whoever builds the interactive path must exercise it before relying on it.
+       */
       readonly onChange?: (value: string) => void;
-      /** Invoked when the editor's submit binding fires. */
+      /**
+       * Invoked when the editor's submit binding fires. The interactive path lands in phase 7; in the
+       * static headless render the handler is inert.
+       */
       readonly onSubmit?: () => void;
   }
   /**

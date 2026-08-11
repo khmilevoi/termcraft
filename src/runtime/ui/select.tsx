@@ -26,9 +26,15 @@ export interface SelectProps {
   readonly focused?: boolean;
   /** Viewport height in rows; defaults to the item count (one row per item). */
   readonly height?: number;
-  /** Invoked with an item id when the cursor MOVES onto it (the intrinsic's `onChange`). */
+  /**
+   * Invoked with an item id when the cursor MOVES onto it (the intrinsic's `onChange`). The
+   * interactive path lands in phase 7; in the static headless render the handler is inert.
+   */
   readonly onHighlight?: (id: string) => void;
-  /** Invoked with an item id when it is COMMITTED (the intrinsic's `onSelect`, i.e. Enter). */
+  /**
+   * Invoked with an item id when it is COMMITTED (the intrinsic's `onSelect`, i.e. Enter). The
+   * interactive path lands in phase 7; in the static headless render the handler is inert.
+   */
   readonly onSelect?: (id: string) => void;
 }
 
@@ -45,6 +51,13 @@ export interface SelectProps {
  * and emit nothing (measured against `@opentui/core@0.4.5`), so re-passing them every render can
  * never loop back into `onHighlight`. `options` is written before `selectedIndex` so the clamp
  * sees the new list.
+ *
+ * THAT IS TRUE OF THE SETTER, NOT OF PREVIEW SYNC. `@opentui/react`'s `updateProperties` only
+ * re-applies a prop whose value CHANGED, and `SelectRenderable`'s own keyboard handling mutates
+ * `_selectedIndex` directly — so once the phase-7 input path lands, a user keyboard move followed
+ * by a re-render carrying the SAME `selectedId` will not correct the instance; the cursor stays
+ * where the user left it. This does not affect export (there is no keyboard there); the phase-7
+ * input path owes this a real controlled sync.
  *
  * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: the cursor marker is OpenTUI's own `▶ `
  * (U+25B6). The design's marker is `▸` (U+25B8) — the glyph `List` and `Tabs` render — but

@@ -37,8 +37,11 @@ export interface ScrollBoxProps {
  * A scrolling viewport (design-system §3.2, spec §6.1). Renders one OpenTUI `<scrollbox>`: a
  * fixed-size frame over content taller (or wider) than itself, with a proportional scrollbar
  * themed to the design's §28 recipe — a track in `line` and a thumb in `accentDim`, arrows off
- * (`design/termcraft-engine.js:1478-1483`). A focused frame is drawn in `accentHi`, the hue the
- * design's own palette legend labels `focus` (`design/termcraft-engine.js:1876`).
+ * (`design/termcraft-engine.js:1478-1483`); this is a REAL DESIGN FACT, drawn there. A focused
+ * frame is drawn in `accentHi`, the hue the design's own palette legend labels `focus`
+ * (`design/termcraft-engine.js:1876`) — but the design ships no screen of an authored page's
+ * focused scroll frame, so `focusedBorderColor = accentHi` is a MAPPING onto existing vocabulary,
+ * recorded here rather than invented as a new hue.
  *
  * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: the design's thumb is `█` with `▀`/`▄` at
  * half-cell precision, drawn by the engine itself. OpenTUI's `SliderRenderable` draws its own

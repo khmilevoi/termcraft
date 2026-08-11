@@ -74,6 +74,11 @@ describe("Select component (spec §6.1)", () => {
 // §6.3: an interactive widget must render a DEFINED STATIC STATE under export. Asserted, not
 // noted — a focus lift and a cursor that follows keys are exactly what makes a snapshot vary.
 describe("Select export determinism (spec §6.3)", () => {
+  // These tests exercise the forced `blur()` half of D3's "nothing focused" guarantee only
+  // (`focused={false}` under export). The second half — the focused fill collapsing onto the
+  // unfocused one in `select.tsx` — is unasserted defence-in-depth: because the widget is
+  // blurred, `focusedBackgroundColor` is never read, so these tests would stay green even if
+  // that collapse were deleted. Do not remove the collapse on the strength of these passing.
   test("under export nothing is focused: the body never lifts, even with `focused`", async () => {
     hostModeAtom.set("export");
     const handle = await createHeadlessRenderer({ w: 16, h: 3 });

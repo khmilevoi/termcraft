@@ -71,6 +71,11 @@ describe("Textarea component (spec §6.1)", () => {
 // so without the export remount key a snapshot would keep painting whatever text the instance
 // happened to be created with — the exact "internal state instead of props" §6.3 forbids.
 describe("Textarea export determinism (spec §6.3)", () => {
+  // These tests exercise the forced `blur()` half of D3's "nothing focused" guarantee only
+  // (`focused={false}` under export). The second half — the focused fill collapsing onto the
+  // unfocused one in `textarea.tsx` — is unasserted defence-in-depth: because the widget is
+  // blurred, `focusedBackgroundColor` is never read, so these tests would stay green even if
+  // that collapse were deleted. Do not remove the collapse on the strength of these passing.
   test("under export nothing is focused: the body never lifts, even with `focused`", async () => {
     hostModeAtom.set("export");
     const handle = await createHeadlessRenderer({ w: 20, h: 3 });

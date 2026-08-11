@@ -98,6 +98,11 @@ describe("ScrollBox component (spec §6.1)", () => {
 // §6.3: "scroll offset 0" is literal here. `follow` is the one prop that moves the offset off
 // zero, so it is exactly what the export contract has to override.
 describe("ScrollBox export determinism (spec §6.3)", () => {
+  // The "nothing is focused" test below exercises the forced `blur()` half of D3's guarantee
+  // only (`focused={false}` under export). The second half — the focused border collapsing onto
+  // the unfocused one in `scroll-box.tsx` — is unasserted defence-in-depth: because the widget is
+  // blurred, `focusedBorderColor` is never read, so that test would stay green even if the
+  // collapse were deleted. Do not remove the collapse on the strength of it passing.
   test("under export the viewport is pinned to offset 0, even with `follow`", async () => {
     hostModeAtom.set("export");
     const handle = await createHeadlessRenderer({ w: 12, h: 3 });
