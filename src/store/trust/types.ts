@@ -122,4 +122,15 @@ export interface TrustStore {
   isGranted(subject: TrustSubject): Promise<boolean>;
   /** Records the grant durably; `undefined` on success. */
   grant(subject: TrustSubject): Promise<TrustError | undefined>;
+  /**
+   * A design-system source subject (project-design-systems §8.4). Synchronous and total: unlike
+   * a project subject it resolves no path and reads no filesystem identity — the caller supplies
+   * the canonical location and, for a filesystem-backed source, its identity string, exactly as
+   * it already supplies a `GitIdentity`.
+   */
+  buildSourceSubject(input: SourceTrustSubjectInput): SourceTrustSubject;
+  /** `false` on a missing, unreadable, corrupt, tampered, or wrong-KIND record — never fails open. */
+  isSourceGranted(subject: SourceTrustSubject): Promise<boolean>;
+  /** Records the source grant durably; `undefined` on success. */
+  grantSource(subject: SourceTrustSubject): Promise<TrustError | undefined>;
 }

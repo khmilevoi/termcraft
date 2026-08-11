@@ -14,12 +14,19 @@ import type {
   AbsPath,
   GitIdentity,
   Sha256Hex,
+  SourceTrustSubject,
+  SourceTrustSubjectInput,
   TrustFsDeps,
   TrustStore,
   TrustStoreDeps,
   TrustSubject,
 } from "../types";
-import { canonicalizeRepoRelativePath, canonicalizeTrustPath, trustSubjectKey } from "./subject";
+import {
+  canonicalizeRepoRelativePath,
+  canonicalizeTrustPath,
+  sourceTrustSubjectKey,
+  trustSubjectKey,
+} from "./subject";
 
 // ---- errors -------------------------------------------------------------------
 
@@ -82,7 +89,7 @@ const gitIdentitySchema = z.object({
  * `isGranted` can re-derive the key from the record's own fields: a record whose fields
  * no longer digest to the key it is filed under is tampered or corrupt and grants nothing.
  */
-const grantRecordSchema = z.object({
+const projectGrantRecordSchema = z.object({
   // storage-identity §12: "other JSON uses `schemaVersion`" — the trust ledger's grant
   // record is a plain JSON file, neither TOML nor JSONL, so it follows that rule rather than
   // the JSONL-header `formatVersion` name (minor finding #4's `trust-store.ts` half).
@@ -94,6 +101,29 @@ const grantRecordSchema = z.object({
   git: gitIdentitySchema.nullable(),
   grantedAt: rfc3339UtcSchema,
 });
+
+/**
+ * A SOURCE grant record (project-design-systems §8.4). `kind` is the record-level discriminator;
+ * the ENCODING's discriminator is its own domain-separation prefix (`model/subject.ts`).
+ *
+ * Project records are deliberately still written WITHOUT a `kind` field, so a build that predates
+ * this change still reads every project grant it wrote. A build that predates it meeting a source
+ * record fails this schema, logs, and returns `false` — fails closed, which is this ledger's
+ * standing rule.
+ */
+const sourceGrantRecordSchema = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal("source"),
+  key: z.string().regex(/^[0-9a-f]{64}$/),
+  sourceKind: z.string().min(1),
+  sourceId: z.string().min(1),
+  canonicalLocation: z.string().min(1),
+  locationFilesystemIdentity: z.string().nullable(),
+  grantedAt: rfc3339UtcSchema,
+});
+
+/** Source first: it is the only variant carrying `kind`, so the union is unambiguous either way. */
+const grantRecordSchema = z.union([sourceGrantRecordSchema, projectGrantRecordSchema]);
 
 // ---- the production filesystem wiring -------------------------------------------
 
@@ -274,14 +304,22 @@ export function createTrustStore(deps: TrustStoreDeps): TrustStore {
       const record = decodeGrantRecord(bytes, grantPath);
       if (record === null) return false;
 
+      // A record of the other KIND is not a grant for this subject. Unreachable through the key
+      // alone (the two encodings carry different domain-separation prefixes), but asserted here
+      // so the guarantee does not rest on a digest argument.
+      if ("kind" in record) {
+        log.warn(
+          "trust: grant record ignored:",
+          `${grantPath} is a source grant, not a project grant`,
+        );
+        return false;
+      }
+
       // Re-derive the key from the record's OWN fields: a record filed under one key whose
       // contents digest to another has been tampered with and grants nothing.
       const derived = trustSubjectKey(record);
       if (derived !== record.key || derived !== subject.key) {
-        log.warn(
-          "trust: grant record ignored:",
-          `${grantPath} does not derive its own trust key`,
-        );
+        log.warn("trust: grant record ignored:", `${grantPath} does not derive its own trust key`);
         return false;
       }
       return true;
@@ -306,6 +344,87 @@ export function createTrustStore(deps: TrustStoreDeps): TrustStore {
         projectFilesystemIdentity: subject.projectFilesystemIdentity,
         projectId: subject.projectId,
         git: subject.git,
+        grantedAt: deps.clock.now().toISOString(),
+      };
+      const grantPath = trustGrantPath(deps.userStateRoot, subject.key);
+      const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\n`);
+
+      const wrote = deps.fs.durableWrite(grantPath, bytes);
+      if (wrote instanceof Error) {
+        return new TrustLedgerError({
+          operation: "write",
+          path: grantPath,
+          detail: wrote.message,
+          cause: wrote,
+        });
+      }
+      return undefined;
+    },
+
+    buildSourceSubject(input: SourceTrustSubjectInput) {
+      // No realpath and no fs identity read: a source's location is supplied canonical by its
+      // caller, the same way a `GitIdentity` already is.
+      const normalized: SourceTrustSubjectInput = {
+        sourceKind: input.sourceKind,
+        sourceId: input.sourceId,
+        canonicalLocation: canonicalizeTrustPath(input.canonicalLocation),
+        locationFilesystemIdentity: input.locationFilesystemIdentity,
+      };
+      return { ...normalized, key: sourceTrustSubjectKey(normalized) } satisfies SourceTrustSubject;
+    },
+
+    async isSourceGranted(subject: SourceTrustSubject) {
+      const grantPath = trustGrantPath(deps.userStateRoot, subject.key);
+
+      const bytes = deps.fs.readFile(grantPath);
+      if (bytes instanceof Error) {
+        // Never propagated: an unreadable ledger means "no grant to honor", not a grant.
+        log.warn("trust: source grant read failed:", bytes.message);
+        return false;
+      }
+      if (bytes === null) return false;
+
+      const record = decodeGrantRecord(bytes, grantPath);
+      if (record === null) return false;
+      if (!("kind" in record)) {
+        log.warn(
+          "trust: grant record ignored:",
+          `${grantPath} is a project grant, not a source grant`,
+        );
+        return false;
+      }
+
+      const derived = sourceTrustSubjectKey(record);
+      if (derived !== record.key || derived !== subject.key) {
+        log.warn(
+          "trust: source grant record ignored:",
+          `${grantPath} does not derive its own trust key`,
+        );
+        return false;
+      }
+      return true;
+    },
+
+    async grantSource(subject: SourceTrustSubject) {
+      const ledgerDir = trustLedgerDir(deps.userStateRoot);
+      const created = deps.fs.ensureDir(ledgerDir);
+      if (created instanceof Error) {
+        return new TrustLedgerError({
+          operation: "mkdir",
+          path: ledgerDir,
+          detail: created.message,
+          cause: created,
+        });
+      }
+
+      const record = {
+        schemaVersion: 1,
+        kind: "source",
+        key: subject.key,
+        sourceKind: subject.sourceKind,
+        sourceId: subject.sourceId,
+        canonicalLocation: subject.canonicalLocation,
+        locationFilesystemIdentity: subject.locationFilesystemIdentity,
         grantedAt: deps.clock.now().toISOString(),
       };
       const grantPath = trustGrantPath(deps.userStateRoot, subject.key);
