@@ -371,10 +371,13 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // and `entrypoint/model/design-checker.ts` with its test — taking it to 943.
     // focus-scoped-hotkeys Task 6 adds `ui/workspace/model/hint-keys.ts` and its own
     // `hint-keys.test.ts`, and the pin-anchor fix adds `ui/preview/model/element-rects.ts` and
-    // its test — two branches, two files each, taking it to 947
+    // its test — two branches, two files each, taking it to 947. P3 (`source-port-and-local-adapter`)
+    // adds 34: `entities/design-system-ref`'s four, `core/ports/design-system-source.ts` and the
+    // fake plus its test, and the `store/design-systems` module with
+    // `store/adapters/design-system-source.ts` and their tests — taking it to 981.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(947);
+    expect(files.length).toBe(981);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {
