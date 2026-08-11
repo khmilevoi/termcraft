@@ -72,7 +72,7 @@ export function Diff(props: DiffProps) {
       id={props.id}
       diff={props.patch}
       view={props.view ?? "unified"}
-      showLineNumbers={props.showLineNumbers}
+      showLineNumbers={props.showLineNumbers ?? false}
       wrapMode={props.wrap}
       fg={props.color ?? tokens.foreground}
       lineNumberFg={props.lineNumberColor ?? tokens.foregroundFaint}

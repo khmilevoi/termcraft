@@ -136,6 +136,33 @@ describe("Diff component (design-system §6.1)", () => {
     expect(handle.renderError()).toBeNull();
     expect(lines(handle.capture()).join("").trim()).toBe("");
   });
+
+  // The JSDoc on `showLineNumbers` promises "Defaults to off". Do not assert on digits/glyphs
+  // directly — the fixture's own content contains "1"/"2"/"3"/"4", so a naive "no line numbers in
+  // the frame" check would be fragile or vacuous. Compare whole frames instead: omitting the prop
+  // must render byte-identically to explicitly passing `false`.
+  const captureOf = async (element: unknown): Promise<string> => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 6 });
+    handle.mount(element);
+    await handle.render();
+    const captured = JSON.stringify(handle.capture());
+    handle.destroy();
+    return captured;
+  };
+
+  test("omitting showLineNumbers renders identically to passing it false — the documented default", async () => {
+    const omitted = await captureOf(<Diff id="patch" patch={PATCH} />);
+    const explicitFalse = await captureOf(
+      <Diff id="patch" patch={PATCH} showLineNumbers={false} />,
+    );
+    expect(omitted).toBe(explicitFalse);
+  });
+
+  test("explicitly enabling showLineNumbers renders a different frame than the default", async () => {
+    const omitted = await captureOf(<Diff id="patch" patch={PATCH} />);
+    const withGutters = await captureOf(<Diff id="patch" patch={PATCH} showLineNumbers />);
+    expect(withGutters).not.toBe(omitted);
+  });
 });
 
 // §6.3. `Diff` exposes no scroll and no focus, and layer 1 runs no async highlight pass, so the
