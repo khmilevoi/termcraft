@@ -81,6 +81,24 @@ A worked stopwatch, because it is the canonical case that trips this rule:
 A stopwatch in a design preview advances when something advances it, and a page cannot
 advance itself. That is the runtime's shape, not a missing feature.
 
+## Code and rendered markdown
+
+`Code` shows source text; `Markdown` renders a markdown document, including its fenced code
+blocks. Both need only `id` and `content`.
+
+    <Code id="snippet" language="typescript" content={source} />
+    <Markdown id="notes" content={doc} />
+
+Syntax colours come from the project's theme. There is no colour prop, no style prop, and no
+way to pass a palette — a page cannot recolour syntax, and does not need to.
+
+`Code` takes an optional `language`. `Markdown` takes none: a fenced block names its own
+language in its info string.
+
+Only `typescript`, `javascript`, `markdown` and `zig` highlight. Any other language — and
+`Code` with no `language` at all — renders as plain themed text. That is a normal outcome, not
+an error: nothing is downloaded at runtime, so a build ships exactly these grammars.
+
 ## What not to do
 
 See "Time and the sealed render" above for the determinism rule. No imports beyond

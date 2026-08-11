@@ -1,34 +1,20 @@
 import { describe, expect, test } from "bun:test";
 
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
+
 import { DesignSystemPackageInvalidError } from "./errors";
 import { readDesignSystemSummary } from "./summary";
 
 const utf8 = (text: string) => new Uint8Array(Buffer.from(text, "utf8"));
 
-/** The §3.2 sample manifest, trimmed to what a summary reads plus one field it must ignore. */
-const MANIFEST = {
-  schemaVersion: 1,
-  id: "midnight",
-  name: "Midnight",
-  version: "1.2.0",
-  kitApiVersion: 1,
-  defaultTheme: "dark",
-  themes: {
-    dark: {
-      label: "Midnight Dark",
-      tokens: {
-        background: "#0b0f14",
-        surface: "#131a24",
-        accent: "#4cc9f0",
-        brandBlue: "#4cc9f0",
-      },
-    },
-  },
-  components: [
-    { name: "Button", module: "components/Button.tsx", export: "Button" },
-    { name: "PageShell", module: "components/PageShell.tsx", export: "PageShell" },
-  ],
-};
+/** A manifest `decodeDesignSystemManifest` actually accepts — `readDesignSystemSummary` now
+ *  decodes through that same decoder, so a fixture the old private schema tolerated but the
+ *  decoder rejects (e.g. a theme missing core roles) would fail every "still summarizes" test for
+ *  reasons unrelated to what it is testing. `validManifestObject` is the one shared valid manifest
+ *  (see its own doc) — used here instead of a second, hand-rolled one. */
+const MANIFEST = validManifestObject();
+const DEFAULT_THEME = (MANIFEST.themes as Record<string, { label: string; tokens: Record<string, string> }>)
+  .dark;
 
 const read = (value: unknown) => readDesignSystemSummary(utf8(JSON.stringify(value)), "m.json");
 
@@ -46,12 +32,12 @@ describe("readDesignSystemSummary — what the picker needs (design §8.1)", () 
   test("projects the DEFAULT theme's tokens as an ordered list, in declaration order", () => {
     const summary = read(MANIFEST);
     if (summary instanceof Error) throw summary;
-    expect(summary.defaultThemeTokens).toEqual([
-      { name: "background", value: "#0b0f14" },
-      { name: "surface", value: "#131a24" },
-      { name: "accent", value: "#4cc9f0" },
-      { name: "brandBlue", value: "#4cc9f0" },
-    ]);
+    // Built from the fixture's own token map rather than a second hand-typed literal — this still
+    // catches a summary that reorders or drops tokens, since `Object.entries` here preserves the
+    // manifest's declaration order independently of whatever `readDesignSystemSummary` did.
+    expect(summary.defaultThemeTokens).toEqual(
+      Object.entries(DEFAULT_THEME.tokens).map(([name, value]) => ({ name, value })),
+    );
   });
 
   test("reads only the component NAMES — never their modules or exports", () => {
@@ -67,38 +53,38 @@ describe("readDesignSystemSummary — what the picker needs (design §8.1)", () 
   });
 });
 
-describe("readDesignSystemSummary — what it deliberately does NOT judge (P2 owns §7)", () => {
-  test("a theme missing core roles still summarizes — parity and core roles are Gate fatals", () => {
-    const summary = read({
-      ...MANIFEST,
-      themes: { dark: { label: "d", tokens: { accent: "#4cc9f0" } } },
-    });
-    expect(summary).not.toBeInstanceOf(Error);
-  });
-
-  test("a non-hex token value still summarizes — the value shape is a Gate fatal", () => {
-    const summary = read({
-      ...MANIFEST,
-      themes: { dark: { label: "d", tokens: { accent: "rebeccapurple" } } },
-    });
-    if (summary instanceof Error) throw summary;
-    expect(summary.defaultThemeTokens).toEqual([{ name: "accent", value: "rebeccapurple" }]);
-  });
-
-  test("an unsupported kitApiVersion still summarizes — support is a Gate fatal", () => {
+describe("readDesignSystemSummary — what decodeDesignSystemManifest still leaves to the Gate", () => {
+  test("an unsupported kitApiVersion still summarizes — kit-support is checked by gate/model/design-system.ts, not the decoder", () => {
     expect(read({ ...MANIFEST, kitApiVersion: 99 })).not.toBeInstanceOf(Error);
   });
+});
 
-  test("a second theme is ignored rather than compared — cross-theme parity is a Gate fatal", () => {
+describe("readDesignSystemSummary — now rejected because the shared decoder enforces §7 (P2 owns it)", () => {
+  test("a theme missing a core role no longer summarizes — §4.1 core-role presence is now checked here too", () => {
+    const summary = read({
+      ...MANIFEST,
+      themes: { dark: { label: "d", tokens: { accent: DEFAULT_THEME.tokens.accent } } },
+    });
+    expect(summary).toBeInstanceOf(DesignSystemPackageInvalidError);
+  });
+
+  test("a non-hex token value no longer summarizes — §4.1's colour-format check is now enforced here too", () => {
+    const summary = read({
+      ...MANIFEST,
+      themes: { dark: { ...DEFAULT_THEME, tokens: { ...DEFAULT_THEME.tokens, accent: "rebeccapurple" } } },
+    });
+    expect(summary).toBeInstanceOf(DesignSystemPackageInvalidError);
+  });
+
+  test("a second theme with mismatched tokens is now rejected outright — §4.2 parity is checked across every theme, not only the default one", () => {
     const summary = read({
       ...MANIFEST,
       themes: {
-        dark: MANIFEST.themes.dark,
+        dark: DEFAULT_THEME,
         light: { label: "l", tokens: { onlyHere: "#ffffff" } },
       },
     });
-    if (summary instanceof Error) throw summary;
-    expect(summary.defaultThemeTokens.map((token) => token.name)).not.toContain("onlyHere");
+    expect(summary).toBeInstanceOf(DesignSystemPackageInvalidError);
   });
 });
 
@@ -110,7 +96,15 @@ describe("readDesignSystemSummary — rejections", () => {
   });
 
   test("rejects a manifest missing a field the picker needs", () => {
-    for (const field of ["id", "name", "version", "kitApiVersion", "defaultTheme", "themes"]) {
+    for (const field of [
+      "schemaVersion",
+      "id",
+      "name",
+      "version",
+      "kitApiVersion",
+      "defaultTheme",
+      "themes",
+    ]) {
       const partial: Record<string, unknown> = { ...MANIFEST };
       delete partial[field];
       expect(read(partial)).toBeInstanceOf(DesignSystemPackageInvalidError);

@@ -6,6 +6,7 @@ import type { CapturedFrame, RenderHandle } from "../types";
 import { createRenderErrorSink, withRenderErrorCapture } from "./error-capture";
 import type { RenderErrorSink } from "./error-capture";
 import { describeElement, hitTestRenderer, layoutTreeOf, rectOfElement } from "./geometry";
+import { collectHighlightingPromises, frameFingerprint, settleFrames } from "./settle";
 import { styledRowsFromSpanLines } from "./span-rows";
 import { createHeadlessStreams } from "./streams";
 
@@ -47,6 +48,24 @@ export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> 
       renderer.intermediateRender();
       await renderer.idle();
     },
+    async settle(options) {
+      return settleFrames({
+        render: async () => {
+          renderer.intermediateRender();
+          await renderer.idle();
+        },
+        snapshot: () =>
+          frameFingerprint({
+            width: renderer.currentRenderBuffer.width,
+            height: renderer.currentRenderBuffer.height,
+            rows: styledRowsFromSpanLines(renderer.currentRenderBuffer.getSpanLines()),
+          }),
+        pending: () => collectHighlightingPromises(renderer.root),
+        now: () => Date.now(),
+        sleep: (ms) => Bun.sleep(ms),
+        options,
+      });
+    },
     capture(): CapturedFrame {
       const buffer = renderer.currentRenderBuffer;
       return {
@@ -73,6 +92,9 @@ export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> 
     },
     layoutTree() {
       return layoutTreeOf(renderer);
+    },
+    pendingHighlights() {
+      return collectHighlightingPromises(renderer.root);
     },
   };
 }

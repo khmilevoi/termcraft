@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { parseDesignSystemRef } from "entities/design-system-ref";
 import { systemClock } from "infrastructure/clock";
 

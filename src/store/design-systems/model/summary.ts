@@ -1,100 +1,85 @@
-import * as errore from "errore";
-import { z } from "zod";
+import type { DesignSystemManifestV1 } from "entities/design-system";
+import { decodeDesignSystemManifest } from "entities/design-system";
 
 import type { AbsPath, DesignSystemSummary, TokenSwatch } from "../types";
 import { DesignSystemPackageInvalidError } from "./errors";
 
 /**
- * A MINIMAL, NON-EXECUTING read of `design-system.json` — exactly the seven facts a picker's
- * swatch row needs (design §8.1), and nothing more.
+ * A read of `design-system.json` through `entities/design-system`'s decoder — the same manifest
+ * authority the Gate itself uses — projected onto exactly the seven facts a picker's swatch row
+ * needs (design §8.1).
  *
- * RECONCILIATION SEAM (project-design-systems §10.1, wave 1). P2 (`manifest-and-gate`) owns the
- * real manifest entity in `entities/design-system`: the full Zod schema, the decoder, and every
- * §7 fatal. P3 ships in parallel with P2 and cannot import what has not landed, so this file
- * carries its own deliberately-narrow schema. AT SYNC POINT 1 the follow-up is: keep
- * `toDesignSystemSummary`, delete `summarySchema`, and call `entities/design-system`'s decoder
- * instead — one parser, one authority. Whoever resolves sync point 1 (or P10) owns that change.
+ * RECONCILIATION SEAM RESOLVED (project-design-systems §10.1, sync point 1). This file used to
+ * carry its own private, deliberately-narrow Zod schema: P3 shipped in parallel with P2
+ * (`manifest-and-gate`, which owns `entities/design-system`'s real manifest schema and decoder)
+ * and could not import what had not landed yet. Now that P2 is merged, `readDesignSystemSummary`
+ * calls `decodeDesignSystemManifest` directly; `toDesignSystemSummary` is the pure, no-I/O
+ * projection from an ALREADY-DECODED manifest onto the seven picker facts — exactly the function
+ * the seam predicted keeping. One parser, one authority, as intended.
  *
- * THIS IS NOT A VALIDITY VERDICT. It deliberately does NOT check core-role presence, cross-theme
- * token parity, lowercase `#rrggbb` values, component resolvability, or whether `kitApiVersion`
- * is supported. Those are §7's Gate fatals and duplicating them here would create a second,
- * drifting authority. A summary says only "readable enough to show".
+ * BEHAVIOURAL CONSEQUENCE OF SHARING THE DECODER — read before touching this file's tests: the
+ * entity decoder enforces materially more than the old private schema did. Every theme must
+ * declare every core token role (§4.1), token names must match across every theme (§4.2), every
+ * token value must be a lowercase `#rrggbb` colour (§4.1, which also subsumes the old private
+ * schema's separate array-index-token-name guard — `tokenNameSchema` requires an identifier-shaped
+ * name, so a purely-numeric key like `"0"` never parses), `id`/theme ids/`defaultTheme` must be
+ * kebab slugs (decision D4), and every component needs a resolvable `module`/`export` pair, not
+ * just a `name`. A candidate manifest that fails any of those now fails to LIST at all, where it
+ * used to summarize successfully and defer the judgment to the Gate.
  *
- * It parses JSON and never executes or compiles anything — the property §3.2 makes the manifest
- * data-shaped for, and what §11's "`list` never opens a `.tsx`" rests on.
+ * THIS IS ACCEPTED, NOT WORKED AROUND. §8.1's picker lists candidates that have never been
+ * through the Gate; a candidate that fails basic schema shape now simply has nothing to show,
+ * rather than showing a row the Gate would immediately reject anyway. The alternative — a second,
+ * looser parser here — is exactly the drifting-authority risk P2 exists to remove. The one
+ * exception is `kitApiVersion` SUPPORT: `decodeDesignSystemManifest` only checks it is a positive
+ * integer, not that it names a version this binary targets — that bound lives in
+ * `gate/model/design-system.ts`'s `SUPPORTED_KIT_API_VERSIONS`, a Gate-only check — so an
+ * unsupported-but-well-formed `kitApiVersion` still summarizes here, same as before.
+ *
+ * It still parses and never executes or compiles anything — `decodeDesignSystemManifest` is pure
+ * Zod — the property §3.2 makes the manifest data-shaped for, and what §11's "`list` never opens a
+ * `.tsx`" rests on.
  */
-
-const themeSchema = z.object({
-  tokens: z.record(z.string().min(1), z.string()),
-});
-
-const summarySchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  version: z.string().min(1),
-  kitApiVersion: z.number().int(),
-  defaultTheme: z.string().min(1),
-  themes: z.record(z.string().min(1), themeSchema),
-  components: z.array(z.object({ name: z.string().min(1) })).optional(),
-});
 
 /**
- * A canonical non-negative integer key is an ARRAY INDEX to JavaScript, and array-index keys
- * are enumerated before every string key regardless of insertion order — which would silently
- * scramble the swatch row. Refused narrowly and honestly rather than drawn in the wrong order.
+ * The pure projection from an already-decoded manifest onto what a picker's swatch row needs
+ * (design §8.1). No I/O, no parsing, no validation of its own — `entities/design-system`'s
+ * decoder is the one authority for whether `manifest` is well-formed; this function only reshapes
+ * what it already verified.
  */
-const ARRAY_INDEX_KEY = /^(0|[1-9]\d*)$/;
-
-export function readDesignSystemSummary(bytes: Uint8Array, manifestPath: AbsPath) {
-  const parsed = errore.try({
-    try: () => JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>,
-    catch: (cause) =>
-      new DesignSystemPackageInvalidError({
-        path: manifestPath,
-        reason: "manifest is not valid JSON",
-        cause,
-      }),
-  });
-  if (parsed instanceof Error) return parsed;
-
-  const decoded = summarySchema.safeParse(parsed);
-  if (!decoded.success) {
-    return new DesignSystemPackageInvalidError({
-      path: manifestPath,
-      reason: "manifest is missing a field the picker needs",
-      cause: decoded.error,
-    });
-  }
-
-  const theme = decoded.data.themes[decoded.data.defaultTheme];
-  if (theme === undefined) {
-    return new DesignSystemPackageInvalidError({
-      path: manifestPath,
-      reason: `defaultTheme "${decoded.data.defaultTheme}" names no declared theme`,
-    });
-  }
-
-  const names = Object.keys(theme.tokens);
-  const indexLike = names.find((name) => ARRAY_INDEX_KEY.test(name));
-  if (indexLike !== undefined) {
-    return new DesignSystemPackageInvalidError({
-      path: manifestPath,
-      reason: `token name "${indexLike}" is an array index and would reorder the swatch row`,
-    });
-  }
-
-  const defaultThemeTokens: readonly TokenSwatch[] = names.map((name) => ({
-    name,
-    value: theme.tokens[name] as string,
-  }));
+export function toDesignSystemSummary(manifest: DesignSystemManifestV1): DesignSystemSummary {
+  // Non-null: `decodeDesignSystemManifest`'s own DEFAULT_THEME_UNDECLARED check guarantees
+  // `defaultTheme` names a theme this manifest actually declares.
+  const theme = manifest.themes[manifest.defaultTheme]!;
+  const defaultThemeTokens: readonly TokenSwatch[] = Object.entries(theme.tokens).map(
+    ([name, value]) => ({ name, value }),
+  );
 
   return {
-    id: decoded.data.id,
-    name: decoded.data.name,
-    version: decoded.data.version,
-    kitApiVersion: decoded.data.kitApiVersion,
-    defaultTheme: decoded.data.defaultTheme,
+    id: manifest.id,
+    name: manifest.name,
+    version: manifest.version,
+    kitApiVersion: manifest.kitApiVersion,
+    defaultTheme: manifest.defaultTheme,
     defaultThemeTokens,
-    componentNames: (decoded.data.components ?? []).map((component) => component.name),
-  } satisfies DesignSystemSummary;
+    componentNames: manifest.components.map((component) => component.name),
+  };
+}
+
+export function readDesignSystemSummary(bytes: Uint8Array, manifestPath: AbsPath) {
+  // `TextDecoder.decode` without `{ fatal: true }` never throws — invalid byte sequences become
+  // U+FFFD — so no `errore` boundary is needed here; `decodeDesignSystemManifest` owns the one
+  // real failure mode (invalid JSON) below.
+  const text = new TextDecoder().decode(bytes);
+
+  const manifest = decodeDesignSystemManifest(text);
+  if (manifest instanceof Error) {
+    return new DesignSystemPackageInvalidError({
+      path: manifestPath,
+      reason: `manifest is invalid [${manifest.code}]: ${manifest.reason}`,
+      cause: manifest,
+    });
+  }
+
+  return toDesignSystemSummary(manifest);
 }

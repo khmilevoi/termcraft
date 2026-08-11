@@ -128,3 +128,8 @@ export { TextTable } from "./ui/text-table";
 export type { TextTableProps, TextTableCell, TextTableSpan } from "./ui/text-table";
 export { FrameBuffer } from "./ui/frame-buffer";
 export type { FrameBufferProps, FrameBufferSurface } from "./ui/frame-buffer";
+
+export { Code } from "./ui/code";
+export type { CodeProps } from "./ui/code";
+export { Markdown } from "./ui/markdown";
+export type { MarkdownProps } from "./ui/markdown";

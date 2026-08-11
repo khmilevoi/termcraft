@@ -401,7 +401,12 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // submodule with its tests — taking it to 1019.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(1019);
+    // wrappers-code-markdown (P8) adds `runtime/model/syntax-style.ts`, `runtime/ui/code.tsx`,
+    // `runtime/ui/markdown.tsx`, `host/render/model/settle.ts` and a test beside each
+    // (minus one shared), taking it to 1027.
+    // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
+    // grows.
+    expect(files.length).toBe(1027);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

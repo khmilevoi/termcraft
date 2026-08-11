@@ -57,6 +57,76 @@ const held: HeldLine[] = [];
 let droppedWhileHeld = 0;
 
 /**
+ * The pre-bridge `console` methods, captured at install time.
+ *
+ * WHY AN INDIRECTION AT ALL. `installThirdPartyConsoleBridge` replaces `console.warn` with a
+ * call into `emit`, and `emit`'s passthrough branch writes to `console`. Without this capture
+ * that is an infinite loop. With it, a bridged passthrough writes to the function the bridge
+ * replaced, and an UNBRIDGED passthrough still writes to whatever `console[method]` currently
+ * is — which is what keeps every test that `spyOn(console, …)` working exactly as before.
+ */
+let bridged: Partial<Record<ConsoleMethod, (...args: unknown[]) => void>> | null = null;
+
+const CONSOLE_METHODS: readonly ConsoleMethod[] = ["log", "info", "warn", "error", "debug"];
+
+function writeThrough(method: ConsoleMethod, args: readonly unknown[]): void {
+  const captured = bridged?.[method];
+  if (captured !== undefined) {
+    captured(...args);
+    return;
+  }
+  console[method](...args);
+}
+
+/**
+ * Route a DEPENDENCY's own `console.*` calls into `log.*`.
+ *
+ * WHY THIS EXISTS. `@opentui/core` reports highlight failures with
+ * `console.warn("Code highlighting failed, falling back to plain text:", error)` and its
+ * `TreeSitterClient` reports worker/init failures with `console.error`. Under
+ * `consoleMode: "disabled"` OpenTUI does not silence those — `TerminalConsoleCache.deactivate()`
+ * RESTORES the real console — so they write to the real `console`, which sends `warn`/`error` to
+ * STDERR. In the interactive shell, which owns the whole terminal (raw mode + alternate screen)
+ * for the run's lifetime, stdout and stderr are the SAME tty, so an unbridged line still corrupts
+ * the visible frame — `suspendConsolePassthrough` (below) is what actually guards that case. In
+ * the `_host --stdio` child, by contrast, stderr is a pipe SEPARATE from the stdout protocol
+ * pipe, drained independently by the supervisor — nothing there calls
+ * `suspendConsolePassthrough()` (its only call site is `ui/app/model/render-root.tsx`), so a
+ * bridged line reaches stderr exactly as an unbridged one would; this bridge is not a
+ * framing guard for that process. What it buys in BOTH processes is recoverability: the line
+ * also lands in the trace file, so a dependency diagnostic that would otherwise be gone the
+ * moment the process exits can be read back after the fact. termcraft's own call sites already
+ * report through `log.*`; this closes the one hole left, for code termcraft does not own.
+ *
+ * DELIBERATELY NOT THE OLD GLOBAL TEE. This is installed by the two processes that own a byte
+ * stream and by nothing else, it is uninstalled when they hand the stream back, and it is never
+ * installed under `bun test` unless a test installs it. Idempotent by identity: a second call
+ * while installed is a no-op, so the bridge can never chain onto itself.
+ */
+export function installThirdPartyConsoleBridge(): void {
+  if (bridged !== null) return;
+  const captured: Partial<Record<ConsoleMethod, (...args: unknown[]) => void>> = {};
+  for (const method of CONSOLE_METHODS) {
+    captured[method] = console[method].bind(console) as (...args: unknown[]) => void;
+  }
+  bridged = captured;
+  for (const method of CONSOLE_METHODS) {
+    console[method] = (...args: unknown[]) => emit(method, defaultSink, args);
+  }
+}
+
+/** Hand `console` back exactly as it was at install. Idempotent, and safe when never installed. */
+export function uninstallThirdPartyConsoleBridge(): void {
+  const captured = bridged;
+  if (captured === null) return;
+  bridged = null;
+  for (const method of CONSOLE_METHODS) {
+    const original = captured[method];
+    if (original !== undefined) console[method] = original;
+  }
+}
+
+/**
  * Stop `log.*` from reaching `console`; keep mirroring into the sink. Call this the moment a
  * renderer takes the terminal, and pair it with {@link resumeConsolePassthrough}.
  *
@@ -102,11 +172,11 @@ function flushHeld(): void {
   // Ahead of the survivors, because the dropped ones were the oldest — this reads in the order
   // the lines happened.
   if (dropped > 0) {
-    console.error(
+    writeThrough("error", [
       `termcraft: ${dropped} earlier log line(s) were dropped while the terminal was held (the buffer keeps the most recent ${MAX_HELD_LINES})`,
-    );
+    ]);
   }
-  for (const line of lines) console[line.method](...line.args);
+  for (const line of lines) writeThrough(line.method, line.args);
 }
 
 function hold(method: ConsoleMethod, args: readonly unknown[]): void {
@@ -136,7 +206,7 @@ function emit(method: ConsoleMethod, sink: TeeSink, args: readonly unknown[]): v
   const captured = sink.enabled();
   if (captured) sink.trace(`console.${method}`, { args: args.map(describe) });
   if (passthrough) {
-    console[method](...args);
+    writeThrough(method, args);
     return;
   }
   if (captured) return;

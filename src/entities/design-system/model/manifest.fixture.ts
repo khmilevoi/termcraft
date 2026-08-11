@@ -1,8 +1,11 @@
 /**
  * The design-systems spec §3.2 manifest, as plain data. TEST SUPPORT: shared by this module's own
- * tests and by `gate`'s (`design-system.test.ts`, `gate-runner.test.ts`), so the seventeen core
- * hex values are written exactly once in this repository. Deliberately NOT exported from
- * `index.ts` — nothing in production reads it.
+ * tests, by `gate`'s (`design-system.test.ts`, `gate-runner.test.ts`, `type-check.test.ts`), and
+ * by `store/design-systems`'s (`summary.test.ts`, `list.test.ts`, `fetch.test.ts`,
+ * `publish.test.ts`) — since `readDesignSystemSummary` now decodes through this same schema, its
+ * tests need a manifest the decoder actually accepts, not a hand-rolled shortcut — so the
+ * seventeen core hex values are written exactly once in this repository. Deliberately NOT
+ * exported from `index.ts` — nothing in production reads it.
  *
  * Returns a FRESH object every call: every caller mutates one field to build a rejection case, and
  * a shared constant would leak that mutation into the next test.

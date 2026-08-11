@@ -321,6 +321,34 @@ describe("host session — mount", () => {
     expect(h.exits).toHaveLength(1);
     expect(h.exits[0]!.code).toBe(1);
   });
+
+  test("a mount SETTLES the frame instead of taking one pass (design §6.1/§6.3)", async () => {
+    const calls: string[] = [];
+    const { h, session } = await handshaken({
+      createRenderer: async (size) => {
+        const real = await createHeadlessRenderer(size);
+        liveRenderer = real;
+        return {
+          ...real,
+          render: async () => {
+            calls.push("render");
+            await real.render();
+          },
+          settle: async (options) => {
+            calls.push("settle");
+            return real.settle(options);
+          },
+        };
+      },
+    });
+    await session.receiveControlPayload(mountEnvelope());
+
+    // A single `render()` is exactly the shape that snapshots an unhighlighted Code/Markdown
+    // frame. The host emits ONE frame per mount, so that frame would never be corrected.
+    expect(calls).toEqual(["settle"]);
+    // And the mount still produced its ready + frame pair.
+    expect(h.out).toHaveLength(2);
+  });
 });
 
 /**

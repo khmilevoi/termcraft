@@ -3,7 +3,12 @@ import { createRoot } from "@opentui/react";
 import type { JSX } from "@opentui/react/jsx-runtime";
 import * as errore from "errore";
 
-import { resumeConsolePassthrough, suspendConsolePassthrough } from "infrastructure/debug-log";
+import {
+  installThirdPartyConsoleBridge,
+  resumeConsolePassthrough,
+  suspendConsolePassthrough,
+  uninstallThirdPartyConsoleBridge,
+} from "infrastructure/debug-log";
 
 export interface UiRootRenderer {
   readonly width: number;
@@ -99,12 +104,14 @@ export async function mountRenderRoot(
   // resumes. See `UI_RENDERER_CONFIG`'s doc comment for why `consoleMode: "disabled"` makes this
   // necessary at all, and `infrastructure/debug-log`'s `suspendConsolePassthrough` for where a
   // line goes while it is engaged.
+  installThirdPartyConsoleBridge();
   suspendConsolePassthrough();
   const renderer = await adapters
     .createRenderer()
     .catch((cause) => new UiRootError({ operation: "create renderer", cause }));
   if (renderer instanceof Error) {
     resumeConsolePassthrough();
+    uninstallThirdPartyConsoleBridge();
     return renderer;
   }
 
@@ -117,6 +124,7 @@ export async function mountRenderRoot(
       renderer.destroy();
     } finally {
       resumeConsolePassthrough();
+      uninstallThirdPartyConsoleBridge();
     }
     return new UiRootError({ operation: "create root", cause: root.cause ?? root });
   }
@@ -127,6 +135,7 @@ export async function mountRenderRoot(
       renderer.destroy();
     } finally {
       resumeConsolePassthrough();
+      uninstallThirdPartyConsoleBridge();
     }
     return new UiRootError({ operation: "mount app", cause: mounted.cause ?? mounted });
   }
@@ -144,6 +153,7 @@ export async function mountRenderRoot(
         // shutdown reporting, `main.tsx`'s fatal branch — belongs on the screen, not only in the
         // trace file. In `finally` so a throwing `unmount`/`destroy` cannot skip it.
         resumeConsolePassthrough();
+        uninstallThirdPartyConsoleBridge();
       }
     },
   };

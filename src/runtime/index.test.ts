@@ -56,7 +56,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     expect(runtime.Fragment).toBeDefined();
   });
 
-  test("exports the full 18-component design-system catalog + the low-level Box escape hatch", () => {
+  test("exports the full 20-component design-system catalog + the low-level Box escape hatch", () => {
     for (const name of [
       "Row",
       "Column",
@@ -76,6 +76,8 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "Select",
       "Textarea",
       "ScrollBox",
+      "Code",
+      "Markdown",
       "Box",
       "Slider",
       "ScrollBar",
@@ -104,7 +106,16 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     const surface = Object.keys(runtime);
     // The host's seeding seam and the raw theme atoms are deliberately NOT on the facade: an
     // authored page must not be able to repaint its own theme (see ./model/tokens' notes).
-    for (const withheld of ["seedThemeCapability", "themeIdAtom", "themeTokensAtom"]) {
+    for (const withheld of [
+      "seedThemeCapability",
+      "themeIdAtom",
+      "themeTokensAtom",
+      "activeSyntaxStyle",
+      "syntaxStyleAtom",
+      "buildSyntaxStyle",
+      "syntaxScopeStyles",
+      "SyntaxStyleUnavailableError",
+    ]) {
       expect(surface).not.toContain(withheld);
     }
   });

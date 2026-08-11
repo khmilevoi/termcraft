@@ -1,6 +1,7 @@
 import { createElement } from "@opentui/react";
 
 import type { DesignFileEntryV1 } from "entities/design-tree";
+import { log } from "infrastructure/debug-log";
 
 import {
   type ControlEnvelope,
@@ -234,7 +235,21 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
     mountedMode = request.mode;
 
     handle.mount(createElement(loaded.component as never));
-    await handle.render();
+    // SETTLE, NOT ONE PASS (design §6.1/§6.3). Highlighting is asynchronous — it runs in
+    // @opentui/core's tree-sitter worker — and this handler emits exactly ONE frame per mount
+    // (`emitFrame` below is the only frame this mount will ever produce). A single
+    // `render()` here therefore does not snapshot an early frame that a later one corrects; it
+    // snapshots the unhighlighted frame permanently, in preview exactly as in export.
+    const settled = await handle.settle();
+    if (!settled.settled) {
+      // NOT a failure: a page whose content genuinely never stops moving still deserves a
+      // frame. It IS a determinism diagnostic — an export whose frame was still changing when
+      // the budget ran out is an export that may not reproduce.
+      log.warn(
+        `host-session: frame did not settle within the budget (mode ${request.mode}, ` +
+          `${settled.passes} passes, ${settled.elapsedMs}ms) — the captured frame may not be final`,
+      );
+    }
     // A SEALED FRAME IS NOT PROOF THE PAGE RENDERED (defect fix, 2026-07-27). `@opentui/react`
     // catches a component's throw in its own boundary and paints the stack trace, so `render()`
     // and `capture()` below both succeed for a page that never rendered at all — see

@@ -44,12 +44,36 @@ export interface LayoutNode {
   readonly children: readonly LayoutNode[];
 }
 
+/** How long, and how still, {@link RenderHandle.settle} waits. See `model/settle.ts`. */
+export interface FrameSettleOptions {
+  readonly quietFrames?: number;
+  readonly budgetMs?: number;
+  readonly pollMs?: number;
+}
+
+/** What one settle actually did. `settled: false` means the budget ran out with the frame still
+ *  moving — a caller that needs a deterministic snapshot must treat that as a diagnostic. */
+export interface FrameSettleResult {
+  readonly settled: boolean;
+  readonly passes: number;
+  readonly elapsedMs: number;
+}
+
 /** A live headless renderer with a mounted React root. */
 export interface RenderHandle {
   /** Mount (or replace) the React tree to render. */
   mount(node: unknown): void;
   /** Paint one frame and wait for it to settle. */
   render(): Promise<void>;
+  /**
+   * Render until the frame stops changing, or until the budget runs out.
+   *
+   * `render()` is ONE pass; syntax highlighting runs in a worker and lands after it, so a
+   * `render()` + `capture()` pair snapshots the unhighlighted frame. Anything that needs the
+   * finished frame — every export, and every mount, because the host emits one frame per
+   * mount — must call this instead. See `model/settle.ts` for the mechanism.
+   */
+  settle(options?: FrameSettleOptions): Promise<FrameSettleResult>;
   /**
    * The error the currently mounted tree threw while rendering, or `null` when it rendered
    * cleanly. Call it AFTER `render()` — a React error boundary only records the throw once
@@ -96,4 +120,19 @@ export interface RenderHandle {
    * see `model/geometry.ts`'s doc comment.
    */
   layoutTree(): LayoutNode;
+  /**
+   * Every in-flight syntax-highlight promise `settle()` collects from the CURRENTLY MOUNTED tree
+   * — `model/settle.ts`'s `collectHighlightingPromises(renderer.root)`, called fresh on each read
+   * (see that function's own doc comment on why it is re-walked rather than cached).
+   *
+   * A NARROW, PURPOSE-BUILT SEAM, deliberately not a `root`/`renderer` accessor: exposing the
+   * whole `Renderable` tree or the native `CliRenderer` would hand a caller renderer-internal
+   * access this module exists to keep inside `host/render`. This exists so a test can prove the
+   * one thing that cannot be proven through a fake `SettleDriver` — that `collectHighlightingPromises`'s
+   * `instanceof CodeRenderable` check genuinely matches against a REAL `@opentui/core` mount, not
+   * just a hand-rolled stand-in (`@opentui/core` ships two builds, `chunk-bun-*` and
+   * `chunk-node-*`, so a silent module-instance mismatch would degrade the walk to always
+   * returning `[]` with every existing settle test still green).
+   */
+  pendingHighlights(): readonly Promise<void>[];
 }
