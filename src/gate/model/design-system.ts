@@ -378,12 +378,10 @@ export function scanSystemContainment(input: DesignSystemScanInput): readonly Ga
  * theme diagnostic here, because that page already carries its own contract fatal from the
  * per-page stage.
  *
- * `meta.theme` stays REQUIRED in this plan (decision D5). This check's SEMANTICS are already
- * correct for an absent theme either way: it fires ONLY when a page's parsed `meta` carries a
- * NON-EMPTY `theme` string that names no declared theme, so an absent or empty theme simply skips
- * it. That does not mean the day another plan makes `PageMeta.theme` optional this function needs
- * no edit at all — under `strict: true`, `theme.length` on a possibly-`undefined` field would stop
- * compiling — only that no BEHAVIOR change would be needed, just the type-narrowing to reach it.
+ * `meta.theme` is OPTIONAL as of P4 `integration-spine` (design-systems §4.6). This check's
+ * SEMANTICS are unchanged by that: it fires ONLY when a page's parsed `meta` carries a NON-EMPTY
+ * `theme` string that names no declared theme, so an absent or empty theme simply skips it — the
+ * edit below is type-narrowing to reach that behavior under `strict: true`, not a behavior change.
  */
 export function checkPageThemes(input: {
   readonly manifest: DesignSystemManifestV1;
@@ -415,7 +413,7 @@ export function checkPageThemes(input: {
     if (contract.meta === null) continue;
 
     const theme = contract.meta.theme;
-    if (theme.length === 0) continue;
+    if (theme === undefined || theme.length === 0) continue;
     // `Object.hasOwn`, not `in`: `manifest.themes` is a plain object built off a `z.record`, so
     // it still carries `Object.prototype` — `"constructor" in themes` is TRUE even when no theme
     // named "constructor" is declared, which would silently wave through a page pinned to an

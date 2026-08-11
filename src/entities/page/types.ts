@@ -18,5 +18,11 @@ export interface PageMeta {
   readonly kitApiVersion: number;
   readonly title: string;
   readonly minSize: Size;
-  readonly theme: string;
+  /**
+   * The declared theme this page pins to (design-systems §4.6). OPTIONAL: absent means the
+   * project's own `design/system/design-system.json` `defaultTheme`, which is the ordinary case.
+   * Resolution to a concrete id happens exactly once, in `core/project`'s
+   * `resolveActiveThemeId` — never here, and never a second time downstream.
+   */
+  readonly theme?: string;
 }

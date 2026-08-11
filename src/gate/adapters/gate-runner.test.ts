@@ -135,7 +135,9 @@ describe("createGateRunnerAdapter", () => {
     // deleted `${input.slug}.tsx` guess — an observable output change this suite otherwise never
     // pinned. `SLUG` ("dash") is deliberately unrelated to the entry below.
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    // `theme` is OPTIONAL (design-systems §4.6, task 2), so this omits `title` instead — one of
+    // the three fields that still remain required — to keep the contract genuinely broken.
+    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     const extraction = await adapter.extractPageMeta({
       source: brokenContract,
       slug: SLUG,
@@ -1331,7 +1333,9 @@ describe("createGateRunnerAdapter", () => {
 
   test("runPage() puts the entry's real tree-relative path in a contract error's `file`, even when the entry is unrelated to the slug", async () => {
     const adapter = createGateRunnerAdapter({ smokeRenderer: fakeSmokeRenderer({ ok: true }) });
-    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    // `theme` is OPTIONAL (design-systems §4.6, task 2), so this omits `title` instead — one of
+    // the three fields that still remain required — to keep the contract genuinely broken.
+    const brokenContract = `export const meta = definePage({ kitApiVersion: 1, minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     const result = await adapter.runPage({
       source: brokenContract,
       slug: SLUG,
