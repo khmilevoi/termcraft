@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
+import { DARK_DEFAULT, themeIdAtom, themeTokensAtom } from "runtime/model/tokens";
+
 import {
   type ClientHelloV1,
   type ControlEnvelope,
@@ -64,6 +66,9 @@ function harness(over: Partial<HostSessionDeps> = {}): Harness {
       component: () => null,
       sourceHash: "a".repeat(64),
     }),
+    // The honest default for a fixture that does not care about themes (design-systems §4.6,
+    // task 5 step 7): no design system, no seed — never a fabricated one.
+    loadThemeSeed: async () => null,
     createRenderer: async () => {
       throw new Error("not used in this task");
     },
@@ -828,5 +833,135 @@ describe("host session — ready-phase control", () => {
     expect(ack.responseTo).toBe("8");
     expect(h.exits).toHaveLength(1);
     expect(h.exits[0]!.code).toBe(0);
+  });
+});
+
+/**
+ * The harness most recently built by {@link depsWith}. A single module-level pointer is safe
+ * here (rather than threading an `out`/`exits` pair through every call site) because `bun test`
+ * runs this file's tests one at a time, and every test below calls `depsWith` exactly once,
+ * synchronously, right before building its own session — so there is never more than one
+ * "current" harness in flight when {@link lastControlKind}/{@link lastFatalCode} read it back.
+ */
+let lastHarness: Harness | null = null;
+
+/**
+ * Build one theme-seed test's `HostSessionDeps` (design-systems §4.6, task 5's own test seam).
+ * Defaults to a WORKING mount (a real headless renderer, a page that actually renders) so
+ * `handshakeAndMount` below can reach `handle.mount(...)` — unlike the base `harness()`, whose
+ * own `createRenderer` default deliberately throws for the handshake-only tests above.
+ */
+function depsWith(over: Partial<HostSessionDeps> = {}): HostSessionDeps {
+  const h = harness({
+    createRenderer: (size) =>
+      createHeadlessRenderer(size).then((r) => {
+        liveRenderer = r;
+        return r;
+      }),
+    loadPage: async () => ({
+      meta: {
+        kitApiVersion: 1,
+        title: "Dashboard",
+        minSize: { w: 16, h: 3 },
+        theme: "dark-default",
+      },
+      component: FixtureComponent,
+      sourceHash: "a".repeat(64),
+    }),
+    ...over,
+  });
+  lastHarness = h;
+  return h.deps;
+}
+
+/**
+ * A real headless `RenderHandle` the ordering test can override `.mount` on directly (its `mount`
+ * is a plain object property, not a class method, so reassignment works the same way
+ * `trackingRendererFactory` above already relies on). Tracked as `liveRenderer` for this file's
+ * shared `afterEach` cleanup.
+ */
+async function createFakeRenderHandle(size: RenderSize): Promise<RenderHandle> {
+  const real = await createHeadlessRenderer(size);
+  liveRenderer = real;
+  return real;
+}
+
+/** Handshake, then mount — the two-step sequence every theme-seam test needs before it can
+ * observe what `handleMount` did. */
+async function handshakeAndMount(session: {
+  receiveControlPayload(payload: Uint8Array): Promise<void>;
+}): Promise<void> {
+  await session.receiveControlPayload(helloPayload(clientHello()));
+  await session.receiveControlPayload(mountEnvelope());
+}
+
+/** The `kind` of the last CONTROL message the session most recently built by {@link depsWith}
+ * sent — `"ready"` for a clean mount, `"error"` for a fatal one. */
+function lastControlKind(_session: unknown): string | undefined {
+  const control = (lastHarness?.out.filter((m) => m.type === "control") ?? []) as {
+    payload: ControlEnvelope;
+  }[];
+  return control.at(-1)?.payload.kind;
+}
+
+/** The `code` of the fatal `error` envelope the session most recently built by {@link depsWith}
+ * sent, or `undefined` when none was sent. */
+function lastFatalCode(_session: unknown): string | undefined {
+  const errorMsg = lastHarness?.out.find(
+    (m) => m.type === "control" && (m as { payload: ControlEnvelope }).payload.kind === "error",
+  ) as { payload: ControlEnvelope } | undefined;
+  if (errorMsg === undefined) return undefined;
+  return (errorMsg.payload.body as { code: string }).code;
+}
+
+describe("mount seeds the theme capability (design-systems §4.6)", () => {
+  test("the child seeds BOTH theme atoms from the manifest before the tree is mounted", async () => {
+    const seen: string[] = [];
+    const session = createHostSession(
+      depsWith({
+        loadThemeSeed: async () => {
+          seen.push("loadThemeSeed");
+          return { themeId: "midnight", tokens: { ...DARK_DEFAULT, accent: "#4cc9f0" } };
+        },
+        createRenderer: async (size) => {
+          const handle = await createFakeRenderHandle(size);
+          const original = handle.mount;
+          handle.mount = (element) => {
+            seen.push("mount");
+            // THE ORDERING ASSERTION, and it is the point of this test: a page's first render
+            // must already see the project's palette. Reading the atom INSIDE `mount` is what
+            // proves the seed landed before, not after.
+            expect(themeIdAtom()).toBe("midnight");
+            expect(themeTokensAtom().accent).toBe("#4cc9f0");
+            return original(element);
+          };
+          return handle;
+        },
+      }),
+    );
+    await handshakeAndMount(session);
+    expect(seen).toEqual(["loadThemeSeed", "mount"]);
+  });
+
+  test("a null seed leaves the compiled defaults in place and still mounts", async () => {
+    const before = themeTokensAtom().accent;
+    const session = createHostSession(depsWith({ loadThemeSeed: async () => null }));
+    await handshakeAndMount(session);
+    expect(themeTokensAtom().accent).toBe(before);
+    expect(lastControlKind(session)).toBe("ready");
+  });
+
+  test("a loader failure fails the mount with the loader's own ProtocolError", async () => {
+    const session = createHostSession(
+      depsWith({
+        loadThemeSeed: async () =>
+          new ProtocolError({
+            code: "SOURCE_HASH_MISMATCH",
+            reason: "system/design-system.json drifted",
+          }),
+      }),
+    );
+    await handshakeAndMount(session);
+    expect(lastFatalCode(session)).toBe("SOURCE_HASH_MISMATCH");
   });
 });

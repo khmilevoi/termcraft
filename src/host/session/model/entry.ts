@@ -15,7 +15,7 @@ import type { ExitRequest, HostSessionDeps, OutboundMessage } from "../types";
 import { denyDynamicCodeCapability } from "./capability-denial";
 import { createHostSession } from "./host-state-machine";
 import { registerRuntimeResolver } from "./resolver";
-import { createPageLoader, warmPageMetaValidator } from "./source-mount";
+import { createPageLoader, createThemeSeedLoader, warmPageMetaValidator } from "./source-mount";
 
 const HEARTBEAT_INTERVAL_MS = 1000;
 
@@ -75,10 +75,16 @@ export async function runHostStdio(io: HostStdioIo): Promise<void> {
   // symlink memo are facts about THIS tree revision, and this process serves exactly one. Built
   // once here, outside `createHostSession`, so it survives every mount this incarnation accepts
   // (task 1's repeated-`mount` state-machine change) rather than being rebuilt per call.
-  const load = createPageLoader({
-    link: (absolutePath) => import(absolutePath),
+  //
+  // ONE SHARED `pageLoaderDeps` FOR BOTH LOADERS (design-systems §4.6, task 5): the page loader
+  // and the theme-seed loader both read the same mounted tree through the same `link`/`lstat`
+  // boundary, so they share one dependency object rather than two independently-typed copies.
+  const pageLoaderDeps = {
+    link: (absolutePath: string) => import(absolutePath),
     lstat: fs.lstat,
-  });
+  };
+  const load = createPageLoader(pageLoaderDeps);
+  const loadThemeSeed = createThemeSeedLoader(pageLoaderDeps);
 
   const session = createHostSession({
     runtimeDeclaration: io.deps.runtimeDeclaration,
@@ -106,6 +112,7 @@ export async function runHostStdio(io: HostStdioIo): Promise<void> {
       denyDynamicCodeCapability();
       return load(args);
     },
+    loadThemeSeed,
     createRenderer: async (size) => {
       const renderer = await (io.deps.createRenderer ?? createHeadlessRenderer)(size);
       liveRenderer = renderer;

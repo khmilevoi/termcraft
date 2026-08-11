@@ -1,4 +1,5 @@
 import type { DesignFileEntryV1 } from "entities/design-tree";
+import type { TokenMap } from "runtime/types";
 
 import type {
   ControlEnvelope,
@@ -67,6 +68,33 @@ export interface LoadPageArgs {
   readonly entryRelPath: string;
   /** The tree revision's inventory: `(relPath, sha256)` for every file under `treeRoot`. */
   readonly expectedFiles: readonly DesignFileEntryV1[];
+}
+
+/** The active theme's id and its resolved token map, read out of the mounted tree (design-systems §4.6). */
+export interface ThemeSeedV1 {
+  readonly themeId: string;
+  /**
+   * TYPED AS `TokenMap`, NOT `Readonly<Record<string, string>>` (task 5's own type-mismatch
+   * instruction). `seedThemeCapability` (`runtime/model/tokens`) takes `{ themeId: ThemeId;
+   * tokens: TokenMap }`; widening this field to the same type lets `createThemeSeedLoader` hand
+   * its result straight to the seam with no cast at the CALL SITE — the one widen-then-assert
+   * happens once, inside the loader, through the same `Record<string, unknown>` idiom
+   * `host-state-machine.ts`'s `readyBodyRecord` already uses (see `source-mount.ts`'s
+   * `toTokenMap`). `host` importing `runtime/types` is the same established `host` → `runtime`
+   * direction `host/protocol/model/embedded-declaration.ts` already uses.
+   */
+  readonly tokens: TokenMap;
+}
+
+/**
+ * What one mount needs to resolve the theme. `theme` is the ACTIVE id `core` already resolved
+ * against the project's manifest (`core/project`'s `resolveActiveThemeId`) and carried in
+ * `MountRequestBody.theme` — no protocol change, exactly as design-systems §4.6 says.
+ */
+export interface LoadThemeSeedArgs {
+  readonly treeRoot: string;
+  readonly expectedFiles: readonly DesignFileEntryV1[];
+  readonly theme: string;
 }
 
 /** The `mount` request body (host-supervision §6.5). */
@@ -138,6 +166,13 @@ export interface HostSessionDeps {
   readonly runtimeDeclaration: RuntimeDeclarationBundleV1;
   readonly limits: PublicLimits;
   readonly loadPage: (args: LoadPageArgs) => Promise<ProtocolError | LoadedPage>;
+  /**
+   * Reads `system/design-system.json` out of the mounted tree and resolves it to the active
+   * theme's tokens, or `null` when the tree carries no design system (P4 D2). A BOUNDARY like
+   * `loadPage` — the state machine performs no I/O of its own, which is what keeps `handleMount`
+   * testable against fakes.
+   */
+  readonly loadThemeSeed: (args: LoadThemeSeedArgs) => Promise<ProtocolError | ThemeSeedV1 | null>;
   readonly createRenderer: (size: Size) => Promise<RenderHandle>;
   /** Monotonic milliseconds (host-supervision §9 — all durations are monotonic). */
   readonly now: () => number;
