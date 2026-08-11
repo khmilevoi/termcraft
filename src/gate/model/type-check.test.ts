@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 
 import { createTreeTypeChecker } from "./type-check";
@@ -439,6 +440,129 @@ export default reatomComponent(() => <box id="root">raw</box>, "Raw")
       // say once the defect is fixed.
       expect(errors.some((e) => e.code === "TS7026")).toBe(true);
       expect(errors.some((e) => e.message.includes("JSX.IntrinsicElements"))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+});
+
+// The stand-in facade this block needs on top of the file's existing one: `Color` and the generic
+// `useTokens`. Deliberately hand-written rather than the REAL generated declaration — `useTokens`
+// and `Color` are P1's deliverable and do not exist in `RUNTIME_DTS` yet. What this block proves
+// is that the resolveJsonModule PATH is real; the real-declaration variant joins after sync
+// point 1.
+const tokensRuntimeDts = `declare module "@termcraft/runtime" {
+  export type Color = \`#\${string}\`
+  export function useTokens<T>(): T
+  export function definePage(meta: { kitApiVersion: number; title: string; minSize: { w: number; h: number }; theme: string }): typeof meta
+  export function reatomComponent<T>(render: () => T): () => T
+  export function Text(props: { id: string; color: Color; children?: unknown }): string
+}
+`;
+const tokensChecker = createTreeTypeChecker({ tscExePath: TSC_EXE, runtimeDts: tokensRuntimeDts });
+
+const DESIGN_SYSTEM_JSON = JSON.stringify(validManifestObject(), null, 2) + "\n";
+
+// The §4.3 scaffold, verbatim. The mapped type is what re-types every JSON string value as
+// `Color`; a bare indexed access would carry `string` into every colour prop and fail every read.
+const TOKENS_TS = `import { useTokens as useRuntimeTokens, type Color } from "@termcraft/runtime"
+import ds from "./design-system.json"
+
+export type Tokens = { [K in keyof (typeof ds)["themes"]["dark"]["tokens"]]: Color }
+export const useTokens = () => useRuntimeTokens<Tokens>()
+`;
+
+const page = (
+  token: string,
+) => `import { definePage, reatomComponent, Text } from "@termcraft/runtime"
+import { useTokens } from "../system/tokens"
+
+export const meta = definePage({ kitApiVersion: 1, title: "T", minSize: { w: 80, h: 24 }, theme: "dark" })
+export default reatomComponent(() => {
+  const t = useTokens()
+  return Text({ id: "title", color: t.${token} })
+})
+`;
+
+describe("design-system tokens through resolveJsonModule (spec §4.3, §11)", () => {
+  withTsc(
+    "a correct ARBITRARY token name is clean",
+    async () => {
+      const errors = await tokensChecker({
+        files: new Map([
+          ["system/design-system.json", DESIGN_SYSTEM_JSON],
+          ["system/tokens.ts", TOKENS_TS],
+          ["pages/ok.tsx", page("brandBlue")],
+        ]),
+      });
+      expect(errors).toEqual([]);
+    },
+    TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a typo'd token name is FATAL, attributed to the page that wrote it",
+    async () => {
+      const errors = await tokensChecker({
+        files: new Map([
+          ["system/design-system.json", DESIGN_SYSTEM_JSON],
+          ["system/tokens.ts", TOKENS_TS],
+          ["pages/typo.tsx", page("brandBlu")],
+        ]),
+      });
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0]?.kind).toBe("type");
+      expect(errors[0]?.file).toBe("pages/typo.tsx");
+      expect(errors[0]?.message).toContain("brandBlu");
+    },
+    TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a core role is reachable the same way an arbitrary token is",
+    async () => {
+      const errors = await tokensChecker({
+        files: new Map([
+          ["system/design-system.json", DESIGN_SYSTEM_JSON],
+          ["system/tokens.ts", TOKENS_TS],
+          ["pages/core.tsx", page("foregroundMuted")],
+        ]),
+      });
+      expect(errors).toEqual([]);
+    },
+    TIMEOUT_MS,
+  );
+
+  withTsc(
+    "the manifest is served, not merely tolerated — removing it breaks the tokens module",
+    async () => {
+      const errors = await tokensChecker({
+        files: new Map([
+          ["system/tokens.ts", TOKENS_TS],
+          ["pages/ok.tsx", page("brandBlue")],
+        ]),
+      });
+      // This is the guard against a silently-degrading check: if the JSON were never served and
+      // the import degraded to `any`, the two cases above would both pass and prove nothing.
+      expect(errors.length).toBeGreaterThan(0);
+    },
+    TIMEOUT_MS,
+  );
+
+  withTsc(
+    "a tree with no design system still type-checks exactly as before",
+    async () => {
+      const errors = await tokensChecker({
+        files: new Map([
+          [
+            "pages/plain.tsx",
+            `import { definePage, reatomComponent } from "@termcraft/runtime"
+export const meta = definePage({ kitApiVersion: 1, title: "P", minSize: { w: 80, h: 24 }, theme: "dark" })
+export default reatomComponent(() => "x")
+`,
+          ],
+        ]),
+      });
+      expect(errors).toEqual([]);
     },
     TIMEOUT_MS,
   );
