@@ -86,3 +86,9 @@ advance itself. That is the runtime's shape, not a missing feature.
 See "Time and the sealed render" above for the determinism rule. No imports beyond
 `@termcraft/runtime` — see `runtime.d.ts` and this turn's system prompt for the exact
 allowlist.
+
+## Element catalog additions
+
+Beyond the components named above, the runtime exposes these wrappers over OpenTUI's remaining
+elements. `runtime.d.ts` alongside this file carries their exact prop types; every one takes a
+mandatory `id`.
