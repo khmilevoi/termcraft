@@ -204,6 +204,40 @@ describe("decodeDesignSystemManifest", () => {
     expect(result.message).toContain("brandBlue");
   });
 
+  test("a token named 'constructor', declared only in the REFERENCE theme, is still TOKEN_PARITY (fix round 2)", () => {
+    // `tokenNameSchema`'s identifier regex admits `constructor`. Assigning it directly makes it
+    // an OWN property (shadowing the inherited one), so the reference theme (`dark`, first in
+    // declaration order) genuinely declares it; the non-reference theme (`light`) does not — the
+    // exact shape a bracket-access `theme.tokens["constructor"] === undefined` check would read
+    // as "present" (the INHERITED `Object.prototype.constructor`), silently hiding a real break.
+    const o = validManifestObject() as any;
+    o.themes.dark.tokens.constructor = "#123456";
+    o.themes.light = { label: "Midnight Light", tokens: { ...o.themes.dark.tokens } };
+    delete o.themes.light.tokens.constructor; // back to the INHERITED key, not an own one
+    const result = decode(o);
+    expect(result).toBeInstanceOf(DesignSystemManifestInvalidError);
+    if (!(result instanceof DesignSystemManifestInvalidError)) return;
+    expect(result.code).toBe("TOKEN_PARITY");
+    expect(result.message).toContain("constructor");
+  });
+
+  test("a token named 'toString', declared only in a NON-reference theme, is still TOKEN_PARITY (fix round 2)", () => {
+    // The mirror direction: `light` (not the reference theme) declares an OWN `toString` token
+    // the reference theme (`dark`) never declares — exercises the SECOND parity loop
+    // (`Object.keys(theme.tokens)` checked against `reference.tokens`), which a bracket-access
+    // `reference.tokens["toString"] === undefined` check would also misread as "present".
+    const o = validManifestObject() as any;
+    o.themes.light = {
+      label: "Midnight Light",
+      tokens: { ...o.themes.dark.tokens, toString: "#123456" },
+    };
+    const result = decode(o);
+    expect(result).toBeInstanceOf(DesignSystemManifestInvalidError);
+    if (!(result instanceof DesignSystemManifestInvalidError)) return;
+    expect(result.code).toBe("TOKEN_PARITY");
+    expect(result.message).toContain("toString");
+  });
+
   test("two themes with identical token names decode", () => {
     const o = validManifestObject() as any;
     o.themes.light = { label: "Midnight Light", tokens: { ...o.themes.dark.tokens } };

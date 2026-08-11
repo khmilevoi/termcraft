@@ -138,7 +138,13 @@ export function decodeDesignSystemManifest(
   if (!result.success) return fromZod(result.error);
   const manifest = result.data;
 
-  // §4.1 — every theme declares every core role.
+  // §4.1 — every theme declares every core role. Bracket access (not `Object.hasOwn`) is SAFE
+  // here, unlike the two checks below: `role` is drawn from {@link CORE_TOKEN_ROLES}, a fixed
+  // literal tuple, never from parsed data — and none of its seventeen names collides with an
+  // `Object.prototype` key (`constructor`, `toString`, `valueOf`, `hasOwnProperty`,
+  // `isPrototypeOf`, `propertyIsEnumerable`, `toLocaleString`, `__proto__`), so
+  // `theme.tokens[role]` can only ever read `undefined` or a real declared value (fix round 2,
+  // confirmed rather than assumed).
   for (const [themeId, theme] of Object.entries(manifest.themes)) {
     for (const role of CORE_TOKEN_ROLES) {
       if (theme.tokens[role] === undefined)
@@ -151,20 +157,25 @@ export function decodeDesignSystemManifest(
 
   // §4.2 — token-name parity across every theme of one system. Compared against the FIRST theme
   // in declaration order, in BOTH directions, so a name present in one and absent from the other
-  // is caught whichever theme happens to carry it.
+  // is caught whichever theme happens to carry it. `Object.hasOwn`, not bracket-access
+  // `=== undefined` (fix round 2, same class as decision D2's `defaultTheme` fix): `theme.tokens`
+  // is a plain object off a `z.record` whose keys `tokenNameSchema` allows to be ANY of
+  // `constructor`/`toString`/`valueOf`/etc — a bracket-access read of one of those names off a
+  // theme that never declared it returns the INHERITED `Object.prototype` member, never
+  // `undefined`, which would silently wave a genuine `TOKEN_PARITY` break through.
   const themeEntries = Object.entries(manifest.themes);
   const [referenceId, reference] = themeEntries[0]!; // the schema refuses an empty themes map
   const referenceNames = Object.keys(reference.tokens);
   for (const [themeId, theme] of themeEntries.slice(1)) {
     for (const name of referenceNames) {
-      if (theme.tokens[name] === undefined)
+      if (!Object.hasOwn(theme.tokens, name))
         return invalid(
           "TOKEN_PARITY",
           `token "${name}" is declared in theme "${referenceId}" but not in theme "${themeId}"`,
         );
     }
     for (const name of Object.keys(theme.tokens)) {
-      if (reference.tokens[name] === undefined)
+      if (!Object.hasOwn(reference.tokens, name))
         return invalid(
           "TOKEN_PARITY",
           `token "${name}" is declared in theme "${themeId}" but not in theme "${referenceId}"`,
