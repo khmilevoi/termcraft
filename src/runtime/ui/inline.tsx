@@ -112,3 +112,56 @@ export function Underline(props: UnderlineProps) {
     </u>
   );
 }
+
+/** Props for the inline `Link`. `id` is the mandatory stable id (§3.2). */
+export interface LinkProps {
+  /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+  readonly id: string;
+  /** The link target, emitted as a terminal hyperlink. Required: a link with no target is text. */
+  readonly href: string;
+  /** The label; literal text, or further inline wrappers. */
+  readonly children?: unknown;
+  /** The label's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+  readonly color?: Color;
+}
+
+/**
+ * A terminal hyperlink inside a `Text` (design-system §6.1). The label renders as ordinary
+ * inline text; `href` becomes the run's hyperlink target in terminals that support it.
+ *
+ * DESIGN GAP, RECORDED RATHER THAN GUESSED (CLAUDE.md): the design system defines no distinct
+ * link hue, so this defaults to `foreground` like every other inline run instead of inventing
+ * one — pass `color={t.accent}` for the conventional highlighted link.
+ *
+ * DIVERGENCE: a hyperlink TARGET is not observable in a captured frame. `StyledRun`
+ * (`src/host/protocol/types.ts:77-83`) carries text, colours and attributes and has no link
+ * field, so an export snapshot preserves the label and drops the target. The tests assert the
+ * label and its hue for exactly that reason.
+ */
+export function Link(props: LinkProps) {
+  return (
+    <a id={props.id} href={props.href} fg={props.color ?? activeTokens().foreground}>
+      {props.children}
+    </a>
+  );
+}
+
+/** Props for the inline `LineBreak`. `id` is the mandatory stable id (§3.2) and its only prop. */
+export interface LineBreakProps {
+  /**
+   * Stable id the shell keys on. Mandatory, with no exception carved for this element: `id` is
+   * the ENTIRE prop surface the `br` intrinsic has (`LineBreakProps = Pick<SpanProps, "id">`,
+   * `@opentui/react/src/types/components.d.ts:37`), and spec §6 states the rule without
+   * exception. See the module note for what an inline id can and cannot do.
+   */
+  readonly id: string;
+}
+
+/**
+ * A hard line break inside a `Text` (design-system §6.1). Takes no children and no styling — the
+ * intrinsic emits a newline and nothing else. Use it to split one `Text` across rows without
+ * paying for a second container.
+ */
+export function LineBreak(props: LineBreakProps) {
+  return <br id={props.id} />;
+}

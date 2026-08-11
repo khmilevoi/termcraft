@@ -99,3 +99,5 @@ export { Span } from "./ui/inline";
 export type { SpanProps } from "./ui/inline";
 export { Bold, Italic, Underline } from "./ui/inline";
 export type { BoldProps, ItalicProps, UnderlineProps } from "./ui/inline";
+export { Link, LineBreak } from "./ui/inline";
+export type { LinkProps, LineBreakProps } from "./ui/inline";

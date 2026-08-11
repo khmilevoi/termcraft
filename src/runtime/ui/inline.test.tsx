@@ -8,7 +8,7 @@ import type { RenderHandle } from "host/render/types";
 
 import { hostModeAtom } from "../model/capabilities";
 import { activeTokens } from "../model/tokens";
-import { Bold, Italic, Span, Underline } from "./inline";
+import { Bold, Italic, Link, LineBreak, Span, Underline } from "./inline";
 import { Text } from "./text";
 
 let open: RenderHandle | null = null;
@@ -195,6 +195,97 @@ describe("Bold / Italic / Underline inline wrappers (spec §6.1)", () => {
     const preview = await renderOnce(tree, { w: 16, h: 1 });
     hostModeAtom.set("export");
     const exported = await renderOnce(tree, { w: 16, h: 1 });
+    expect(exported.rows).toEqual(preview.rows);
+  });
+});
+
+describe("Link inline wrapper (spec §6.1)", () => {
+  test("renders its label text", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line">
+        <Link id="docs" href="https://example.invalid/docs">
+          docs
+        </Link>
+      </Text>,
+    );
+    await handle.render();
+    expect(frameText(handle.capture())).toContain("docs");
+  });
+
+  test("takes a Color for the label hue", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line">
+        <Link id="docs" href="https://example.invalid/docs" color={activeTokens().accent}>
+          docs
+        </Link>
+      </Text>,
+    );
+    await handle.render();
+    const styled = allRuns(handle.capture()).find((run) => run.text.includes("docs"));
+    expect(styled && extractRgb(styled.fg)).toBe<string>(activeTokens().accent);
+  });
+
+  test("href is required — omitting it does not compile", () => {
+    // @ts-expect-error — a link with no target is not a link.
+    const rejected = <Link id="rejected-link">docs</Link>;
+    expect(rejected).toBeDefined();
+  });
+
+  test("export mode renders the identical frame (spec §6.3)", async () => {
+    const tree = (
+      <Text id="line">
+        <Link id="docs" href="https://example.invalid/docs" color={activeTokens().accent}>
+          docs
+        </Link>
+      </Text>
+    );
+    const preview = await renderOnce(tree, { w: 20, h: 1 });
+    hostModeAtom.set("export");
+    const exported = await renderOnce(tree, { w: 20, h: 1 });
+    expect(exported.rows).toEqual(preview.rows);
+  });
+});
+
+describe("LineBreak inline wrapper (spec §6.1)", () => {
+  test("splits one Text across two rows", async () => {
+    const handle = await createHeadlessRenderer({ w: 12, h: 3 });
+    open = handle;
+    handle.mount(
+      <Text id="line">
+        <Span id="first">one</Span>
+        <LineBreak id="brk" />
+        <Span id="second">two</Span>
+      </Text>,
+    );
+    await handle.render();
+    const rows = handle.capture().rows.map((row) => row.map((run) => run.text).join(""));
+    expect(rows[0]).toContain("one");
+    expect(rows[1]).toContain("two");
+  });
+
+  test("id is mandatory — omitting it does not compile (plan decision D3)", () => {
+    // @ts-expect-error — spec §6 makes `id` mandatory on EVERY wrapper, `br` included: `id` is
+    // the only prop the intrinsic has (`LineBreakProps = Pick<SpanProps, "id">`), so no exception
+    // is carved here.
+    const rejected = <LineBreak />;
+    expect(rejected).toBeDefined();
+  });
+
+  test("export mode renders the identical frame (spec §6.3)", async () => {
+    const tree = (
+      <Text id="line">
+        <Span id="first">one</Span>
+        <LineBreak id="brk" />
+        <Span id="second">two</Span>
+      </Text>
+    );
+    const preview = await renderOnce(tree, { w: 12, h: 3 });
+    hostModeAtom.set("export");
+    const exported = await renderOnce(tree, { w: 12, h: 3 });
     expect(exported.rows).toEqual(preview.rows);
   });
 });
