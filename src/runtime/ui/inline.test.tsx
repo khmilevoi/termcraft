@@ -1,5 +1,6 @@
-import { TextAttributes } from "@opentui/core";
 import { afterEach, describe, expect, test } from "bun:test";
+
+import { TextAttributes } from "@opentui/core";
 
 import type { StyledRun } from "host/protocol";
 import { extractRgb } from "host/render/model/color";
@@ -8,7 +9,7 @@ import type { RenderHandle } from "host/render/types";
 
 import { hostModeAtom } from "../model/capabilities";
 import { activeTokens } from "../model/tokens";
-import { Bold, Italic, Link, LineBreak, Span, Underline } from "./inline";
+import { Bold, Italic, LineBreak, Link, Span, Underline } from "./inline";
 import { Text } from "./text";
 
 let open: RenderHandle | null = null;
