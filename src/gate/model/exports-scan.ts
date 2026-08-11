@@ -560,7 +560,7 @@ function isCloser(kind: SyntaxKind): boolean {
  * scanner exists to avoid. Every caller must fail open (`exhaustive = false`, stop collecting)
  * rather than guess where an unterminated bracket run was "meant" to end.
  */
-function skipBalanced(toks: Tok[], openerIdx: number): number | null {
+function skipBalanced(toks: readonly Tok[], openerIdx: number): number | null {
   let depth = 0;
   let k = openerIdx;
   for (; k < toks.length; k += 1) {
@@ -609,7 +609,7 @@ function skipBalanced(toks: Tok[], openerIdx: number): number | null {
  * fails open — `exhaustive = false`, stop collecting — rather than guess where it was "meant" to
  * end.
  */
-function skipTemplateLiteral(toks: Tok[], headIdx: number): number | null {
+function skipTemplateLiteral(toks: readonly Tok[], headIdx: number): number | null {
   let depth = 0;
   let j = headIdx;
   for (; j < toks.length; j += 1) {
@@ -630,7 +630,7 @@ function skipTemplateLiteral(toks: Tok[], headIdx: number): number | null {
  * index of the token right after the clause (its `}`, or the specifier's closing token when a
  * `from` clause follows).
  */
-function readExportClause(toks: Tok[], from: number, names: Set<string>): number {
+function readExportClause(toks: readonly Tok[], from: number, names: Set<string>): number {
   let k = from;
   while (k < toks.length && toks[k]!.kind !== SK.CloseBraceToken) {
     const t = toks[k]!;
