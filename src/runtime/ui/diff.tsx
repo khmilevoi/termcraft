@@ -12,9 +12,13 @@ export interface DiffProps {
   readonly patch: string;
   /** `unified` stacks the two sides, `split` puts them side by side. Defaults to `unified`. */
   readonly view?: "unified" | "split";
-  /** Whether to draw the line-number gutters. Defaults to off. */
+  /**
+   * Whether to draw the line-number gutters — and with them, the `+`/`-` sign column, since the
+   * vendor paints the signs INSIDE the gutter (see the component's own note). Defaults to `true`:
+   * turning this off leaves added and removed rows with no marker distinguishing them at all.
+   */
   readonly showLineNumbers?: boolean;
-  /** How over-long lines break; defaults to the renderer's own wrapping. */
+  /** How over-long lines break. Defaults to `"word"` (the code renderable's own default when unset). */
   readonly wrap?: "word" | "char" | "none";
   /** The content hue; defaults to the theme's `foreground`. */
   readonly color?: Color;
@@ -35,15 +39,26 @@ export interface DiffProps {
 
 /**
  * A themed unified/split diff view (design-system §6.1, the "Documents and code" group). Takes
- * one unified `patch` string and renders it with `+`/`-` signs, optional line-number gutters, and
- * every colour resolved from the active theme. The mandatory `id` flows to the element so the
- * host can answer geometry queries and the shell can select/pin it.
+ * one unified `patch` string and renders it with `+`/`-` signs riding inside the (by-default-on)
+ * line-number gutters, and every colour resolved from the active theme. The mandatory `id` flows
+ * to the element so the host can answer geometry queries and the shell can select/pin it.
  *
  * DEGRADATION, NOT FAILURE. An empty patch, or a string that is not a patch at all, renders an
  * empty frame; nothing throws. A patch whose hunk header disagrees with its body renders the
  * renderer's own parse-error message instead of the diff — a divergence recorded here because the
  * message is drawn in the renderer's own red, which is not a theme colour and cannot be
  * overridden through any prop.
+ *
+ * THE GUTTER AND THE SIGN COLUMN ARE ONE OBJECT — A VENDOR DIVERGENCE. `@opentui/core` paints the
+ * `+`/`-` signs INSIDE the gutter renderable itself, and `showLineNumbers` toggles that same
+ * object's visibility (there is no prop that keeps the signs and drops only the digits). Because
+ * this component deliberately paints no background band (see the COLOURS note below), the sign
+ * column is the ONLY thing that distinguishes an added row from a removed one — with it hidden, a
+ * changed line reads as declared twice with nothing marking which version is which. `showLineNumbers`
+ * therefore defaults to `true`: the bare `<Diff id={..} patch={..} />` call an author is most
+ * likely to write must not silently discard the diff's own meaning. This still satisfies the
+ * "every prop is passed explicitly" rule below — the value is written, not left to the vendor's
+ * own default; it simply now agrees with it.
  *
  * COLOURS, AND THE ONE GAP. `color`/`lineNumberColor`/`addedColor`/`removedColor` default to the
  * theme's `foreground`/`foregroundFaint`/`success`/`danger` — the design's own vocabulary, where
@@ -72,7 +87,7 @@ export function Diff(props: DiffProps) {
       id={props.id}
       diff={props.patch}
       view={props.view ?? "unified"}
-      showLineNumbers={props.showLineNumbers ?? false}
+      showLineNumbers={props.showLineNumbers ?? true}
       wrapMode={props.wrap}
       fg={props.color ?? tokens.foreground}
       lineNumberFg={props.lineNumberColor ?? tokens.foregroundFaint}

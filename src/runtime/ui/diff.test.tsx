@@ -36,6 +36,18 @@ const PATCH = `--- a/a.ts
  const c = 4
 `;
 
+// Shared by every frame-identity comparison below, in this file's own `describe` block and the
+// export-determinism block: create a headless renderer, mount, render, snapshot the frame as a
+// string, and tear the renderer down again.
+const captureOf = async (element: unknown): Promise<string> => {
+  const handle = await createHeadlessRenderer({ w: 40, h: 6 });
+  handle.mount(element);
+  await handle.render();
+  const captured = JSON.stringify(handle.capture());
+  handle.destroy();
+  return captured;
+};
+
 describe("Diff component (design-system §6.1)", () => {
   test("renders the unified view with signs and line numbers", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 6 });
@@ -55,6 +67,23 @@ describe("Diff component (design-system §6.1)", () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 6 });
     open = handle;
     handle.mount(<Diff id="patch" patch={PATCH} showLineNumbers />);
+    await handle.render();
+    const frame = handle.capture();
+    const added = findRun(frame, "+");
+    const removed = findRun(frame, "-");
+    expect(added && extractRgb(added.fg)).toBe<string>(themeTokens("dark-default").success);
+    expect(removed && extractRgb(removed.fg)).toBe<string>(themeTokens("dark-default").danger);
+  });
+
+  // The regression this whole fix wave exists for: with NO props beyond the mandatory `id` and
+  // `patch` — the call an author is most likely to write — the frame must still distinguish the
+  // added row from the removed one. Every OTHER sign assertion in this file passes
+  // `showLineNumbers` explicitly, which is exactly why the earlier default-off regression went
+  // uncaught.
+  test("with no props beyond id and patch, the default render still distinguishes added from removed", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 6 });
+    open = handle;
+    handle.mount(<Diff id="patch" patch={PATCH} />);
     await handle.render();
     const frame = handle.capture();
     const added = findRun(frame, "+");
@@ -137,31 +166,20 @@ describe("Diff component (design-system §6.1)", () => {
     expect(lines(handle.capture()).join("").trim()).toBe("");
   });
 
-  // The JSDoc on `showLineNumbers` promises "Defaults to off". Do not assert on digits/glyphs
-  // directly — the fixture's own content contains "1"/"2"/"3"/"4", so a naive "no line numbers in
+  // The JSDoc on `showLineNumbers` promises "Defaults to `true`". Do not assert on digits/glyphs
+  // directly — the fixture's own content contains "1"/"2"/"3"/"4", so a naive "line numbers in
   // the frame" check would be fragile or vacuous. Compare whole frames instead: omitting the prop
-  // must render byte-identically to explicitly passing `false`.
-  const captureOf = async (element: unknown): Promise<string> => {
-    const handle = await createHeadlessRenderer({ w: 40, h: 6 });
-    handle.mount(element);
-    await handle.render();
-    const captured = JSON.stringify(handle.capture());
-    handle.destroy();
-    return captured;
-  };
-
-  test("omitting showLineNumbers renders identically to passing it false — the documented default", async () => {
+  // must render byte-identically to explicitly passing `true`.
+  test("omitting showLineNumbers renders identically to passing it true — the documented default", async () => {
     const omitted = await captureOf(<Diff id="patch" patch={PATCH} />);
-    const explicitFalse = await captureOf(
-      <Diff id="patch" patch={PATCH} showLineNumbers={false} />,
-    );
-    expect(omitted).toBe(explicitFalse);
+    const explicitTrue = await captureOf(<Diff id="patch" patch={PATCH} showLineNumbers />);
+    expect(omitted).toBe(explicitTrue);
   });
 
-  test("explicitly enabling showLineNumbers renders a different frame than the default", async () => {
+  test("explicitly disabling showLineNumbers renders a different frame than the default", async () => {
     const omitted = await captureOf(<Diff id="patch" patch={PATCH} />);
-    const withGutters = await captureOf(<Diff id="patch" patch={PATCH} showLineNumbers />);
-    expect(withGutters).not.toBe(omitted);
+    const noGutters = await captureOf(<Diff id="patch" patch={PATCH} showLineNumbers={false} />);
+    expect(noGutters).not.toBe(omitted);
   });
 });
 
@@ -169,14 +187,8 @@ describe("Diff component (design-system §6.1)", () => {
 // property is that the frame depends on nothing but its props. Task 4 REPLACES the first test
 // here with a highlighted-frame assertion once P8's settle helper exists.
 describe("Diff export determinism (§6.3)", () => {
-  const renderOnce = async (): Promise<string> => {
-    const handle = await createHeadlessRenderer({ w: 40, h: 6 });
-    handle.mount(<Diff id="patch" patch={PATCH} view="unified" showLineNumbers />);
-    await handle.render();
-    const captured = JSON.stringify(handle.capture());
-    handle.destroy();
-    return captured;
-  };
+  const renderOnce = () =>
+    captureOf(<Diff id="patch" patch={PATCH} view="unified" showLineNumbers />);
 
   test("two independent renders in export mode produce identical frames", async () => {
     hostModeAtom.set("export");

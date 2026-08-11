@@ -18,9 +18,19 @@ export interface LineNumberProps {
   readonly background?: Color;
   /** The number the first line carries; defaults to `1`. */
   readonly startAt?: number;
-  /** Minimum gutter width in cells, so a growing file does not shift the content sideways. */
+  /**
+   * Minimum gutter width in cells, so a growing file does not shift the content sideways.
+   * Defaults to `3`. The vendor also applies this as the outer box's own minimum width, which is
+   * harmless here since the gutter is already at least that wide.
+   */
   readonly minWidth?: number;
-  /** Cells of space between the digits and the content. */
+  /**
+   * Cells of space between the digits and the content. Defaults to `1`. The vendor option this
+   * maps to (`paddingRight`) is ALSO a base layout prop, so it double-applies: it inserts the gap
+   * on the left of the content AND pads the same number of cells onto the component's own right
+   * edge, costing that much content width there too. There is no prop that separates the two
+   * effects; a large `gap` narrows the content column on both sides.
+   */
   readonly gap?: number;
 }
 
