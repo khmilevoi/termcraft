@@ -36,8 +36,20 @@ function createDriver(snapshots: readonly string[], pending: readonly Promise<vo
         return pending;
       },
       now: () => clock,
-      sleep: async (ms: number) => {
+      // The simulated wall clock advances SYNCHRONOUSLY the moment `sleep` is called — this is
+      // what makes the budget/quiet-frame math deterministic and instant to run, independent of
+      // real timer resolution. The RETURNED PROMISE, though, resolves on the next macrotask
+      // (`setImmediate`), not the current microtask queue. That distinction is load-bearing for
+      // `settleFrames`' `Promise.race([Promise.all(pending()), sleep(pollMs)])`: production races
+      // a microtask-resolving highlight promise against a genuinely-slow, macrotask-based
+      // `Bun.sleep`, so any pending promise that is already settled (or settles via a handful of
+      // microtask hops, as `Promise.all` does even on an already-rejected input) reliably beats
+      // it — while a promise that never settles at all just as reliably does not. A synchronously
+      // "resolved" fake `sleep` would let raw microtask-scheduling order (an implementation
+      // detail of `Promise.all`'s internals, not a wall-clock fact) decide the race instead.
+      sleep: (ms: number): Promise<void> => {
         clock += ms;
+        return new Promise((resolve) => setImmediate(resolve));
       },
     },
   };
@@ -104,12 +116,17 @@ describe("settleFrames", () => {
   });
 
   test("a pending promise that never resolves cannot outlast the budget", async () => {
+    // A promise that never resolves can never make a pass eligible for "quiet" (that's the
+    // whole point of gating on `highlightsDone`), so this must NOT settle true — settling true
+    // here would be exactly the original defect: declaring a frame done while the loop itself
+    // observed the highlight signal still pending. The property this test actually pins is
+    // "cannot hang forever" — the `while (now - started < budgetMs)` ceiling is what ends it,
+    // honestly reporting `settled: false` because it could not confirm the highlight landed.
     const never = new Promise<void>(() => {});
     const { driver } = createDriver(["A", "A", "A"], [never]);
     const result = await settleFrames(driver);
-    // It settles on content even though the promise is still open — the promise is an
-    // accelerator, never a gate.
-    expect(result.settled).toBe(true);
+    expect(result.settled).toBe(false);
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(DEFAULT_FRAME_SETTLE.budgetMs);
   });
 
   test("a rejecting pending promise cannot make the loop throw", async () => {

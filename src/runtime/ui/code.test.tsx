@@ -27,25 +27,27 @@ const hueOf = (frame: { rows: StyledRun[][] }, needle: string) =>
 const TS_SOURCE = 'const answer = 42\n// why\nfunction go() { return "x" }\n';
 
 /**
- * `DEFAULT_FRAME_SETTLE` (`host/render/model/settle.ts`) never gates on `collectHighlighting-
- * Promises` — it only ACCELERATES the quiet-frame loop — so its default 8ms poll / 2 quiet
- * frames (a 16ms stability window) was tuned against `settleFrames`' own fake-driver unit tests,
- * never against a REAL tree-sitter WORKER. This is the first test in the repository that mounts
- * a real `Code`, and it is the finding: a cold tree-sitter grammar load + worker round trip
- * regularly exceeds 16ms, so the loop was declaring the plain pre-highlight frame "settled" and
- * moving on before the worker's message ever landed — repeatably reproduced isolated in a fresh
- * process, not a load artefact. Widening the poll interval (not the assertion) gives each
- * quiet-frame check a realistic window without touching `settleFrames`' gating semantics, which
- * a shared default change would affect for every other wrapper's tests too.
+ * These tests call bare `.settle()` — the PRODUCTION defaults (`DEFAULT_FRAME_SETTLE`,
+ * `host/render/model/settle.ts`) — deliberately. This is the first test in the repository that
+ * mounts a real `Code`, and it is the proof that the defaults produce a highlighted frame against
+ * a REAL tree-sitter WORKER, not just against `settleFrames`' own fake-driver unit tests.
+ *
+ * An earlier version of this file widened `.settle()`'s knobs (`{ budgetMs: 3000, pollMs: 100 }`)
+ * to work around a real defect: `settleFrames` collected `CodeRenderable#highlightingDone`,
+ * observed it still pending on every pass, and counted the quiet frames toward `settled` anyway
+ * — the collected signal was gated on nothing. That let a widened poll interval mask the bug by
+ * accident (a big enough window "usually" caught the highlight) rather than fixing the gate. The
+ * fix (settle.ts) makes a quiet frame only count while no collected highlight promise is still in
+ * flight, and raises `DEFAULT_FRAME_SETTLE.budgetMs` to 1000ms — the loop's actual ceiling once
+ * gating is honoured for a cold grammar load. These tests use bare `.settle()` specifically so a
+ * regression in either half of that fix shows up here again.
  */
-const SETTLE_FOR_HIGHLIGHT = { budgetMs: 3000, pollMs: 100 };
-
 describe("Code component (design-system §6.1)", () => {
   test("renders its content", async () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 6 });
     open = handle;
     handle.mount(<Code id="snippet" content={TS_SOURCE} language="typescript" />);
-    await handle.settle(SETTLE_FOR_HIGHLIGHT);
+    await handle.settle();
     expect(allText(handle.capture())).toContain("const answer");
   });
 
@@ -53,7 +55,7 @@ describe("Code component (design-system §6.1)", () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 6 });
     open = handle;
     handle.mount(<Code id="snippet" content={TS_SOURCE} language="typescript" />);
-    await handle.settle(SETTLE_FOR_HIGHLIGHT);
+    await handle.settle();
     const frame = handle.capture();
     const t = activeTokens();
     // `const` is a keyword → the design's emphasis hue.
@@ -70,7 +72,7 @@ describe("Code component (design-system §6.1)", () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 6 });
     open = handle;
     handle.mount(<Code id="snippet" content={TS_SOURCE} language="typescript" />);
-    await handle.settle(SETTLE_FOR_HIGHLIGHT);
+    await handle.settle();
     const hues = new Set(allRuns(handle.capture()).map((run) => extractRgb(run.fg)));
     expect(hues.size).toBeGreaterThan(1);
   });
@@ -81,7 +83,7 @@ describe("Code component (design-system §6.1)", () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 3 });
     open = handle;
     handle.mount(<Code id="snippet" content="fn main() {}" language="rust" />);
-    await handle.settle(SETTLE_FOR_HIGHLIGHT);
+    await handle.settle();
     const frame = handle.capture();
     expect(allText(frame)).toContain("fn main()");
     const hues = new Set(
@@ -96,7 +98,7 @@ describe("Code component (design-system §6.1)", () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 3 });
     open = handle;
     handle.mount(<Code id="snippet" content="plain text" />);
-    await handle.settle(SETTLE_FOR_HIGHLIGHT);
+    await handle.settle();
     const frame = handle.capture();
     expect(allText(frame)).toContain("plain text");
     const hues = new Set(
@@ -113,7 +115,7 @@ describe("Code component (design-system §6.1)", () => {
     const handle = await createHeadlessRenderer({ w: 40, h: 3 });
     open = handle;
     handle.mount(<Code id="snippet" content="const a = 1" language="typescript" />);
-    await handle.settle(SETTLE_FOR_HIGHLIGHT);
+    await handle.settle();
     expect(hueOf(handle.capture(), "const")).toContain("#4cc9f0");
   });
 
@@ -132,13 +134,13 @@ describe("Code export determinism (design-system §6.3)", () => {
   test("two settled renders of the same source produce byte-identical styled rows", async () => {
     const first = await createHeadlessRenderer({ w: 40, h: 6 });
     first.mount(<Code id="snippet" content={TS_SOURCE} language="typescript" />);
-    await first.settle(SETTLE_FOR_HIGHLIGHT);
+    await first.settle();
     const a = first.capture();
     first.destroy();
 
     const second = await createHeadlessRenderer({ w: 40, h: 6 });
     second.mount(<Code id="snippet" content={TS_SOURCE} language="typescript" />);
-    await second.settle(SETTLE_FOR_HIGHLIGHT);
+    await second.settle();
     const b = second.capture();
     second.destroy();
 

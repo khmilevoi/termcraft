@@ -25,9 +25,21 @@ export const DEFAULT_FRAME_SETTLE = {
   /** Consecutive identical frames that end the loop. Two is the smallest number that can tell
    *  "nothing is happening" from "one pass happened to look the same". */
   quietFrames: 2,
-  /** Wall-clock ceiling. ~350 ms is the design spec's budget for a small document. */
-  budgetMs: 350,
-  /** The yield between passes. Small enough that a static page costs ~16 ms in total. */
+  /**
+   * Wall-clock ceiling. Raised from the design spec's original 350ms after a real `Code` mount
+   * (`src/runtime/ui/code.test.tsx`) proved 350ms too tight: a cold tree-sitter grammar load plus
+   * worker round trip can still be in flight past it, so the loop hit the budget with the
+   * highlight genuinely still pending and returned the plain frame `settled: false` (measured
+   * 374ms, 339ms). 1000ms settled a small document highlighted in 8/8 runs at 338-498ms.
+   */
+  budgetMs: 1000,
+  /**
+   * The yield between passes. Measured real cost on a static page (no pending highlight
+   * promises, so the loop exits after `quietFrames` passes) is ~130ms, not the ~16ms this
+   * comment previously claimed — that estimate only counted the two `sleep(pollMs)` calls and
+   * ignored the three `render()` calls that dominate (each ~30ms, ~55ms for the first after
+   * mount).
+   */
   pollMs: 8,
 } as const satisfies Required<FrameSettleOptions>;
 
@@ -89,21 +101,33 @@ export async function settleFrames(input: SettleDriver): Promise<FrameSettleResu
   let passes = 0;
 
   while (input.now() - started < budgetMs) {
-    // The highlight promises ACCELERATE the loop; they never gate it. A worker that dies leaves
-    // a promise open forever, so the race is against ONE poll interval — never against the whole
-    // remaining budget, which would spend the entire budget on the first pass. The `while`
-    // condition is what bounds the total.
+    // The race decides WHEN this pass renders (an in-flight highlight accelerates it past the
+    // poll interval the moment it resolves); `highlightsDone` decides whether the pass is
+    // ELIGIBLE to count toward quiet. A worker that dies leaves a promise open forever, so the
+    // race is against ONE poll interval — never against the whole remaining budget, which would
+    // spend the entire budget on the first pass. The `while` condition is what bounds the total.
     //
-    // `.catch(() => {})` on the `Promise.all` swallows a rejected `highlightingDone` (this
-    // function's doc comment promises it never throws, and a failed highlight is exactly the
-    // case the quiet-frames backstop below exists to fall through to). Not re-logged here:
-    // `CodeRenderable.startHighlight` already warns on its own failure — this is only the
-    // accelerator declining to gate on a signal that turned out bad.
-    await Promise.race([Promise.all(input.pending()).catch(() => {}), input.sleep(pollMs)]);
+    // A rejection is treated as "done", never as a reason to hang: this function's doc comment
+    // promises it never throws, and a failed highlight is exactly the case the quiet-frames
+    // backstop exists to fall through to. Not re-logged here: `CodeRenderable.startHighlight`
+    // already warns on its own failure.
+    const highlightsDone = await Promise.race([
+      Promise.all(input.pending()).then(
+        () => true,
+        () => true,
+      ),
+      input.sleep(pollMs).then(() => false),
+    ]);
     await input.render();
     passes += 1;
     const next = input.snapshot();
-    if (next === last) {
+    // THE FIX: a quiet frame only counts while no collected highlight promise is still in
+    // flight. Without `highlightsDone`, two consecutive identical frames look "settled" even
+    // when the loop OBSERVED a still-pending promise on both passes — the collected signal was
+    // being discarded rather than gated on. See `src/runtime/ui/code.test.tsx` for the real
+    // `Code` mount that first exposed this: 6/6 runs returned `settled: true` on the flat,
+    // unhighlighted frame while `highlightingDone` was still pending.
+    if (next === last && highlightsDone) {
       quiet += 1;
       if (quiet >= quietFrames) {
         return { settled: true, passes, elapsedMs: input.now() - started };
