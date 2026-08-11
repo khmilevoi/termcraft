@@ -10,6 +10,7 @@ import {
   lintDroppedIds,
   lintModuleScopeTokens,
   lintSilencingAny,
+  lintTokenNameColors,
   lintUnlistedNavigation,
   lintUnpointedElements,
 } from "./lints";
@@ -216,6 +217,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
         lintDroppedIds(input.source, syntax, input.referencedIds),
         lintUnlistedNavigation(input.source, syntax, input.listedSlugs),
         lintModuleScopeTokens(input.source, syntax),
+        lintTokenNameColors(input.source, syntax),
       ],
       unpointed: lintUnpointedElements(input.source),
     }),

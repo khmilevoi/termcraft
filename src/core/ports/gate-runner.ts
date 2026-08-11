@@ -99,7 +99,11 @@ export type GateWarningKindV1 =
   // design-systems §4.5 — `useTokens()` read at MODULE SCOPE captures one theme's values forever,
   // so theme switching renders nothing new. Exactly the shape a token scan can see, which is why
   // it is a lint and not a documentation note. See `gate/model/lints.ts`'s `lintModuleScopeTokens`.
-  | "module-scope-tokens";
+  | "module-scope-tokens"
+  // design-systems §4.5, §9, D10 — a token NAME written where a `Color` (`#rrggbb`) is expected.
+  // `TS2322` already rejects this fatally; this warning carries the EXACT rewrite alongside that
+  // verdict. See `gate/model/lints.ts`'s `lintTokenNameColors`.
+  | "token-name-as-color";
 
 /**
  * One non-fatal gate warning. `file` names the SOURCE this warning was produced against, and

@@ -343,6 +343,78 @@ export function lintModuleScopeTokens(
 }
 
 /**
+ * The colour-prop names the runtime catalog declares as `Color`. `color` and `background` are
+ * exact; everything else in the catalog ends in `Color` (`borderColor`, `titleColor` today,
+ * `src/runtime/ui/*.tsx`), and the suffix rule is deliberate — it is what lets the wrapper plans
+ * (P5-P9) add `fillColor`, `trackColor` and the rest without editing this list.
+ */
+function isColorAttribute(name: string): boolean {
+  return name === "color" || name === "background" || (name.length > 5 && name.endsWith("Color"));
+}
+
+/**
+ * The `token-name-as-color` warning (design-systems §4.5, §9). `keyof ThemeTokens` became `Color`
+ * — a `#rrggbb` string — so `color="foregroundMuted"` is now a fatal `TS2322`. This lint does not
+ * duplicate that verdict; it attaches the exact rewrite to it, because §9's migration window is
+ * deliberately red and "each diagnostic carries its exact rewrite" is what makes that window
+ * legible rather than broken.
+ *
+ * WHAT IT CAN SEE, AND NOTHING MORE (`lintDeterminism`'s own recorded principle): a name that
+ * merges to a catalog colour prop, followed by `=` and a STRING LITERAL that does not start with
+ * `#`. Three deliberate narrowings:
+ *
+ *  - `=` ONLY, never `:`. `extractDeclaredIds` accepts both because an `id` is equally an id in a
+ *    JSX attribute and in an object literal. A `{ color: "accent" }` in an object literal may be a
+ *    props bag or may be any other object with a `color` field, and this lint has no way to tell —
+ *    so it stays on the shape it can read honestly.
+ *  - It does NOT check whether the string names a declared token. The type check answers that
+ *    fatally against the project's own manifest; a second, weaker membership check here would be a
+ *    lint promising more than its scanner can see.
+ *  - `readHyphenatedName` is what keeps `data-color="accent"` out: the lexer hands `data`, `-`,
+ *    `color` back as three tokens, and a bare tail match would read the third as the attribute.
+ *
+ * Position is taken from the attribute NAME's own last token — `readHyphenatedName` returns only
+ * `{ name, next }`, no `pos` field of its own, so `toks[nameRead.next - 1]` (the name's last
+ * merged token) is the real position to use, matching `extractDeclaredIds`'s own index-only walk
+ * rather than inventing a field that reader does not have.
+ */
+export function lintTokenNameColors(
+  source: string,
+  syntax: SourceSyntax,
+): SourceStreamTruncatedError | GateWarning[] {
+  const toks = tokenize(source, syntax);
+  if (toks instanceof Error) return toks;
+  const warnings: GateWarning[] = [];
+
+  for (let i = 0; i < toks.length; i += 1) {
+    if (toks[i]!.kind !== SK.Identifier) continue;
+    // Kind already checked Identifier, so this is never null — the same assertion
+    // `extractDeclaredIds` makes for the same reason.
+    const nameRead = readHyphenatedName(toks, i)!;
+    const name = nameRead.name;
+    const nameEnd = toks[nameRead.next - 1]!;
+    const sep = toks[nameRead.next];
+    const value = toks[nameRead.next + 1];
+    i = nameRead.next - 1; // the loop's own `i += 1` lands exactly on `nameRead.next`
+    if (!isColorAttribute(name)) continue;
+    if (sep === undefined || sep.kind !== SK.EqualsToken) continue;
+    if (value === undefined || value.kind !== SK.StringLiteral) continue;
+    if (value.value.startsWith("#")) continue;
+    warnings.push({
+      kind: "token-name-as-color",
+      message:
+        `\`${name}="${value.value}"\` is a token NAME, but colour props now take a concrete ` +
+        `\`#rrggbb\` value — rewrite it as \`${name}={t.${value.value}}\` and add ` +
+        `\`const t = useTokens()\` at the top of the component (import \`useTokens\` from your ` +
+        `design system's \`system/tokens\` module).`,
+      ...lineColOf(source, nameEnd.pos),
+    });
+  }
+
+  return warnings;
+}
+
+/**
  * The set of ids the candidate declares anywhere in its source: a string literal
  * bound to an `id` attribute (`id="p"`, the JSX form) or an `id` property
  * (`id: "p"`, the object-literal form). Used by `lintDroppedIds` (below), which

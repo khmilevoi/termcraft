@@ -9,6 +9,7 @@ import {
   lintDroppedIds,
   lintModuleScopeTokens,
   lintSilencingAny,
+  lintTokenNameColors,
   lintUnlistedNavigation,
   lintUnpointedElements,
 } from "./lints";
@@ -462,12 +463,17 @@ describe("the token-based lints — a stream that does not cover the source is a
     expect(() => lintModuleScopeTokens(UNREADABLE, "jsx")).toThrow();
   });
 
+  test("lintTokenNameColors lets the throw PASS rather than returning []", () => {
+    expect(() => lintTokenNameColors(UNREADABLE, "jsx")).toThrow();
+  });
+
   test("…and every one of them still runs on an ordinary source — not a blanket refusal", () => {
     expect(scanned(lintDeterminism(COVERED, "jsx"))).toEqual([]);
     expect(scanned(lintSilencingAny(COVERED, "jsx"))).toEqual([]);
     expect(scanned(lintDroppedIds(COVERED, "jsx", []))).toEqual([]);
     expect(scanned(lintUnlistedNavigation(COVERED, "jsx", []))).toEqual([]);
     expect(scanned(lintModuleScopeTokens(COVERED, "jsx"))).toEqual([]);
+    expect(scanned(lintTokenNameColors(COVERED, "jsx"))).toEqual([]);
   });
 });
 
@@ -564,5 +570,56 @@ describe("lintModuleScopeTokens (design-systems §4.5, §7)", () => {
     test("two reads on either side of a conditional expression", () => {
       expect(kinds(`const g = () => (cond ? useTokens() : useTokens())\n`)).toEqual([]);
     });
+  });
+});
+
+describe("lintTokenNameColors (design-systems §4.5, §7, §9)", () => {
+  const only = (source: string) => {
+    // NOTE: the brief's own snippet used "tsx", which is not a valid `SourceSyntax` —
+    // `lexer.ts` declares `SourceSyntax = "jsx" | "no-jsx"`. Corrected to "jsx" here, same as
+    // `lintModuleScopeTokens`'s test block above.
+    const result = lintTokenNameColors(source, "jsx");
+    if (result instanceof Error) throw result;
+    return result;
+  };
+
+  test("carries the EXACT rewrite, not a bare complaint", () => {
+    const [warning] = only(`<Text id="t" color="foregroundMuted">hi</Text>`);
+    expect(warning?.kind).toBe("token-name-as-color");
+    expect(warning?.message).toContain('color="foregroundMuted"');
+    expect(warning?.message).toContain("color={t.foregroundMuted}");
+    expect(warning?.message).toContain("const t = useTokens()");
+  });
+
+  test("fires on every Color-typed prop the catalog declares", () => {
+    // `color`, `background`, `borderColor`, `titleColor` are the four in `src/runtime/ui/*.tsx`
+    // today; the `*Color` suffix rule is what makes the wrapper plans (P5-P9) need no edit here.
+    expect(
+      only(`<Panel id="p" borderColor="accent" titleColor="accentHi" background="surface" />`)
+        .length,
+    ).toBe(3);
+  });
+
+  test("a real hex is clean", () => {
+    expect(only(`<Text id="t" color="#e6a23c">hi</Text>`)).toEqual([]);
+  });
+
+  test("an expression binding is clean — that is the shape this lint is teaching", () => {
+    expect(only(`<Text id="t" color={t.accent}>hi</Text>`)).toEqual([]);
+  });
+
+  test("a non-colour prop with a string value is clean", () => {
+    expect(only(`<Text id="title" title="accent">hi</Text>`)).toEqual([]);
+  });
+
+  test("a hyphenated attribute whose tail is `color` is NOT a colour prop", () => {
+    // The lexer hands `data`, `-`, `color` back as three tokens; a bare tail match would read
+    // `data-color` as `color`.
+    expect(only(`<box data-color="accent" id="b">x</box>`)).toEqual([]);
+  });
+
+  test("the warning carries a position", () => {
+    const [warning] = only(`<Text\n  id="t"\n  color="accent"\n/>`);
+    expect(warning?.line).toBe(3);
   });
 });

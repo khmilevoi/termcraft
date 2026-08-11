@@ -35,7 +35,12 @@ export {
 export type { DesignSystemScanInput, DesignSystemScanResultV1 } from "./model/design-system";
 export { scanNamedExports } from "./model/exports-scan";
 export type { NamedExportScanV1 } from "./model/exports-scan";
-export { lintDeterminism, lintModuleScopeTokens, lintSilencingAny } from "./model/lints";
+export {
+  lintDeterminism,
+  lintModuleScopeTokens,
+  lintSilencingAny,
+  lintTokenNameColors,
+} from "./model/lints";
 export { createSmokeRender } from "./model/smoke";
 export { smokeResultToErrors } from "./ports/smoke-renderer";
 export type { SmokeRenderer, SmokeRequest, SmokeResult } from "./ports/smoke-renderer";
