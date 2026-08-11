@@ -151,3 +151,65 @@ describe("scanNamedExports — declarator initializer edge cases (fix round 2)",
     expect(result.exhaustive).toBe(false);
   });
 });
+
+// Fix round 3 (task review Critical finding): a template literal's interpolation is opaque to
+// the lexer's brace/paren/bracket tokens (`TemplateHead`/`TemplateMiddle`/`TemplateTail`, never
+// `OpenBraceToken`/`CloseBraceToken`), and the declarator walk's `CommaToken` branch used to jump
+// blindly past whatever followed a comma. Combined, a comma or `import` sitting at an
+// interpolation's own top level could end the walk silently (dropping a real declarator name) or
+// get mistaken for a declarator name that was never exported. See `skipTemplateLiteral`'s doc
+// comment for the full mechanism.
+describe("scanNamedExports — template-interpolation edge cases (fix round 3)", () => {
+  test.each([
+    'export const a = `${x, (import("mod"))}`, b = 2',
+    "export const a = `${x, (import.meta.url)}`, b = 2",
+  ])("%s no longer loses `b` to a comma or `import` inside the interpolation", (source) => {
+    const result = names(source);
+    expect([...result.names].sort()).toEqual(["a", "b"]);
+    expect(result.exhaustive).toBe(true);
+  });
+
+  test('export const a = 1, m = `${x, (import("y"))}`, c = 3 no longer loses `c`', () => {
+    const result = names('export const a = 1, m = `${x, (import("y"))}`, c = 3');
+    expect([...result.names].sort()).toEqual(["a", "c", "m"]);
+    expect(result.exhaustive).toBe(true);
+  });
+
+  test("a comma inside an interpolation no longer invents a phantom export", () => {
+    const result = names("export const a = `${x, y}`, b = 2");
+    expect([...result.names].sort()).toEqual(["a", "b"]);
+    expect(result.names.has("y")).toBe(false);
+    expect(result.exhaustive).toBe(true);
+  });
+
+  test.each([
+    ["export const a = `${x}`, b = 2", ["a", "b"]],
+    ["export const p = `${fn(a, b)}`, q = 2", ["p", "q"]],
+    ["export const a = `${`${b}`}`, c = 2", ["a", "c"]],
+    ['export const a = `${ "}" }`, b = 2', ["a", "b"]],
+  ])("%s treats the whole template as opaque and stays exhaustive", (source, expected) => {
+    const result = names(source);
+    expect([...result.names].sort()).toEqual(expected);
+    expect(result.exhaustive).toBe(true);
+  });
+
+  test("an unterminated template is returned as a value and does not claim exhaustiveness", () => {
+    const source = "export const a = `${x";
+    expect(() => scanNamedExports(source, "no-jsx")).not.toThrow();
+    const result = scanNamedExports(source, "no-jsx");
+    expect(result === null).toBe(false);
+    if (result instanceof Error) return;
+    expect(result.exhaustive).toBe(false);
+  });
+
+  // Controls re-verified against this round's changes — must stay exactly as safe as before.
+  test.each([
+    ['export const a = (import("mod")), b = 2', ["a", "b"]],
+    ["export const a = { const: 1 }, b = 2", ["a", "b"]],
+    ["export const a = (function () {})(), b = 2", ["a", "b"]],
+  ])("%s is unaffected (control)", (source, expected) => {
+    const result = names(source);
+    expect([...result.names].sort()).toEqual(expected);
+    expect(result.exhaustive).toBe(true);
+  });
+});

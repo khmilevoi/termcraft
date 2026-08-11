@@ -65,7 +65,8 @@ function endsDeclaratorList(kind: SyntaxKind): boolean {
  * destructuring export target (`export const { … } = …` / `export const [ … ] = …`, in either a
  * `const`, `let` or `var` declaration); a star re-export (`export * from "…"`); and — the safety
  * net described below — a declarator initializer whose `function`/`class`/`async` shape this
- * scanner could not skip past cleanly (truncated/unbalanced brackets). The import allowlist,
+ * scanner could not skip past cleanly, OR a template literal that never closes (truncated
+ * brackets, truncated template, or any shape none of the three recognize). The import allowlist,
  * which IS a perimeter, is untouched by this file — a `REEXPORT`/`DYNAMIC_IMPORT` violation this
  * scan happens to see through is still `scanImportAllowlist`'s call to make.
  *
@@ -94,6 +95,25 @@ function endsDeclaratorList(kind: SyntaxKind): boolean {
  * omit a real export while claiming exhaustiveness — that invariant is the whole reason this type
  * exists, and both round-2 findings were breaches of it in opposite directions.
  *
+ * A TEMPLATE LITERAL'S INTERPOLATION IS OPAQUE TO THE DECLARATOR WALK (fix round 3, task review
+ * Critical finding). The lexer does not emit `OpenBraceToken`/`CloseBraceToken` for a template's
+ * `${ … }` — `./scanner.ts`'s `scanCodeToken` produces `TemplateHead`, the interpolation's own
+ * tokens, then `TemplateMiddle`/`TemplateTail` — so `isOpener`/`isCloser` are structurally blind
+ * to an interpolation's boundary, and a comma or `import` sitting at ITS top level used to be
+ * exposed to the declarator walk exactly as if it were real declarator syntax. Two bugs followed
+ * from the same hole, both against a source shaped `` `export const a = `${x, (import(spec))}`,
+ * b = 2` ``: with `spec` a string, `b` was silently LOST (the walk's blind `k += 2` jump past the
+ * comma landed it on a bare `ImportKeyword`, which `endsDeclaratorList` matches, ending
+ * collection silently); with the interpolation replaced by `` `${x, y}` ``, `y` was INVENTED as a
+ * phantom export (the same jump treated a template-interior identifier as if it were sitting in
+ * real declarator-name position). Both are now closed by treating `TemplateHead` as its
+ * own top-priority branch — {@link skipTemplateLiteral} skips the ENTIRE template, nested
+ * templates included, as one opaque unit contributing no names and no separator meaning — and by
+ * deleting the blind jump entirely: a comma only ever advances the walk by one token, and the
+ * NEXT token is read by the walk's ordinary per-kind dispatch, collecting an Identifier as a
+ * declarator name only in the one position (immediately after that comma) where a declarator name
+ * is actually legal.
+ *
  * SUPPORTED FORMS, each contributing zero or more names to `names`:
  * - `export const|let|var <name>[ = …][, <name>[ = …] …]` — every top-level declarator name in
  *   the list, `const`/`let`/`var` alike;
@@ -117,9 +137,9 @@ export interface NamedExportScanV1 {
   /**
    * False when a form this scanner cannot read exhaustively was seen — a destructuring export
    * (`export const { a } = x`), an `export * from`, or a declarator initializer whose
-   * `function`/`class`/`async` shape this scanner could not skip past (a truncated source, or an
-   * initializer shape it does not recognize). A caller must then NOT report a missing name as a
-   * fatal.
+   * `function`/`class`/`async` shape, or template literal, this scanner could not skip past (a
+   * truncated source, an unterminated template, or an initializer shape it does not recognize).
+   * A caller must then NOT report a missing name as a fatal.
    */
   readonly exhaustive: boolean;
 }
@@ -198,10 +218,33 @@ export function scanNamedExports(
     // declaration's own top level until the declarator list ends. A bare `function`/`class`/
     // `async` keyword — on ANY declarator, not only the first — is not itself an end: it is
     // skipped past (see `skipInitializerKeyword`) so the walk keeps reading past it exactly as
-    // it already reads past a bracketed initializer.
+    // it already reads past a bracketed initializer. A template literal (`TemplateHead` through
+    // its matching `TemplateTail`) is skipped WHOLESALE (see `skipTemplateLiteral`) for the same
+    // reason: its interpolation can hold a comma or an `import` that is not real declarator
+    // syntax at all, and reading into it — as the walk used to via an unconditional `k += 2` past
+    // a comma — either dropped a real declarator name or invented one that was never exported.
+    //
+    // `expectingName` is the walk's only look-behind: true for exactly one iteration, right after
+    // a comma, because that is the ONE position where a bare Identifier legally IS a declarator
+    // name. Every other branch that consumes more than the current token resets it to `false`
+    // before continuing, so an Identifier reached any other way — inside a skipped bracket run, a
+    // skipped template, or as an ordinary token this walk is simply passing over — is never
+    // mistaken for a name.
     let k = nameIdx + 1;
+    let expectingName = false;
     while (k < toks.length) {
       const kind = toks[k]!.kind;
+
+      if (kind === SK.TemplateHead) {
+        const after = skipTemplateLiteral(toks, k);
+        if (after === null) {
+          exhaustive = false; // the template never closes — the stream ran out before it did
+          break;
+        }
+        k = after;
+        expectingName = false;
+        continue;
+      }
 
       if (kind === SK.FunctionKeyword || kind === SK.ClassKeyword || kind === SK.AsyncKeyword) {
         const after = skipInitializerKeyword(toks, k);
@@ -210,33 +253,38 @@ export function scanNamedExports(
           break;
         }
         k = after;
+        expectingName = false;
         continue;
       }
 
       if (endsDeclaratorList(kind)) break;
 
       if (isOpener(kind)) {
+        if (expectingName && (kind === SK.OpenBraceToken || kind === SK.OpenBracketToken)) {
+          exhaustive = false; // a later destructuring declarator in the same list
+        }
         const after = skipBalanced(toks, k);
         if (after === null) {
           exhaustive = false; // unbalanced brackets — the stream ran out before this closed
           break;
         }
         k = after;
+        expectingName = false;
         continue;
       }
 
       if (kind === SK.CommaToken) {
-        const afterComma = toks[k + 1];
-        if (afterComma?.kind === SK.OpenBraceToken || afterComma?.kind === SK.OpenBracketToken) {
-          exhaustive = false; // a later destructuring declarator in the same list
-          k += 1;
-          continue;
-        }
-        if (afterComma?.kind === SK.Identifier) names.add(afterComma.value);
-        k += 2;
+        // NOT `k += 2` (fix round 3, task review Critical finding): jumping past whatever
+        // follows sight-unseen let an interpolation-interior comma masquerade as a declarator
+        // separator. Advance past only the comma itself and let the next iteration's ordinary
+        // dispatch see what actually follows.
+        k += 1;
+        expectingName = true;
         continue;
       }
 
+      if (expectingName && kind === SK.Identifier) names.add(toks[k]!.value);
+      expectingName = false;
       k += 1;
     }
   }
@@ -277,6 +325,56 @@ function skipBalanced(toks: Tok[], openerIdx: number): number | null {
     else if (isCloser(toks[k]!.kind)) {
       depth -= 1;
       if (depth === 0) return k + 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Skip one whole template literal starting at its `TemplateHead`, returning the index one past
+ * the matching `TemplateTail`, or `null` when the stream ends before one is found (fix round 3,
+ * task review Critical finding).
+ *
+ * WHY THIS EXISTS AT ALL: the lexer never emits `OpenBraceToken`/`CloseBraceToken` for a
+ * template's own `${ … }` — `./scanner.ts`'s `scanCodeToken` produces `TemplateHead`, then the
+ * interpolation's own tokens (which may include perfectly ordinary `OpenBraceToken`s and
+ * commas), then `TemplateMiddle` (if another `${` follows) or `TemplateTail` (once the literal
+ * closes). `isOpener`/`isCloser` are therefore structurally blind to an interpolation's own
+ * boundary, so without this function the declarator walk would read STRAIGHT INTO a template's
+ * interior as if it were ordinary top-level declarator syntax.
+ *
+ * COUNTING, NOT BALANCING BRACKETS. `TemplateHead` increments a depth counter, `TemplateTail`
+ * decrements it, and the function returns the moment depth reaches `0` — the same shape as
+ * `skipBalanced`, but over template nesting rather than bracket nesting (a template can nest
+ * inside its own interpolation, e.g. `` `${`${a}`}` ``). `TemplateMiddle` changes nothing: it
+ * continues the SAME template whose `TemplateHead` already opened the current depth level. Any
+ * REAL bracket run inside the interpolation (`` `${ {a: 1} }` ``, `` `${fn(a, b)}` ``) is not
+ * inspected here at all — it does not need to be, because the underlying tokenizer already
+ * resolves the one genuine ambiguity (whether a `}` closes a real brace or resumes the template)
+ * via its own brace-context stack (`./scanner.ts`'s `scanCodeToken`), so a real `{`/`}` pair
+ * inside an interpolation is always tokenized as `OpenBraceToken`/`CloseBraceToken`, never
+ * mistaken for the template's own boundary, and a `}` INSIDE A STRING (`` `${ "}" }` ``) is part
+ * of that string's own `StringLiteral` token and never a bare token at all. This function simply
+ * never looks at what is between a `TemplateHead` and its `TemplateTail` — the whole span,
+ * including any comma, `import`, or identifier in it, is opaque initializer content that
+ * contributes no declarator name and ends no declarator list.
+ *
+ * `null` ON AN UNTERMINATED TEMPLATE, exactly like {@link skipBalanced} on an unbalanced bracket
+ * run: running off the end of the token stream without depth returning to `0` means a
+ * `TemplateHead` was found with no matching `TemplateTail` anywhere after it (the interpolation's
+ * own expression ran to end-of-file without ever closing back into template mode). The caller
+ * fails open — `exhaustive = false`, stop collecting — rather than guess where it was "meant" to
+ * end.
+ */
+function skipTemplateLiteral(toks: Tok[], headIdx: number): number | null {
+  let depth = 0;
+  let j = headIdx;
+  for (; j < toks.length; j += 1) {
+    const kind = toks[j]!.kind;
+    if (kind === SK.TemplateHead) depth += 1;
+    else if (kind === SK.TemplateTail) {
+      depth -= 1;
+      if (depth === 0) return j + 1;
     }
   }
   return null;
