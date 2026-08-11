@@ -87,11 +87,20 @@ export const DESIGN_CHECK_RENDERED_WARNING_KINDS: ReadonlySet<string> = new Set(
   ...SILENCING_WARNING_KINDS,
 ]);
 
-/** The retry fold's own UI-contract exclusions, carried verbatim — see this file's header. */
+/**
+ * The retry fold's own UI-contract exclusions, carried verbatim — see this file's header — plus
+ * `module-scope-tokens` (design-systems §4.5, added alongside Task 8): a token-read-placement
+ * advisory in the same family as `dropped-id`/`unpointed-element`/`unlisted-navigation`, not a
+ * determinism/graph finding and not the specific type-suppression escape hatch `silencing-any`
+ * was added here to catch. No incident drove giving it its own header, so it follows the retry
+ * fold's own implicit treatment (neither `DETERMINISM_WARNING_KINDS` nor `GRAPH_WARNING_KINDS`
+ * names it in `core/turns/model/prompt.ts` either) rather than inventing one.
+ */
 export const DESIGN_CHECK_EXCLUDED_WARNING_KINDS: ReadonlySet<string> = new Set([
   "dropped-id",
   "unpointed-element",
   "unlisted-navigation",
+  "module-scope-tokens",
 ]);
 
 const DESIGN_TREE_PREFIX = `${DESIGN_DIRNAME}/`;

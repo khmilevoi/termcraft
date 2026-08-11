@@ -63,7 +63,11 @@ export type GateWarningKind =
   | "unlisted-navigation"
   | "silencing-any"
   | "import-cycle"
-  | "dead-module";
+  | "dead-module"
+  // design-systems §4.5 — `useTokens()` read at MODULE SCOPE captures one theme's values forever,
+  // so theme switching renders nothing new. Exactly the shape a token scan can see, which is why
+  // it is a lint and not a documentation note. See `gate/model/lints.ts`'s `lintModuleScopeTokens`.
+  | "module-scope-tokens";
 
 /**
  * One non-fatal gate warning. `file` names the SOURCE this warning was produced against, and

@@ -826,6 +826,10 @@ const GATE_WARNING_KINDS_V1 = [
   // edges, and a code file no page's proven closure reaches.
   "import-cycle",
   "dead-module",
+  // design-systems §4.5 — `useTokens()` read at MODULE SCOPE captures one theme's values
+  // forever, so theme switching renders nothing new. See `gate/model/lints.ts`'s
+  // `lintModuleScopeTokens`.
+  "module-scope-tokens",
 ] as const;
 
 const turnGateErrorV1Schema = z.strictObject({

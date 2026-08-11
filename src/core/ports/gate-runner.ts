@@ -95,7 +95,11 @@ export type GateWarningKindV1 =
   // Design §8 step 3 — a code file no page's PROVEN closure reaches. Set only by
   // {@link GateRunner.runTree}; never auto-deletes the file, since deleting a half-finished
   // refactor is worse than carrying it.
-  | "dead-module";
+  | "dead-module"
+  // design-systems §4.5 — `useTokens()` read at MODULE SCOPE captures one theme's values forever,
+  // so theme switching renders nothing new. Exactly the shape a token scan can see, which is why
+  // it is a lint and not a documentation note. See `gate/model/lints.ts`'s `lintModuleScopeTokens`.
+  | "module-scope-tokens";
 
 /**
  * One non-fatal gate warning. `file` names the SOURCE this warning was produced against, and

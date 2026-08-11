@@ -226,6 +226,90 @@ export function lintUnpointedElements(source: string): GateWarning[] {
 }
 
 /**
+ * The `module-scope-tokens` warning (design-systems §4.5, §7). `useTokens()` read at module scope
+ * captures one theme's values forever, so a preview theme override renders nothing new — the page
+ * is a `reatomComponent` and only a read INSIDE its body is a tracked read.
+ *
+ * WHAT THIS SCAN CAN SEE, AND NOTHING MORE (`lintDeterminism`'s own recorded principle). It is a
+ * token scan with no scope analysis, so it keys on things it can genuinely observe:
+ *
+ *  - BRACE DEPTH 0. Every function body, class body and block opens a brace; a call at depth 0 is
+ *    not inside one.
+ *  - NO `=>` SINCE THE LAST STATEMENT BOUNDARY. An arrow function with an EXPRESSION body opens no
+ *    brace, so depth alone would fire on `const read = () => useTokens()`. That is not a corner
+ *    case invented for the rule: the §4.3 scaffold termcraft itself generates is
+ *    `export const useTokens = () => useRuntimeTokens<Tokens>()`, and a lint that warned on the
+ *    file the tool writes would be worse than no lint. The latch resets at `;`, `{` and `}` — the
+ *    tokens a BRACED statement boundary always produces.
+ *  - AN ASI-TERMINATED ARROW BODY RESETS THE LATCH TOO, the moment its own `useTokens()` call
+ *    closes. `;`/`{`/`}` cover a braced or semicolon-terminated boundary, but the scanner sees no
+ *    token at all for a boundary drawn only by automatic semicolon insertion (a bare newline is
+ *    trivia, skipped before `tokenize` ever returns it) — so
+ *    `const read = () => useTokens()\nconst t = useTokens()\n` would otherwise leave the SECOND,
+ *    genuinely module-scope call silently latched off by the FIRST arrow forever. A matched,
+ *    non-dotted `useTokens ( )` call is itself a complete primary expression — nothing in the
+ *    source can still be "inside" an un-braced arrow body once that call's own parens have closed
+ *    — so evaluating the shape is exactly the checkpoint that closes the latch, whether or not
+ *    THIS call gets a warning.
+ *
+ * The call shape matched is exactly `useTokens ( )` — an Identifier not preceded by `.` (a member
+ * named `useTokens` on some object is not the runtime hook), followed by an EMPTY argument list
+ * (the hook takes none; anything else is a different function).
+ */
+export function lintModuleScopeTokens(
+  source: string,
+  syntax: SourceSyntax,
+): SourceStreamTruncatedError | GateWarning[] {
+  const toks = tokenize(source, syntax);
+  if (toks instanceof Error) return toks;
+  const warnings: GateWarning[] = [];
+  let depth = 0;
+  let sawArrow = false;
+
+  for (let i = 0; i < toks.length; i += 1) {
+    const t = toks[i]!;
+    if (t.kind === SK.OpenBraceToken) {
+      depth += 1;
+      sawArrow = false;
+      continue;
+    }
+    if (t.kind === SK.CloseBraceToken) {
+      depth = Math.max(0, depth - 1);
+      sawArrow = false;
+      continue;
+    }
+    if (t.kind === SK.SemicolonToken) {
+      sawArrow = false;
+      continue;
+    }
+    if (t.kind === SK.EqualsGreaterThanToken) {
+      sawArrow = true;
+      continue;
+    }
+    if (t.kind !== SK.Identifier || t.value !== "useTokens") continue;
+    if (toks[i - 1]?.kind === SK.DotToken) continue;
+    if (toks[i + 1]?.kind !== SK.OpenParenToken) continue;
+    if (toks[i + 2]?.kind !== SK.CloseParenToken) continue;
+    // A matched call closes the latch (see the ASI paragraph above) BEFORE the suppression check,
+    // so this same call is judged against the latch's state as of the `=>` that opened it — not
+    // against the reset it itself triggers for whatever comes after.
+    const suppressed = depth > 0 || sawArrow;
+    sawArrow = false;
+    if (suppressed) continue;
+    warnings.push({
+      kind: "module-scope-tokens",
+      message:
+        "`useTokens()` at module scope captures one theme's values forever — call it inside the " +
+        "component body, so the read is tracked and a theme change re-renders the page; see " +
+        'RUNTIME.md\'s "Colors".',
+      ...lineColOf(source, t.pos),
+    });
+  }
+
+  return warnings;
+}
+
+/**
  * The set of ids the candidate declares anywhere in its source: a string literal
  * bound to an `id` attribute (`id="p"`, the JSX form) or an `id` property
  * (`id: "p"`, the object-literal form). Used by `lintDroppedIds` (below), which

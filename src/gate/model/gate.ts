@@ -8,6 +8,7 @@ import { createGateResult } from "./gate-result";
 import {
   lintDeterminism,
   lintDroppedIds,
+  lintModuleScopeTokens,
   lintSilencingAny,
   lintUnlistedNavigation,
   lintUnpointedElements,
@@ -214,6 +215,7 @@ export async function runGate(input: GateInput, ports: GatePorts = {}): Promise<
         lintSilencingAny(input.source, syntax),
         lintDroppedIds(input.source, syntax, input.referencedIds),
         lintUnlistedNavigation(input.source, syntax, input.listedSlugs),
+        lintModuleScopeTokens(input.source, syntax),
       ],
       unpointed: lintUnpointedElements(input.source),
     }),

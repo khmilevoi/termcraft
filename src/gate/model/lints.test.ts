@@ -7,6 +7,7 @@ import type { SourceStreamTruncatedError } from "./lexer";
 import {
   lintDeterminism,
   lintDroppedIds,
+  lintModuleScopeTokens,
   lintSilencingAny,
   lintUnlistedNavigation,
   lintUnpointedElements,
@@ -462,5 +463,72 @@ describe("the token-based lints — a stream that does not cover the source is a
     expect(scanned(lintSilencingAny(COVERED, "jsx"))).toEqual([]);
     expect(scanned(lintDroppedIds(COVERED, "jsx", []))).toEqual([]);
     expect(scanned(lintUnlistedNavigation(COVERED, "jsx", []))).toEqual([]);
+  });
+});
+
+describe("lintModuleScopeTokens (design-systems §4.5, §7)", () => {
+  const kinds = (source: string) => {
+    // NOTE: the brief's own snippet used "tsx", which is not a valid `SourceSyntax` —
+    // `lexer.ts` declares `SourceSyntax = "jsx" | "no-jsx"`. Corrected to "jsx" here.
+    const result = lintModuleScopeTokens(source, "jsx");
+    if (result instanceof Error) throw result;
+    return result.map((w) => w.kind);
+  };
+
+  test("a call at module scope warns", () => {
+    expect(kinds(`import { useTokens } from "../system/tokens"\nconst t = useTokens()\n`)).toEqual([
+      "module-scope-tokens",
+    ]);
+  });
+
+  test("the warning names the fix, not just the fault", () => {
+    const result = lintModuleScopeTokens(`const t = useTokens()\n`, "jsx");
+    if (result instanceof Error) throw result;
+    expect(result[0]?.message).toContain("inside the component");
+    expect(result[0]?.line).toBe(1);
+  });
+
+  test("a call inside a component body is clean", () => {
+    expect(
+      kinds(
+        `export default reatomComponent(function Page() {\n  const t = useTokens()\n  return null\n})\n`,
+      ),
+    ).toEqual([]);
+  });
+
+  test("the §4.3 SCAFFOLD is clean — an arrow with an expression body opens no brace", () => {
+    // Without the `=>` guard, the lint would fire on the very file termcraft generates.
+    expect(
+      kinds(
+        `import { useTokens as useRuntimeTokens, type Color } from "@termcraft/runtime"\n` +
+          `import ds from "./design-system.json"\n\n` +
+          `export type Tokens = { [K in keyof (typeof ds)["themes"]["dark-default"]["tokens"]]: Color }\n` +
+          `export const useTokens = () => useRuntimeTokens<Tokens>()\n`,
+      ),
+    ).toEqual([]);
+  });
+
+  test("an arrow with a BRACE body is clean too — the call is inside the brace", () => {
+    expect(kinds(`const read = () => {\n  const t = useTokens()\n  return t\n}\n`)).toEqual([]);
+  });
+
+  test("a second module-scope call after a braced function still warns", () => {
+    // The `=>` latch must reset at a statement boundary, or one arrow anywhere would disable the
+    // lint for the rest of the file.
+    expect(kinds(`const read = () => useTokens()\nconst t = useTokens()\n`)).toEqual([
+      "module-scope-tokens",
+    ]);
+  });
+
+  test("an IMPORT of the name is not a call", () => {
+    expect(kinds(`import { useTokens } from "../system/tokens"\n`)).toEqual([]);
+  });
+
+  test("a call WITH arguments is not this lint's business", () => {
+    expect(kinds(`const t = useTokens(1)\n`)).toEqual([]);
+  });
+
+  test("a member access is not the runtime hook", () => {
+    expect(kinds(`const t = kit.useTokens()\n`)).toEqual([]);
   });
 });
