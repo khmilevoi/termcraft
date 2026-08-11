@@ -94,3 +94,5 @@ export { Select } from "./ui/select";
 export type { SelectProps, SelectItem } from "./ui/select";
 export { Textarea } from "./ui/textarea";
 export type { TextareaProps } from "./ui/textarea";
+export { ScrollBox } from "./ui/scroll-box";
+export type { ScrollBoxProps } from "./ui/scroll-box";
