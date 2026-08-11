@@ -1666,6 +1666,10 @@ describe("the design system in the whole-tree pass (design-systems §7)", () => 
   const MANIFEST = JSON.stringify(validManifestObject(), null, 2) + "\n";
   const BUTTON = `export const Button = (p: { id: string }) => p.id\n`;
   const SHELL = `export function PageShell() { return null }\n`;
+  // The §4.3 typed accessor's stand-in content — the tests below only care that
+  // "system/tokens.ts" is present in the tree and imports nothing that escapes `system/`, not
+  // about its exact bytes (`renderTokensScaffold` owns those, in `entities/design-system`).
+  const TOKENS = `export const tokens = 1\n`;
   const PAGE = (theme: string) =>
     `import { definePage, reatomComponent } from "@termcraft/runtime"
 export const meta = definePage({ kitApiVersion: 1, title: "D", minSize: { w: 80, h: 24 }, theme: "${theme}" })
@@ -1731,6 +1735,37 @@ export default reatomComponent(() => null)
     });
     const result = await run(files);
     expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
+  });
+
+  test("system/tokens.ts is not a dead module, even before any page imports it (P4 D9)", async () => {
+    const files = withSystem({ "system/tokens.ts": TOKENS });
+    const result = await run(files);
+    expect(result.warnings.filter((w) => w.kind === "dead-module").map((w) => w.file)).toEqual([]);
+  });
+
+  test("an UNDECLARED module under system/ is still a dead module (P4 D9 does not widen to the whole folder)", async () => {
+    // The alternative resolution — suppressing `dead-module` for the whole `system/` folder —
+    // would also hide a component the manifest forgot to declare, which is a fact the warning
+    // should keep reporting. So the fix is narrow: only `system/tokens.ts` becomes a root.
+    const files = withSystem({
+      "system/tokens.ts": TOKENS,
+      "system/orphan.tsx": `export const Orphan = () => null\n`,
+    });
+    const result = await run(files);
+    expect(result.warnings.filter((w) => w.kind === "dead-module").map((w) => w.file)).toEqual([
+      "system/orphan.tsx",
+    ]);
+  });
+
+  test("with NO manifest, system/tokens.ts gets no special treatment (P2's D8 still gates D9)", async () => {
+    const files = new Map([
+      ["pages/dash.tsx", PAGE("dark")],
+      ["system/tokens.ts", TOKENS],
+    ]);
+    const result = await run(files);
+    expect(
+      result.warnings.some((w) => w.kind === "dead-module" && w.file === "system/tokens.ts"),
+    ).toBe(true);
   });
 
   test("a file NEITHER a page NOR a component reaches still trips dead-module", async () => {

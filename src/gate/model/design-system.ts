@@ -3,6 +3,7 @@ import * as errore from "errore";
 import {
   DESIGN_SYSTEM_DIRNAME,
   DESIGN_SYSTEM_MANIFEST_RELPATH,
+  DESIGN_SYSTEM_TOKENS_RELPATH,
   decodeDesignSystemManifest,
   designSystemComponentRelPath,
   findUnresolvedComponents,
@@ -237,6 +238,36 @@ export function checkDesignSystemSlice(input: DesignSystemScanInput): DesignSyst
 
   const errors: GateError[] = [];
   const componentRoots: string[] = [];
+
+  // THE TYPED ACCESSOR IS A ROOT (design-systems §4.3; plan P4 decision D9, resolving P2's own
+  // D9, which knowingly left this as a false positive). `system/tokens.ts` is written by
+  // termcraft itself — the project-create scaffold and the mechanical migration both emit it —
+  // and it is the file §4.3 teaches every page to import. It is "dead" only inside exactly the
+  // window the migration exists to close (§9's red window), so a `dead-module` warning on it
+  // would fire on a file the user never wrote, at the one moment the user is least able to act on
+  // it. The alternative considered and rejected: suppressing `dead-module` for the whole
+  // `system/` folder — that would also hide a genuinely orphaned component the manifest forgot to
+  // declare, a fact the warning should keep reporting. So this adds exactly one root, not a
+  // folder-wide suppression.
+  //
+  // GUARDED BY `present` — built above from `input.treePaths`, so this only fires when
+  // `system/tokens.ts` actually exists in the tree, and only once this line is reached at all,
+  // which requires `hasDesignSystem` (this function's own first line, decision D8) to already
+  // have returned true. A tree with no `system/design-system.json` is judged exactly as it is
+  // judged today: `hasDesignSystem` returns `NO_DESIGN_SYSTEM` before any of this code runs.
+  //
+  // DELIBERATELY NOT ADDED on the three early-return paths above this line (missing manifest
+  // source text, a manifest that fails to decode, an unsupported `kitApiVersion`) even though
+  // each of those already passed the `hasDesignSystem` gate. Each of those paths sets
+  // `unverified: true`, which `gate-runner.ts`'s `runTree` already folds into
+  // `anyClosureBlocked` (`resolved.anyClosureBlocked || designSystem.unverified`) — independently
+  // suppressing `dead-module` for the WHOLE tree, `system/tokens.ts` included. Adding the root on
+  // those paths too would duplicate a suppression that already holds rather than close any real
+  // gap; a manifest that did not decode is a "we cannot verify anything yet" situation the
+  // existing `unverified` flag already owns, distinct from a manifest that decoded cleanly and
+  // simply declared no components (this function's normal, non-early-return path), which is the
+  // only situation where `dead-module` runs for real and where this root actually matters.
+  if (present.has(DESIGN_SYSTEM_TOKENS_RELPATH)) componentRoots.push(DESIGN_SYSTEM_TOKENS_RELPATH);
 
   for (const component of manifest.components) {
     const relPath = designSystemComponentRelPath(component);
