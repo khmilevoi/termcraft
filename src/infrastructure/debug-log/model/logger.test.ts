@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import type { TeeSink } from "../types";
-import { MAX_HELD_LINES, createLogger, resumeConsolePassthrough, suspendConsolePassthrough } from "./logger";
+import {
+  MAX_HELD_LINES,
+  createLogger,
+  installThirdPartyConsoleBridge,
+  log,
+  resumeConsolePassthrough,
+  suspendConsolePassthrough,
+  uninstallThirdPartyConsoleBridge,
+} from "./logger";
 
 const ORIGINALS = {
   log: console.log,
@@ -208,5 +216,84 @@ describe("resumeConsolePassthrough", () => {
     logger.warn("plain");
 
     expect(screen).toEqual(["plain"]);
+  });
+});
+
+describe("the third-party console bridge (plan P8 D4)", () => {
+  test("a third-party console.warn goes through log.* once installed, and is restored on uninstall", () => {
+    const seen: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      seen.push(args.map(String).join(" "));
+    };
+    try {
+      installThirdPartyConsoleBridge();
+      // A dependency's own call — this is exactly the shape @opentui/core's
+      // `console.warn("Code highlighting failed, falling back to plain text:", error)` has.
+      console.warn("Code highlighting failed", "boom");
+      expect(seen).toEqual(["Code highlighting failed boom"]);
+
+      uninstallThirdPartyConsoleBridge();
+      console.warn("after");
+      expect(seen).toEqual(["Code highlighting failed boom", "after"]);
+    } finally {
+      uninstallThirdPartyConsoleBridge();
+      console.warn = original;
+    }
+  });
+
+  test("installing twice is idempotent and does not chain the bridge onto itself", () => {
+    const seen: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      seen.push(args.map(String).join(" "));
+    };
+    try {
+      installThirdPartyConsoleBridge();
+      installThirdPartyConsoleBridge();
+      console.error("x");
+      // Exactly once — a chained bridge would double every line and, worse, could recurse.
+      expect(seen).toEqual(["x"]);
+    } finally {
+      uninstallThirdPartyConsoleBridge();
+      console.error = original;
+    }
+  });
+
+  test("with NO bridge installed, log.* still reaches whatever console.warn currently is", () => {
+    // The compatibility guarantee that keeps the ~30 test files which spyOn(console, …) green:
+    // the indirection added for the bridge must be inert when no bridge is installed.
+    const seen: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      seen.push(args.map(String).join(" "));
+    };
+    try {
+      log.warn("plain");
+      expect(seen).toEqual(["plain"]);
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  test("while the terminal is held, a bridged line never reaches the writer", () => {
+    const seen: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      seen.push(args.map(String).join(" "));
+    };
+    try {
+      installThirdPartyConsoleBridge();
+      suspendConsolePassthrough();
+      console.warn("would corrupt the frame");
+      expect(seen).toEqual([]);
+      resumeConsolePassthrough();
+      // Held, then flushed — never dropped.
+      expect(seen).toEqual(["would corrupt the frame"]);
+    } finally {
+      resumeConsolePassthrough();
+      uninstallThirdPartyConsoleBridge();
+      console.warn = original;
+    }
   });
 });

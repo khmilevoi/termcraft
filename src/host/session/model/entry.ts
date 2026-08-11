@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 
+import {
+  installThirdPartyConsoleBridge,
+  uninstallThirdPartyConsoleBridge,
+} from "infrastructure/debug-log";
 import { FrameDecoder } from "infrastructure/framing";
 
 import {
@@ -51,6 +55,13 @@ export interface HostStdioIo {
 export async function runHostStdio(io: HostStdioIo): Promise<void> {
   registerRuntimeResolver();
 
+  // THIS CHILD'S STDOUT IS THE PROTOCOL PIPE. A dependency writing a diagnostic to it — and
+  // `@opentui/core` writes one on every highlight failure — does not garble a picture, it
+  // corrupts framing and kills the incarnation. The renderer runs with `consoleMode: "disabled"`,
+  // which RESTORES the real console rather than silencing it, so this bridge is the only thing
+  // standing between a tree-sitter warning and a broken session.
+  installThirdPartyConsoleBridge();
+
   let liveRenderer: { destroy(): void } | null = null;
   let exited = false;
   const { promise: done, resolve: resolveDone } = Promise.withResolvers<void>();
@@ -61,6 +72,7 @@ export async function runHostStdio(io: HostStdioIo): Promise<void> {
     clearInterval(heartbeat);
     liveRenderer?.destroy();
     liveRenderer = null;
+    uninstallThirdPartyConsoleBridge();
     io.exit(request.code);
     resolveDone();
   };
