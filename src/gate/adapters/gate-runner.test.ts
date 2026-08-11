@@ -1818,4 +1818,46 @@ export default reatomComponent(() => null)
     expect(result.errors.map((e) => e.code)).toContain("DESIGN_SYSTEM_SOURCE_MISSING");
     expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
   });
+
+  // Final review Important 2: `design-system.ts`'s own doc said "every fatal here carries NO
+  // `blockedPages` (decision D6)" without qualification — true of `checkDesignSystemSlice` in
+  // isolation, but `runTree` (below) pipes `designSystemErrors` through the SAME
+  // `attributeToReachingPages` every other whole-tree diagnostic goes through, which adds
+  // `blockedPages` whenever the fatal's `file` sits inside a page's own PROVEN closure. A page
+  // that genuinely imports the manifest — `pages/dash.tsx` -> `system/tokens.ts` ->
+  // `./design-system.json`, spec §4.3's own typed-accessor arrangement — really IS blocked by a
+  // broken manifest, so this is a correct attribution, not a regression of D6. The doc now says
+  // so; this pins the runner's actual behavior so the two cannot drift apart again.
+  test("a manifest fatal IS attributed to a page whose proven closure imports the manifest itself (spec §4.3's tokens.ts arrangement)", async () => {
+    const files = withSystem({
+      "system/tokens.ts": `import ds from "./design-system.json"\nexport const tokens = ds\n`,
+    });
+    files.set(
+      "pages/dash.tsx",
+      `import { definePage, reatomComponent } from "@termcraft/runtime"
+import { tokens } from "../system/tokens"
+export const meta = definePage({ kitApiVersion: 1, title: "D", minSize: { w: 80, h: 24 }, theme: "dark" })
+export default reatomComponent(() => (tokens ? null : null))
+`,
+    );
+    files.set("system/design-system.json", "{ not json");
+    const result = await run(files);
+
+    const fatal = result.errors.find((e) => e.code === "JSON_PARSE");
+    expect(fatal).toBeDefined();
+    expect(fatal?.file).toBe("system/design-system.json");
+    expect(fatal?.blockedPages).toEqual(["dash"] as PageSlug[]);
+  });
+
+  test("D6 still holds when no page's closure reaches the manifest: blockedPages stays ABSENT", async () => {
+    // Same broken manifest, but nothing in `withSystem()`'s own fixture imports it — `pages/dash.tsx`
+    // never reaches `system/design-system.json`, so the fatal must come back unattributed, exactly
+    // as `checkDesignSystemSlice`'s own doc still guarantees.
+    const files = withSystem();
+    files.set("system/design-system.json", "{ not json");
+    const result = await run(files);
+    const fatal = result.errors.find((e) => e.code === "JSON_PARSE");
+    expect(fatal).toBeDefined();
+    expect(fatal?.blockedPages).toBeUndefined();
+  });
 });

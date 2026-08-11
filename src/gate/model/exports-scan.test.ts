@@ -690,3 +690,76 @@ describe("scanNamedExports — JSX prose text no longer skews the outer depth co
     expect(result.exhaustive).toBe(true);
   });
 });
+
+// Final-review Important 1: `readExportClause` fell back to the LOCAL name whenever the token
+// after `as` was not a plain Identifier, INVENTING an export the module never offers
+// (`export { Button as default }` used to collect `{Button}`, `exh: true` — `Bun.Transpiler`'s
+// own `scan().exports` says `{}`). Fixed by failing `exhaustive` open on that shape instead of
+// ever reading `t.value` (the local name) as a substitute for an unreadable exported-side name.
+// Each case below must either collect the exact names `Bun.Transpiler().scan().exports` reports,
+// or set `exhaustive: false` — never a wrong name paired with `exhaustive: true`.
+describe("scanNamedExports — export-clause `as`-target shapes (final review Important 1)", () => {
+  test("`export { Button as default }` — a keyword after `as` — no longer invents `Button`", () => {
+    const result = names("export { Button as default }");
+    expect(result.names.has("Button")).toBe(false);
+    if (result.exhaustive) expect([...result.names]).toEqual([]);
+  });
+
+  test("`export { a as default, b }` — no longer invents `a`, still names `b`", () => {
+    const result = names("const a = 1, b = 2; export { a as default, b }");
+    expect(result.names.has("a")).toBe(false);
+    if (result.exhaustive) expect([...result.names].sort()).toEqual(["b"]);
+    else expect(result.names.has("b")).toBe(true);
+  });
+
+  test('`export { a as "b-c" }` — a string literal after `as` — no longer invents `a`', () => {
+    const result = names(`export { a as "b-c" }`);
+    expect(result.names.has("a")).toBe(false);
+  });
+
+  test("`export { a as type }` — a contextual keyword after `as` — no longer invents `a`", () => {
+    const result = names("export { a as type }");
+    expect(result.names.has("a")).toBe(false);
+  });
+
+  test("plain cases keep working: `export { Button }`, `export { B as Button }`, `export { a as Button, b }`", () => {
+    expect(names("export { Button }").names.has("Button")).toBe(true);
+    expect(names("const B = 1; export { B as Button }").names.has("Button")).toBe(true);
+    const clause = names("const a = 1, b = 2; export { a as Button, b }");
+    expect([...clause.names].sort()).toEqual(["Button", "b"]);
+    expect(clause.exhaustive).toBe(true);
+  });
+});
+
+// Found by this round's own required adversarial sweep, over shapes the test file above never
+// enumerated: `readExportClause`'s catch-all `k += 1` treated EVERY non-Identifier token as
+// harmless to skip, which is true of a separating comma but not of a specifier's own LOCAL name
+// occupying that position. `Bun.Transpiler().scan().exports` confirms all four are real, present
+// exports; the scanner used to report NONE of them while leaving `exhaustive: true` — the
+// OMISSION half of the same invariant Important 1 closed for the `as`-target side. Fixed
+// alongside it in the same function; see `readExportClause`'s own doc comment.
+describe("scanNamedExports — export-clause LOCAL-name shapes (adversarial sweep, final review)", () => {
+  test("`export { as }` — a bare contextual keyword as the local name — no longer silently drops it", () => {
+    const result = names("const as = 1; export { as }");
+    if (result.exhaustive) expect(result.names.has("as")).toBe(true);
+    else expect(result.exhaustive).toBe(false);
+  });
+
+  test("`export { type }` — a bare contextual keyword as the local name — no longer silently drops it", () => {
+    const result = names("const type = 1; export { type }");
+    if (result.exhaustive) expect(result.names.has("type")).toBe(true);
+    else expect(result.exhaustive).toBe(false);
+  });
+
+  test('`export { "x" } from "./mod"` — a string-literal specifier name — no longer silently drops it', () => {
+    const result = names(`export { "x" } from "./mod"`);
+    if (result.exhaustive) expect(result.names.has("x")).toBe(true);
+    else expect(result.exhaustive).toBe(false);
+  });
+
+  test("a comma between specifiers is still skipped silently, never flipping exhaustive by itself", () => {
+    const result = names("const a = 1, b = 2; export { a, b, }");
+    expect([...result.names].sort()).toEqual(["a", "b"]);
+    expect(result.exhaustive).toBe(true);
+  });
+});

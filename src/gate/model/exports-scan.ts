@@ -133,7 +133,15 @@ const STATEMENT_START_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
  * bracket run, template literal, or closer; a declaration/declarator whose OWN binding name is
  * a contextual keyword (`export const type = 1`) rather than a plain Identifier — this scan can
  * prove such a name exists but, per `Tok`'s own shape, cannot read what it is (see the
- * `first?.kind !== SK.Identifier` branch below); or the OUTER `{`/`(`/`[` depth counter itself
+ * `first?.kind !== SK.Identifier` branch below); a TYPE-ONLY export clause (`export type { X }`),
+ * which routes through that SAME `first?.kind !== SK.Identifier` branch — `type` reads as
+ * `DECLARATION_STARTS`' `TypeKeyword` member, and the token right after it is `{`, never an
+ * Identifier — see the KNOWN LIMITATIONS paragraph below for the measured consequence; an
+ * `export { … }` clause SPECIFIER whose local name or `as`-target is not a plain Identifier — a
+ * bare contextual keyword used as the name itself (`export { as }`, `export { type }`), a
+ * string-literal specifier (a re-export's `export { "x" } from "…"`), or any of the `as`-target
+ * shapes above — see {@link readExportClause}'s own doc comment; or the OUTER `{`/`(`/`[` depth
+ * counter itself
  * going unbalanced — a closer that would take it below `0`, or an opener the counter never saw
  * close by the time the token stream ends (fix round 6, task review Critical finding — see the
  * paragraph on JSX prose text below).
@@ -181,6 +189,13 @@ const STATEMENT_START_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
  *   Identifier (`export const type = 1`) is not a name this scan can recover — see the
  *   `first?.kind !== SK.Identifier` branch. It correctly reports `exhaustive: false` rather than
  *   silently dropping the name, so this is a false-negative-safe gap, not a soundness one;
+ * - a TYPE-ONLY export clause (`export type { X }`) falls into that SAME branch — measured, 89% of
+ *   this repo's own `index.ts` barrels come back `exhaustive: false` because of it, versus 2% of
+ *   `.tsx` components (final review Minor 2). Harmless for the modules a manifest's `components[]`
+ *   normally names directly, but a manifest entry pointing straight at a barrel (`module:
+ *   "components/index.ts"`) would have its export check silently inert — `exhaustive: false` means
+ *   the caller never reports `DESIGN_SYSTEM_COMPONENT_EXPORT_MISSING` for it, not that the barrel
+ *   was actually checked. Not fixed here — narrowing this would be a behavior change, not a doc fix;
  * - JSX prose text that happens to spell `export const <name> = …` verbatim, e.g.
  *   `export const A = () => <box>export const B = 2</box>`, is read by this scan exactly like
  *   real code (the same "no prose mark" fact that motivates the depth guards above) and INVENTS a
@@ -258,7 +273,12 @@ export function scanNamedExports(
     }
 
     if (next?.kind === SK.OpenBraceToken) {
-      j = readExportClause(toks, j + 1, names);
+      const clause = readExportClause(toks, j + 1, names);
+      if (!clause.exhaustive) exhaustive = false;
+      // `clause.index` is the token right after the whole clause (its `}`, or the re-export
+      // specifier's closing token) — resume the outer scan exactly there instead of re-walking
+      // every token the clause already consumed. `i += 1` runs next, so back up by one.
+      i = clause.index - 1;
       continue;
     }
 
@@ -629,29 +649,93 @@ function skipTemplateLiteral(toks: readonly Tok[], headIdx: number): number | nu
  * import allowlist already rejects — this scan simply reports the names it sees). Returns the
  * index of the token right after the clause (its `}`, or the specifier's closing token when a
  * `from` clause follows).
+ *
+ * THE `as`-LOOKAHEAD IS CHECKED FIRST, BEFORE ASKING WHAT `t` IS (final review, Important 1's fix
+ * generalized) — because only the AS-TARGET, never the local name before it, decides what gets
+ * exported. Gating the lookahead behind `t.kind === SK.Identifier` (round 1 of this fix) meant
+ * `export { default as Foo }`/`export { type as Bar }` fell through to the "unreadable local
+ * name" branch and lost `Foo`/`Bar` for nothing — the LOCAL name (`default`/`type`) was never
+ * going to be read anyway, only the target after `as` matters, and that target IS a plain
+ * Identifier in both examples. Checking `toks[k + 1]` unconditionally fixes that: whatever `t`
+ * is, if an `as` follows it, only the token AFTER `as` decides the outcome.
+ *
+ * THE AS-TARGET MUST BE EXACTLY `SK.Identifier` (final review Important 1's own prescription,
+ * kept literally, not loosened even though `Tok.value` is also populated for `SK.StringLiteral`
+ * — see `./scanner.ts`'s `Tok` doc — which would let `export { a as "b-c" }` resolve `"b-c"`
+ * correctly instead of failing open on it). Fail-open is always the safe answer per this file's
+ * governing invariant, so staying with the reviewer's prescribed shape trades a small,
+ * exhaustive-false-safe precision loss on that one shape for never diverging from what Important
+ * 1 was asked to do and already re-verified against its four canonical examples.
+ *
+ * ADVERSARIAL-SWEEP FINDING (final review, Important 1's own required follow-up pass), fixed
+ * alongside it: a specifier whose LOCAL name is itself unreadable — a bare contextual keyword
+ * used as the name with NO `as` at all (`export { as }`, `export { type }` — `as`/`type` are
+ * legal identifiers outside a position the lexer marks as their keyword use, exactly like the
+ * declarator walk's own `export const type = 1` case), or a string-literal specifier name
+ * (`export { "x" } from "./m"`, itself a re-export, where `Tok.value` IS populated and so IS
+ * read) — used to fall through the OLD `t.kind === SK.Identifier` check straight to the
+ * unconditional `k += 1`, silently contributing nothing while `exhaustive` stayed `true`. That is
+ * the omission half of the identical invariant Important 1 closed for the `as`-target side. A
+ * COMMA is the one non-name token still safe to skip silently (it separates specifiers, it never
+ * IS one).
  */
-function readExportClause(toks: readonly Tok[], from: number, names: Set<string>): number {
+function readExportClause(
+  toks: readonly Tok[],
+  from: number,
+  names: Set<string>,
+): { readonly index: number; readonly exhaustive: boolean } {
   let k = from;
+  let exhaustive = true;
   while (k < toks.length && toks[k]!.kind !== SK.CloseBraceToken) {
     const t = toks[k]!;
-    if (t.kind === SK.Identifier) {
-      if (toks[k + 1]?.kind === SK.AsKeyword && toks[k + 2]?.kind === SK.Identifier) {
+
+    if (t.kind === SK.CommaToken) {
+      k += 1; // separates specifiers, never names one
+      continue;
+    }
+
+    if (toks[k + 1]?.kind === SK.AsKeyword) {
+      if (toks[k + 2]?.kind === SK.Identifier) {
         names.add(toks[k + 2]!.value);
         k += 3;
         continue;
       }
-      names.add(t.value);
-      k += 1;
+      // The token after `as` failed to read as a plain Identifier — `default` (a keyword), a
+      // string literal (`as "b-c"`), a contextual keyword (`as type`), or any other shape this
+      // scan does not expect there. The EXPORTED-side name still exists (`Bun.Transpiler`
+      // confirms it — see `scanNamedExports`'s doc comment), this scan just cannot read it.
+      // Never fall back to `t.value` (the LOCAL name): that is exactly the "decide by token
+      // kind without proving position" mistake the declarator walk was rewritten to eliminate,
+      // and it INVENTS a name `export { Button as default }` never actually exports. Fail open
+      // instead, and skip ONLY the local name and `as` — never the target itself: on malformed
+      // input the "target" slot can BE the clause's own closing `}` (`export { a as }`), and
+      // skipping past it here would run this reader straight into whatever code follows the
+      // clause, misreading it as more of the clause's own content (measured in this round's own
+      // adversarial sweep). Leaving the target token for the top of the loop is always safe: the
+      // loop's own terminator check sees a real `}` there, and any other leftover token (a
+      // keyword, a string literal, another `as`) is handled exactly like any specifier-position
+      // token would be on its own next pass.
+      exhaustive = false;
+      k += 2;
       continue;
+    }
+
+    // No `as` follows — the LOCAL name IS the exported name. Readable when it is a plain
+    // Identifier or a StringLiteral (`Tok.value` is populated for both); anything else here
+    // (a bare contextual keyword used as the name itself) is a real name this scan cannot read.
+    if (t.kind === SK.Identifier || t.kind === SK.StringLiteral) {
+      names.add(t.value);
+    } else {
+      exhaustive = false;
     }
     k += 1;
   }
   // `k` now sits on the `}` (or at end of stream if unbalanced — tolerated, not a fatal here).
-  if (k >= toks.length) return k;
+  if (k >= toks.length) return { index: k, exhaustive };
   k += 1; // past `}`
   if (toks[k]?.kind === SK.FromKeyword) {
     k += 1;
     if (toks[k]?.kind === SK.StringLiteral) k += 1;
   }
-  return k;
+  return { index: k, exhaustive };
 }

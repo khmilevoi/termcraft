@@ -150,8 +150,26 @@ export function hasDesignSystem(treePaths: readonly string[]): boolean {
  * (spec §7); they never short-circuit each other, because they are independent facts about
  * independent files.
  *
- * Every fatal here carries NO `blockedPages` (decision D6): a manifest-level fault names no
- * page, and attributing it to every page would be a fabricated claim.
+ * THIS FUNCTION ITSELF attributes every fatal it returns to NO page (decision D6): a
+ * manifest-level fault names no page, and this function attributing it to every page would be a
+ * fabricated claim. That is the whole of D6's guarantee — a manifest fatal that no page's proven
+ * closure reaches always comes back with `blockedPages` ABSENT — and it is what this function
+ * alone controls.
+ *
+ * `blockedPages` CAN still end up populated later, though, and that is correct, not a breach of
+ * D6. `gate-runner.ts`'s `runTree` pipes this function's `errors` through
+ * `attributeToReachingPages`, which — for EVERY whole-tree diagnostic, not specially for this
+ * one — adds `blockedPages` whenever the diagnostic's `file` sits inside a page's own PROVEN
+ * closure (`gate-runner.ts:212`'s `attributeToReachingPages`, `gate-runner.ts:182-193`'s doc for
+ * the defect that motivated widening attribution to "reaches", not only "broke at"). A manifest a
+ * page's closure genuinely imports — `pages/dash.tsx` importing `system/tokens.ts` importing
+ * `./design-system.json`, spec §4.3's own arrangement for the typed token accessor — makes that
+ * page truly blocked by the manifest fault, so attributing the fatal to it there is an honest
+ * statement, not a fabricated one; it is simply made by `runTree`, one layer up, from a fact this
+ * function does not have (which pages import which files). Pinned in
+ * `gate-runner.test.ts`'s design-system describe block, alongside the D6 case this function does
+ * control: a manifest fatal no page's closure reaches still comes back with `blockedPages`
+ * absent.
  *
  * `unverified` is true whenever `errors.length > 0` — i.e. exactly "the tree names a design
  * system and this pass could not fully verify it" — and false only when the tree declares none
