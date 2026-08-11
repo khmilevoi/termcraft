@@ -1,3 +1,4 @@
+import type { DesignSystemRef } from "entities/design-system-ref";
 import type { Clock } from "infrastructure/clock";
 
 /**
@@ -107,4 +108,16 @@ export interface LocalDesignSystemSourceDeps {
   readonly fs: DesignSystemFsDeps;
   readonly admission: PackageAdmission;
   readonly clock: Clock;
+}
+
+/**
+ * A materialized package and its verifiable identity. `contentHash` is the sha256 over the file
+ * set (design §8.2), so a republished version is caught rather than assumed away. Field-for-field
+ * identical to `core/ports`' `FetchedPackageV1`.
+ */
+export interface FetchedPackage {
+  readonly ref: DesignSystemRef;
+  readonly contentHash: Sha256Hex;
+  readonly files: readonly PackageFile[];
+  readonly summary: DesignSystemSummary;
 }

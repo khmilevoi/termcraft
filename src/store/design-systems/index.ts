@@ -67,3 +67,6 @@ export type { DesignSystemSummary, TokenSwatch } from "./types";
 export { readDesignSystemSummary } from "./model/summary";
 export type { LocalDesignSystemSourceDeps } from "./types";
 export { listLocalSystems } from "./model/list";
+export type { FetchedPackage } from "./types";
+export { fetchLocalPackage } from "./model/fetch";
+export { readPackageDirectory } from "./model/walk";
