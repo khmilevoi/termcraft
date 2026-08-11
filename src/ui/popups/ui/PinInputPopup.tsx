@@ -20,6 +20,8 @@ export interface PinInputPopupProps {
   readonly focused: boolean;
   /** The pin editor's wiring — `deps.editors.pin`. */
   readonly bridge: EditorBridge;
+  /** Why the last save did not land, or `null`/absent while nothing has failed. */
+  readonly error?: string | null;
 }
 
 /**
@@ -34,6 +36,16 @@ export interface PinInputPopupProps {
  * then `text(...,pys+3,...)`), outside the bordered frame. OpenTUI's popup here is
  * a single bordered box, so the footer folds into the same box's column layout as
  * a second row — the closest faithful mapping.
+ *
+ * divergence (`error`): no design source draws this popup in a failed-save state at all —
+ * the pin-loss defect (2026-08-11) is what made one necessary, since a save that does not
+ * land now keeps the popup open instead of closing over a pin that was never created
+ * (`ui/preview/model/interaction.ts`'s `savePendingPin`). Rather than grow the box by a row,
+ * the message takes over the footer row that would otherwise repeat a hint the user is
+ * already looking at, in the palette's own `red` — the hue every other failure in the shell
+ * uses (`design/termcraft-engine.js`'s `pal.red`), with the design's own `✗ <what> — <what
+ * to do>` error voice (`:1169`, `:1178`). The box's own footprint is unchanged, so
+ * `PIN_INPUT_POPUP_SIZE` and every anchor computed from it still hold.
  *
  * divergence (width): design sizes the box `pw = Math.min(40, dw - 14)` (`wsPinInput` `:696`),
  * where `dw` is the preview pane's inner width — a shrink term that keeps the box inside the pane
@@ -79,8 +91,11 @@ export function PinInputPopup(props: PinInputPopupProps) {
         showCursor={props.focused}
         bridge={props.bridge}
       />
-      <text id={`${props.id}-footer`} fg={SHELL_PALETTE.faint}>
-        {"⏎ save · esc cancel"}
+      <text
+        id={`${props.id}-footer`}
+        fg={props.error == null ? SHELL_PALETTE.faint : SHELL_PALETTE.red}
+      >
+        {props.error ?? "⏎ save · esc cancel"}
       </text>
     </box>
   );

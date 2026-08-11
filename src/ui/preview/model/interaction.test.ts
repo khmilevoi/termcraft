@@ -10,6 +10,7 @@ import {
   handleGeometryResult,
   requestElementRects,
   requestGeometry,
+  savePendingPin,
 } from "ui/preview";
 import {
   TEST_NONCE,
@@ -420,6 +421,144 @@ describe("preview interaction token chain", () => {
 
     expect(deps.local.overlay()).toBeNull();
     expect(deps.interaction.pendingPin()).toBeNull();
+  });
+});
+
+/**
+ * The pin-loss defect (2026-08-11): the geometry token minted by the right-click used to be
+ * carried, unused, through however long the user spent typing a comment, and `pin.create` was
+ * dispatched with it on Enter. Past the ledger's 30s TTL the Kernel refused it and — because
+ * the UI closed the popup and cleared the draft the instant it dispatched — the pin silently
+ * never existed. Saving now re-anchors first: a FRESH `pin-anchor` query at the same point,
+ * then `pin.create` with the token that query minted milliseconds ago.
+ */
+describe("pin save re-anchors at submit", () => {
+  /** Right-clicks at (4,5) and answers the query, leaving the popup open with a typed draft. */
+  function openPinInput(
+    deps: ReturnType<typeof harness>["deps"],
+    uiFrame: ReturnType<typeof harness>["uiFrame"],
+    draft: string,
+  ) {
+    acknowledgeFrame(deps, uiFrame);
+    requestGeometry(deps, "pin", 4, 5);
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "pin-anchor", uuidv7()),
+    );
+    deps.local.pinDraft.set(draft);
+  }
+
+  test("asks for a fresh anchor at the pending pin's own point instead of spending the one it holds", () => {
+    const { deps, kernel, uiFrame } = harness();
+    openPinInput(deps, uiFrame, "why is this red?");
+    const before = kernel.dispatched.length;
+
+    savePendingPin(deps);
+
+    expect(kernel.dispatched.slice(before)).toEqual([
+      expect.objectContaining({
+        kind: "preview.queryGeometry",
+        payload: { frameToken: uiFrame.frameToken, query: { kind: "pin-anchor", x: 4, y: 5 } },
+      }),
+    ]);
+  });
+
+  test("creates the pin with the FRESH token, then closes the popup and clears the draft", async () => {
+    const { deps, kernel, uiFrame } = harness();
+    openPinInput(deps, uiFrame, "why is this red?");
+    const freshToken = uuidv7();
+
+    savePendingPin(deps);
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "pin-anchor", freshToken),
+    );
+
+    expect(kernel.dispatched.at(-1)).toEqual(
+      expect.objectContaining({
+        kind: "pin.create",
+        payload: { geometryToken: freshToken, text: "why is this red?" },
+      }),
+    );
+    await tick();
+    expect(deps.local.overlay()).toBeNull();
+    expect(deps.interaction.pendingPin()).toBeNull();
+    expect(deps.local.pinDraft()).toBe("");
+    expect(deps.local.pinSaveError()).toBeNull();
+  });
+
+  test("keeps the popup, the draft and the pending pin when the fresh query resolves no anchor", () => {
+    const { deps, kernel, uiFrame } = harness();
+    openPinInput(deps, uiFrame, "why is this red?");
+
+    savePendingPin(deps);
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "pin-anchor", null, null),
+    );
+
+    expect(kernel.dispatched.some((raw) => (raw as { kind: string }).kind === "pin.create")).toBe(
+      false,
+    );
+    expect(deps.local.overlay()).toBe("pin-input");
+    expect(deps.local.pinDraft()).toBe("why is this red?");
+    expect(deps.interaction.pendingPin()).not.toBeNull();
+    expect(deps.local.pinSaveError()).not.toBeNull();
+  });
+
+  test("keeps the popup and the draft when the Kernel refuses pin.create with a no-op", async () => {
+    const { deps, kernel, uiFrame } = harness();
+    openPinInput(deps, uiFrame, "why is this red?");
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7(),
+      status: "accepted",
+      acceptedRevision: "0",
+      resultingRevision: "0",
+      disposition: "no-op",
+    });
+
+    savePendingPin(deps);
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "pin-anchor", uuidv7()),
+    );
+    await tick();
+
+    expect(deps.local.overlay()).toBe("pin-input");
+    expect(deps.local.pinDraft()).toBe("why is this red?");
+    expect(deps.local.pinSaveError()).not.toBeNull();
+  });
+
+  test("a mouse-move mid-save neither supersedes the save nor is superseded by it", () => {
+    const { deps, kernel, uiFrame } = harness();
+    openPinInput(deps, uiFrame, "why is this red?");
+    const freshToken = uuidv7();
+
+    savePendingPin(deps);
+    requestGeometry(deps, "hover", 9, 9);
+    handleGeometryResult(
+      deps,
+      geometryEvent(uiFrame.handle.previewSessionId, uiFrame.frameToken, "pin-anchor", freshToken),
+    );
+
+    expect(kernel.dispatched.at(-1)).toEqual(
+      expect.objectContaining({
+        kind: "pin.create",
+        payload: { geometryToken: freshToken, text: "why is this red?" },
+      }),
+    );
+  });
+
+  test("a second Enter while the re-anchor is in flight does not queue a second save", () => {
+    const { deps, kernel, uiFrame } = harness();
+    openPinInput(deps, uiFrame, "why is this red?");
+    const before = kernel.dispatched.length;
+
+    savePendingPin(deps);
+    savePendingPin(deps);
+
+    expect(kernel.dispatched.slice(before)).toHaveLength(1);
   });
 });
 

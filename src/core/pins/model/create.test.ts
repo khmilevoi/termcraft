@@ -182,12 +182,13 @@ describe("createPin", () => {
   test("a geometry token whose bound identity no longer matches the currently displayed frame is refused as GEOMETRY_TOKEN_STALE", async () => {
     const pinStore = createFakePinStore();
     const clock = clockAt(NOW);
-    // Acknowledged identity differs (a different frameSeq) from the token's own binding.
-    const frameTokenLedger = ackedFrameTokenLedger(identity({ frameSeq: "2" }));
+    // Acknowledged identity differs from the token's own binding by its SOURCE — a different
+    // `sourceHash` is a different element tree, so the anchor no longer names what the user
+    // pointed at. (A differing `frameSeq` alone is deliberately NOT stale — §8.1's 2026-08-11
+    // amendment; see `core/preview/model/geometry-token-ledger.ts`'s `identitiesMatch`.)
+    const frameTokenLedger = ackedFrameTokenLedger(identity({ sourceHash: "d".repeat(64) }));
     const geometryTokenLedger = createGeometryTokenLedger({ clock });
-    const geometryToken = geometryTokenLedger.mint(
-      anchor({ identity: identity({ frameSeq: "1" }) }),
-    );
+    const geometryToken = geometryTokenLedger.mint(anchor({ identity: identity() }));
 
     const result = await createPin(
       { pinMutations: pinStore, clock, frameTokenLedger, geometryTokenLedger },

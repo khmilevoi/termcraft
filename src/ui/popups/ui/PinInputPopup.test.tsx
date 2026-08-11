@@ -59,6 +59,27 @@ describe("PinInputPopup component (design wsPinInput)", () => {
     expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.faint);
   });
 
+  test("replaces the hint with the failed save's message, in the red hue", async () => {
+    const handle = await createHeadlessRenderer({ w: 48, h: 6 });
+    open = handle;
+    handle.mount(
+      <PinInputPopup
+        id="pin-input"
+        focused
+        bridge={bridgeWith("why is this red?")}
+        error="✗ anchor lost — click the spot again"
+      />,
+    );
+    await handle.render();
+    const frame = handle.capture();
+    const run = findRun(frame, "✗ anchor lost");
+    expect(run).toBeDefined();
+    expect(run && extractRgb(run.fg)).toBe<string>(SHELL_PALETTE.red);
+    expect(findRun(frame, "⏎ save · esc cancel")).toBeUndefined();
+    // The comment survives the failure — it is what the retry will save.
+    expect(findRun(frame, "why is this red?")).toBeDefined();
+  });
+
   test("stays one row tall — a pin comment is single-line by design", async () => {
     const handle = await createHeadlessRenderer({ w: 48, h: 6 });
     open = handle;

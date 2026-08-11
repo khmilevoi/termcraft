@@ -87,7 +87,7 @@ describe("createGeometryTokenLedger", () => {
     });
   });
 
-  describe("identity matrix (§13.3): previewSessionId, nonce, sourceHash, frameSeq vary independently", () => {
+  describe("identity matrix (§13.3): previewSessionId, nonce, sourceHash vary independently", () => {
     const mintedIdentity = identity();
 
     test("previewSessionId mismatch alone refuses as STALE", () => {
@@ -114,11 +114,19 @@ describe("createGeometryTokenLedger", () => {
       expect(ledger.consume(token, current)).toEqual({ ok: false, code: "GEOMETRY_TOKEN_STALE" });
     });
 
-    test("frameSeq mismatch alone refuses as STALE", () => {
+    /**
+     * §8.1's 2026-08-11 amendment. A later frame of the SAME session, incarnation and source
+     * is the same element tree with different dynamic content, so the anchor still names the
+     * same element and its fractions are still fractions of that element's own rectangle.
+     * Refusing it protected nothing and made a pin impossible to create at all in an animated
+     * preview, where the next frame can land before any token is spent.
+     */
+    test("frameSeq mismatch alone is NOT stale — a later frame of the same source still consumes", () => {
       const ledger = createGeometryTokenLedger({ clock: manualClock(T0) });
-      const token = ledger.mint(anchor({ identity: mintedIdentity }));
-      const current = { ...mintedIdentity, frameSeq: "2" };
-      expect(ledger.consume(token, current)).toEqual({ ok: false, code: "GEOMETRY_TOKEN_STALE" });
+      const a = anchor({ identity: mintedIdentity });
+      const token = ledger.mint(a);
+      const laterFrame = { ...mintedIdentity, frameSeq: "2" };
+      expect(ledger.consume(token, laterFrame)).toEqual({ ok: true, anchor: a });
     });
 
     test("a nonce change permits frameSeq to restart at the same numeral without colliding with the prior incarnation's token", () => {
@@ -142,7 +150,7 @@ describe("createGeometryTokenLedger", () => {
       });
     });
 
-    test("all four fields matching exactly is required for a STALE-free consume (sanity: every field differing at once is still just STALE, not some other code)", () => {
+    test("all three compared fields matching exactly is required for a STALE-free consume (sanity: every field differing at once is still just STALE, not some other code)", () => {
       const ledger = createGeometryTokenLedger({ clock: manualClock(T0) });
       const token = ledger.mint(anchor({ identity: mintedIdentity }));
       const current: FrameIdentityV1 = {
@@ -159,7 +167,7 @@ describe("createGeometryTokenLedger", () => {
       const a = anchor({ identity: mintedIdentity });
       const token = ledger.mint(a);
 
-      const mismatched = { ...mintedIdentity, frameSeq: "2" };
+      const mismatched = { ...mintedIdentity, sourceHash: "d".repeat(64) };
       expect(ledger.consume(token, mismatched)).toEqual({
         ok: false,
         code: "GEOMETRY_TOKEN_STALE",
@@ -255,6 +263,65 @@ describe("createGeometryTokenLedger", () => {
       expect(ledger.consume("0192f6f0-0000-7000-8000-0000000000fe", identity())).toEqual({
         ok: true,
         anchor: restoredAnchor,
+      });
+    });
+  });
+
+  describe("inspect (the non-consuming verdict pin.create's admission check reads)", () => {
+    test("agrees with consume on an unknown token", () => {
+      const ledger = createGeometryTokenLedger({ clock: manualClock(T0) });
+
+      expect(ledger.inspect("0192f6f0-0000-7000-8000-0000000000ff", identity())).toEqual({
+        ok: false,
+        code: "GEOMETRY_TOKEN_INVALID",
+      });
+    });
+
+    test("reports an expired token as GEOMETRY_TOKEN_INVALID", () => {
+      const clock = manualClock(T0);
+      const ledger = createGeometryTokenLedger({ clock });
+      const token = ledger.mint(anchor());
+
+      clock.advance(GEOMETRY_TOKEN_TTL_MS);
+
+      expect(ledger.inspect(token, identity())).toEqual({
+        ok: false,
+        code: "GEOMETRY_TOKEN_INVALID",
+      });
+    });
+
+    test("reports an identity mismatch as GEOMETRY_TOKEN_STALE", () => {
+      const ledger = createGeometryTokenLedger({ clock: manualClock(T0) });
+      const token = ledger.mint(anchor());
+
+      expect(ledger.inspect(token, identity({ sourceHash: "c".repeat(64) }))).toEqual({
+        ok: false,
+        code: "GEOMETRY_TOKEN_STALE",
+      });
+    });
+
+    test("does NOT consume: a token inspected as ok is still consumable afterwards", () => {
+      const ledger = createGeometryTokenLedger({ clock: manualClock(T0) });
+      const a = anchor();
+      const token = ledger.mint(a);
+
+      expect(ledger.inspect(token, identity())).toEqual({ ok: true });
+
+      expect(ledger.consume(token, identity())).toEqual({ ok: true, anchor: a });
+    });
+
+    test("does not evict an expired entry either — two inspects in a row report the same code", () => {
+      const clock = manualClock(T0);
+      const ledger = createGeometryTokenLedger({ clock });
+      const token = ledger.mint(anchor());
+      clock.advance(GEOMETRY_TOKEN_TTL_MS);
+
+      ledger.inspect(token, identity());
+
+      expect(ledger.size()).toBe(1);
+      expect(ledger.inspect(token, identity())).toEqual({
+        ok: false,
+        code: "GEOMETRY_TOKEN_INVALID",
       });
     });
   });

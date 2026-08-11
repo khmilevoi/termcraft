@@ -269,21 +269,47 @@ function handlePageRemoveDiscardPlan(
 
 /**
  * Composes `core/pins/model/create.ts`'s already-tested `createPin` wholesale, rather than
- * duplicating its token-ledger checks here — `FrameTokenLedger.currentIdentity()`/
- * `GeometryTokenLedger.consume()` are both synchronous, so a pre-check split (mirroring
- * `selection-model.ts`'s own sync `validateModelSelection` before `model.select` launches)
- * was considered, but `consume()` has a side effect (it deletes the entry): a separate
- * synchronous pre-check would consume the token once for the decision and `createPin` would
- * then try to consume it AGAIN inside `launchOperation`, always failing as
- * `GEOMETRY_TOKEN_INVALID` on a token that was actually still good. Calling `createPin`
- * exactly once, unconditionally inside `launchOperation`, avoids that double-consume bug
- * entirely and matches `chat.ts`'s own precedent for an async command whose port call might
- * legitimately fail or reject: always `startedOutcome([])`, never a pre-emptive `noOpOutcome`.
+ * duplicating its token-ledger checks here — but decides FIRST, synchronously, whether the
+ * token can still create a pin at all, and answers a dead one with {@link noOpOutcome}
+ * (§10.2: "Payload-only content/schema, freshness, token-ledger ... checks run AFTER the
+ * guard"; `./types.ts`'s `CommandHandler` names "a stale freshness token" as exactly the
+ * idempotent-refusal case).
+ *
+ * WHY THE PRE-CHECK EXISTS (pin-loss defect, 2026-08-11). Without it this handler always
+ * returned `startedOutcome([])`, so a refused `pin.create` reached the UI as an ordinary
+ * `status: "accepted"` dispatch result and published no event — the rejection was reported
+ * ONLY to the debug log, and on screen the pin input simply closed with the user's typed text
+ * gone and no pin created ("I pressed Enter and nothing happened"). The control-event
+ * registry (§9) is closed and has no "this command failed after admission" kind, so the
+ * dispatch result is the only channel a refusal can travel through — which means the verdict
+ * has to be reached before this function returns.
+ *
+ * WHY `inspect`, NOT `consume`. A pre-check built on `consume()` would spend the token for
+ * the decision and leave `createPin` nothing to consume inside `launchOperation`, always
+ * failing as `GEOMETRY_TOKEN_INVALID` on a token that was actually still good — the exact
+ * double-consume bug the previous "no pre-check at all" shape existed to avoid.
+ * `GeometryTokenLedger.inspect` is that same verdict with no side effect, so the token is
+ * still there for the ONE `consume` inside `createPin`.
+ *
+ * The remaining window is real but tiny and unavoidable: the token can die between this
+ * synchronous verdict and the operation's own `consume` (a new displayed frame lands in
+ * between). That path still logs and publishes nothing, exactly as before — an admission
+ * check cannot close a race that happens after admission.
  */
 function handlePinCreate(
   payload: CommandPayloadByKindV1["pin.create"],
   context: HandlerContext,
 ): CommandOutcomeV1 {
+  const currentIdentity = context.frameTokenLedger.currentIdentity();
+  const verdict =
+    currentIdentity === null
+      ? ({ ok: false, code: "GEOMETRY_TOKEN_STALE" } as const)
+      : context.geometryTokenLedger.inspect(payload.geometryToken, currentIdentity);
+  if (!verdict.ok) {
+    log.warn(`core/kernel: pin.create refused at admission: ${verdict.code}`);
+    return noOpOutcome();
+  }
+
   context.launchOperation("kernel.pin.create", async () => {
     const result = await wrap(
       createPin(

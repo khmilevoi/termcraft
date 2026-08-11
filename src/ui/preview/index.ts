@@ -10,15 +10,18 @@ export type {
   HoverGeometry,
   PendingGeometry,
   PendingPin,
+  PendingPinSave,
   PreviewInteractionState,
 } from "./model/interaction";
 export {
   acknowledgeFrame,
+  cancelPendingPin,
   createPreviewInteractionState,
   frameLocalPoint,
   handleGeometryResult,
   requestElementRects,
   requestGeometry,
+  savePendingPin,
 } from "./model/interaction";
 export type { ElementRectIndex } from "./model/element-rects";
 export { indexElementRects } from "./model/element-rects";

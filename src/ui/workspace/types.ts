@@ -47,6 +47,8 @@ export interface WorkspaceLocalState {
   readonly slashSelection: Atom<number>;
   readonly chatSelection: Atom<number>;
   readonly pinDraft: Atom<string>;
+  /** Why the last pin save did not land, or `null` — drawn in the pin popup's footer row. */
+  readonly pinSaveError: Atom<string | null>;
   /**
    * The page the user picked from the tab strip, or `null` while the Kernel's own active slug
    * is the whole truth. UI-local view state, exactly like {@link WorkspaceLocalState.focus} —

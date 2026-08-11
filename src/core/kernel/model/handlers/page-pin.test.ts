@@ -656,17 +656,56 @@ function frameIdentity() {
   };
 }
 
+/** Mints an acknowledged frame plus a geometry token bound to it — the state a real right-click leaves behind. */
+function anchoredGeometryToken(handlerContext: HandlerContext) {
+  const identity = frameIdentity();
+  const frameToken = handlerContext.frameTokenLedger.mint(identity);
+  const acked = handlerContext.frameTokenLedger.acknowledge(frameToken);
+  if (acked instanceof Error) throw acked;
+  return handlerContext.geometryTokenLedger.mint({
+    identity,
+    pageSlug: "home",
+    elementId: "btn-submit",
+    fx: 0.5,
+    fy: 0.5,
+  });
+}
+
 describe("pinHandlers['pin.create']", () => {
   test("returns a synchronous started outcome with no admission events and launches exactly one operation", () => {
     const { handlerContext, getLaunches } = buildTestContext();
+    const geometryToken = anchoredGeometryToken(handlerContext);
+
+    const outcome = pinHandlers["pin.create"]({ geometryToken, text: "hi" }, handlerContext);
+
+    expect(outcome).toEqual({ disposition: "started", events: [] });
+    expect(getLaunches()).toHaveLength(1);
+  });
+
+  test("refuses a token no longer good AT ADMISSION with a no-op, so the dispatch result itself tells the UI nothing happened", () => {
+    const { handlerContext, getLaunches } = buildTestContext();
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
     const outcome = pinHandlers["pin.create"](
       { geometryToken: "0192f6f0-0000-7000-8000-0000000000ff", text: "hi" },
       handlerContext,
     );
 
-    expect(outcome).toEqual({ disposition: "started", events: [] });
-    expect(getLaunches()).toHaveLength(1);
+    expect(outcome).toEqual({ disposition: "no-op", events: [] });
+    expect(getLaunches()).toEqual([]);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test("its admission check does not spend the token: the launched operation still consumes it", async () => {
+    const { handlerContext, pinStore, getLaunches } = buildTestContext();
+    const geometryToken = anchoredGeometryToken(handlerContext);
+
+    pinHandlers["pin.create"]({ geometryToken, text: "hi" }, handlerContext);
+    const events = await onlyLaunch(getLaunches()).run();
+
+    expect(onlyEvent(events).kind).toBe("pins.changed");
+    expect(pinStore.calls.some((c) => c.method === "appendStandaloneEvent")).toBe(true);
   });
 
   test("its launched operation consumes a resolving geometry token and publishes a pins.changed event that parses against eventPayloadV1SchemaByKind", async () => {
@@ -694,14 +733,15 @@ describe("pinHandlers['pin.create']", () => {
     expect(pinStore.calls.some((c) => c.method === "appendStandaloneEvent")).toBe(true);
   });
 
-  test("a rejected (stale/unknown) geometry token logs a warning, appends nothing, and resolves with no events", async () => {
+  test("a token that dies AFTER admission logs a warning, appends nothing, and resolves with no events", async () => {
     const { handlerContext, pinStore, getLaunches } = buildTestContext();
+    const geometryToken = anchoredGeometryToken(handlerContext);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
-    pinHandlers["pin.create"](
-      { geometryToken: "0192f6f0-0000-7000-8000-0000000000ff", text: "hi" },
-      handlerContext,
-    );
+    pinHandlers["pin.create"]({ geometryToken, text: "hi" }, handlerContext);
+    // The window the admission check cannot close: something spends or invalidates the token
+    // between the synchronous verdict and the launched operation's own `consume`.
+    handlerContext.geometryTokenLedger.consume(geometryToken, frameIdentity());
     const launch = onlyLaunch(getLaunches());
     const events = await launch.run();
 

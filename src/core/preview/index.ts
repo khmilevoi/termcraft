@@ -19,6 +19,8 @@ export type {
   GeometryTokenConsumption,
   GeometryTokenLedger,
   GeometryTokenLedgerDeps,
+  GeometryTokenRefusal,
+  GeometryTokenVerdict,
 } from "./model/geometry-token-ledger";
 export {
   createGeometryTokenLedger,

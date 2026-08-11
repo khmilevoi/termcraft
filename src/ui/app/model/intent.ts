@@ -5,7 +5,13 @@ import { log, trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
-import { buildRepairPrompt, isDesignRenderFailure, pageEntryOf } from "ui/preview";
+import {
+  buildRepairPrompt,
+  cancelPendingPin,
+  isDesignRenderFailure,
+  pageEntryOf,
+  savePendingPin,
+} from "ui/preview";
 import { deriveTabs, neighbourTabSlug, nextFocus, resolveEsc, selectPage } from "ui/workspace";
 
 import type { UiDeps, UiLocalState } from "./deps";
@@ -220,22 +226,14 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       local.overlay.set(null);
       return;
     }
-    case "pin-save": {
-      if (deps.screen() === "read-only") return;
-      const pendingPin = deps.interaction.pendingPin();
-      if (pendingPin === null) return;
-      dispatchAndReport(
-        dispatcher.dispatch("pin.create", {
-          geometryToken: pendingPin.geometryToken,
-          text: local.pinDraft(),
-        }),
-        "pin.create",
-      );
-      deps.interaction.pendingPin.set(null);
-      setPinInput(deps, "");
-      local.overlay.set(null);
+    case "pin-save":
+      // Re-anchors first, then creates — and owns its own closing/clearing, only once the
+      // Kernel has actually accepted the pin (`savePendingPin`, `ui/preview/model/
+      // interaction.ts`, pin-loss defect 2026-08-11). This arm used to dispatch `pin.create`
+      // with the right-click's own token and close the popup in the same breath, which is
+      // exactly how a refused save lost the user's comment without a word on screen.
+      savePendingPin(deps);
       return;
-    }
     case "trust-accept":
       // Marks the prompt answered ONLY once the Kernel actually accepted `project.setTrust`
       // (fix round 2, Finding 2 — the identical treatment `dispatchHomeSubmit` and
@@ -265,7 +263,9 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       return;
     case "overlay-dismiss":
       if (local.overlay() === "pin-input") {
-        deps.interaction.pendingPin.set(null);
+        // Withdrawing the pin — including whatever save was re-anchoring against it — is
+        // `ui/preview`'s own named transition, beside the `savePendingPin` this cancels.
+        cancelPendingPin(deps);
         setPinInput(deps, "");
       }
       local.overlay.set(null);

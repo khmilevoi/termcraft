@@ -235,6 +235,69 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     ]);
   });
 
+  /**
+   * STALE_REVISION defect (2026-08-11). A geometry result is the one event kind the UI answers
+   * with a command of its own, and `Dispatcher` stamps every command with the mirror's current
+   * `stateRevision` while the Kernel demands exact equality (§8.4). Answering from before the
+   * mirror had folded the event stamped the revision that very event superseded, so every such
+   * answer was refused on arrival — 157 of them in one recorded session
+   * (`termcraft-debug/run-2026-08-11T10-17-11-500Z-26068.jsonl`).
+   */
+  test("answers a geometry result with the revision that result itself carried, not the one before it", async () => {
+    const kernel = createFakeKernel();
+    const preview = createFakePreviewSession();
+    kernel.setPreview(preview.handle);
+    kernel.setSnapshot({
+      projectId: uuidv7(),
+      activePageSlug: "main",
+      activeChatId: uuidv7(),
+      trust: "trusted",
+      pageDescriptors: [readyPage()],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+      useMouse: true,
+    });
+    open = renderer;
+    const rendered: PreviewFrameV1 = {
+      sessionId: preview.handle.previewSessionId,
+      sourceHash: TEST_SHA,
+      frameSeq: "1",
+      width: 20,
+      height: 10,
+      rows: [[{ text: "preview", fg: "default", bg: "default", attrs: 0 }]],
+    };
+    await renderer.act(() => preview.pushFrame(rendered));
+    await renderer.waitFor(() => deps.previewFrame()?.frame === rendered);
+    await renderer.waitForFrame((frame) => frame.includes("preview"));
+    await renderer.waitFor(() => preview.acknowledgements.length > 0);
+    const frameToken = preview.frameTokenFor(rendered);
+
+    await renderer.act(() => renderer.mockMouse.pressDown(50, 8, MouseButtons.LEFT));
+    const hitResult = event("preview.geometryResult", {
+      previewSessionId: preview.handle.previewSessionId,
+      frameTokenId: frameToken,
+      frameIdentity: {
+        previewSessionId: preview.handle.previewSessionId,
+        nonce: TEST_NONCE,
+        sourceHash: TEST_SHA,
+        frameSeq: "1",
+      },
+      queryKind: "hit",
+      result: { kind: "checkHit", hit: { id: "network" } },
+      geometryToken: null,
+    });
+    await renderer.act(() => kernel.emit(hitResult));
+
+    const selectionSet = kernel.dispatched.find(
+      (raw): raw is { kind: string; expectedRevision: string } =>
+        (raw as { kind: string }).kind === "selection.set",
+    );
+    expect(selectionSet?.expectedRevision).toBe(hitResult.stateRevision);
+  });
+
   // §7. The task-1 brief's own literal click target (x50/y8, "the preview column") does NOT
   // reproduce this defect: `ws-preview`'s own subtree contains no `<scrollbox>`, `<select>`,
   // `<tabselect>`, or `focusable={true}` box — none of `@opentui/core`'s focusable-by-default
@@ -1172,15 +1235,48 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(await renderer.waitForFrame((frame) => frame.includes("keep this visible"))).toContain(
       "keep this visible",
     );
+    // Enter RE-ANCHORS before it creates (pin-loss defect, 2026-08-11): a second `pin-anchor`
+    // query at the same point mints a token milliseconds old, and only its reply carries the
+    // token `pin.create` actually spends — so the ledger's 30s TTL can no longer expire under a
+    // user who spends a while typing. See `ui/preview/model/interaction.ts`'s `savePendingPin`.
     await renderer.act(() => renderer.mockInput.pressEnter());
+    const reAnchor = kernel.dispatched.filter(
+      (raw): raw is DispatchedCommand =>
+        (raw as DispatchedCommand).kind === "preview.queryGeometry" &&
+        ((raw as DispatchedCommand).payload as { query: { kind: string } }).query.kind ===
+          "pin-anchor",
+    );
+    expect(reAnchor).toHaveLength(2);
+    expect(reAnchor[1]?.payload).toEqual({
+      frameToken,
+      query: { kind: "pin-anchor", x: 6, y: 5 },
+    });
+
+    const freshGeometryToken = uuidv7();
+    const reAnchorResult = event("preview.geometryResult", {
+      previewSessionId: preview.handle.previewSessionId,
+      frameTokenId: frameToken,
+      frameIdentity: {
+        previewSessionId: preview.handle.previewSessionId,
+        nonce: TEST_NONCE,
+        sourceHash: TEST_SHA,
+        frameSeq: "1",
+      },
+      queryKind: "pin-anchor",
+      result: { kind: "checkHit", hit: { id: "network" } },
+      geometryToken: freshGeometryToken,
+    });
+    await renderer.act(() => kernel.emit(reAnchorResult));
     const pinCreate = dispatchedOf("pin.create");
     expect(pinCreate).toEqual({
       protocolVersion: 1,
       commandId: pinCreate.commandId,
-      expectedRevision: geometryResult.stateRevision,
+      expectedRevision: reAnchorResult.stateRevision,
       kind: "pin.create",
-      payload: { geometryToken, text: "keep this visible" },
+      // The FRESH token, never the one the right-click minted before the comment was typed.
+      payload: { geometryToken: freshGeometryToken, text: "keep this visible" },
     });
+    expect(freshGeometryToken).not.toBe(geometryToken);
 
     const trustPending = snapshot({
       projectId,
@@ -1224,8 +1320,10 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
       "turn.start",
       "chat.create",
       "chat.switch",
-      // The acknowledged frame's own `layout` batch (`requestElementRects`), then the right
-      // click's `pin-anchor` — two geometry queries, on two independent lanes.
+      // The acknowledged frame's own `layout` batch (`requestElementRects`), the right click's
+      // `pin-anchor`, then the save's own re-anchor of the same point — three geometry queries
+      // across two independent lanes.
+      "preview.queryGeometry",
       "preview.queryGeometry",
       "preview.queryGeometry",
       "pin.create",

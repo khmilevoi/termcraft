@@ -261,12 +261,14 @@ function renderPinInput(
   pending: PendingPin,
   bounds: Rect,
   readOnly: boolean,
+  /** Why the last save did not land, or `null` — the popup draws it instead of its hint row. */
+  saveError: string | null,
 ) {
   const at = pinInputAnchor({ badge: pending.point, box: PIN_INPUT_POPUP_SIZE, bounds });
   return (
     <box id="ws-pin-input-anchor" position="absolute" left={at.x} top={at.y}>
       {/* §7.5: the field is live except on a read-only screen, where pins are refused outright. */}
-      <PinInputPopup id="overlay-pin" focused={!readOnly} bridge={bridge} />
+      <PinInputPopup id="overlay-pin" focused={!readOnly} bridge={bridge} error={saveError} />
     </box>
   );
 }
@@ -294,6 +296,8 @@ function renderPreviewRegion(
      * the preview canvas that owns those coordinates.
      */
     pinInputBridge: EditorBridge | null;
+    /** Why the last pin save did not land, or `null` (`ui/app/model/deps.ts`'s `pinSaveError`). */
+    pinSaveError: string | null;
     selectionRect: Rect | null;
     hover: HoverGeometry | null;
     onRendered: (frame: UiPreviewFrame) => void;
@@ -419,7 +423,13 @@ function renderPreviewRegion(
         />
         {interaction.pinInputBridge !== null &&
           interaction.pendingPin !== null &&
-          renderPinInput(interaction.pinInputBridge, interaction.pendingPin, visibleRect, readOnly)}
+          renderPinInput(
+            interaction.pinInputBridge,
+            interaction.pendingPin,
+            visibleRect,
+            readOnly,
+            interaction.pinSaveError,
+          )}
       </box>
     );
   }
@@ -632,6 +642,7 @@ export const Workspace = reatomComponent<{
   const selectionRect = interaction.selectionRect();
   const hover = interaction.hover();
   const pendingPin = interaction.pendingPin();
+  const pinSaveError = local.pinSaveError();
   const acknowledgeRenderedFrame = useWrap((rendered: UiPreviewFrame) => {
     acknowledgeFrame(props.deps, rendered);
     // Every pin on the page is placed against this frame's own element rectangles, so they are
@@ -1182,6 +1193,7 @@ export const Workspace = reatomComponent<{
               elementRects,
               pendingPin,
               pinInputBridge: props.activeOverlay === "pin-input" ? props.deps.editors.pin : null,
+              pinSaveError,
               selectionRect,
               hover,
               onRendered: acknowledgeRenderedFrame,

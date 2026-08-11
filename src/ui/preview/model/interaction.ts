@@ -4,6 +4,7 @@ import * as errore from "errore";
 import type { FrameTokenV1, GeometryTokenV1 } from "core/protocol";
 import { parsePageSlug } from "entities/page";
 import { log, trace } from "infrastructure/debug-log";
+import { reasonLabel } from "ui/actions";
 import type { Dispatcher, EventOf, UiPreviewFrame } from "ui/kernel";
 
 import type { ElementRectIndex } from "./element-rects";
@@ -39,6 +40,18 @@ export interface PendingPin {
   readonly point: Point;
 }
 
+/**
+ * One in-flight "the user pressed Enter in the pin popup" re-anchor query — see
+ * {@link savePendingPin} for why saving asks for a fresh anchor instead of spending the
+ * token the right-click already minted.
+ */
+export interface PendingPinSave {
+  readonly frameToken: FrameTokenV1;
+  readonly point: Point;
+  /** The comment as it read when Enter was pressed — never re-read later, so a keystroke that lands mid-save cannot change what gets saved. */
+  readonly text: string;
+}
+
 /** The element rectangles of ONE displayed frame — never carried across to the next one. */
 export interface FrameElementRects {
   readonly frameToken: FrameTokenV1;
@@ -55,6 +68,13 @@ export interface PreviewInteractionState {
   readonly pendingGeometry: Atom<PendingGeometry | null>;
   readonly queuedGeometry: Atom<GeometryRequest | null>;
   readonly pendingPin: Atom<PendingPin | null>;
+  /**
+   * The re-anchor query one pin save is waiting on, or `null`. Its OWN lane, for the same
+   * reason `pendingElementRects` has one: `pendingGeometry` is latest-wins against the
+   * pointer, and a save the next mouse-move supersedes is a save that silently never happens
+   * — which is the whole defect this lane exists to end.
+   */
+  readonly pendingPinSave: Atom<PendingPinSave | null>;
   readonly hover: Atom<HoverGeometry | null>;
   readonly selectionRect: Atom<Rect | null>;
   /**
@@ -82,6 +102,8 @@ interface PreviewInteractionDeps {
   readonly local: {
     readonly overlay: { set(value: "pin-input" | null): unknown };
     readonly pinDraft: Atom<string>;
+    /** Why the last pin save did not land, or `null`. Drawn in the popup's own footer row — see {@link savePendingPin}. */
+    readonly pinSaveError: Atom<string | null>;
   };
   readonly interaction: PreviewInteractionState;
 }
@@ -92,6 +114,7 @@ export function createPreviewInteractionState(): PreviewInteractionState {
     pendingGeometry: atom<PendingGeometry | null>(null, "ui.preview.pendingGeometry"),
     queuedGeometry: atom<GeometryRequest | null>(null, "ui.preview.queuedGeometry"),
     pendingPin: atom<PendingPin | null>(null, "ui.preview.pendingPin"),
+    pendingPinSave: atom<PendingPinSave | null>(null, "ui.preview.pendingPinSave"),
     hover: atom<HoverGeometry | null>(null, "ui.preview.hover"),
     selectionRect: atom<Rect | null>(null, "ui.preview.selectionRect"),
     pendingElementRects: atom<FrameTokenV1 | null>(null, "ui.preview.pendingElementRects"),
@@ -117,6 +140,10 @@ export function acknowledgeFrame(deps: PreviewInteractionDeps, uiFrame: UiPrevie
   deps.interaction.pendingGeometry.set(null);
   deps.interaction.queuedGeometry.set(null);
   deps.interaction.pendingPin.set(null);
+  // The anchor this save was re-querying belongs to the frame just replaced, so the reply —
+  // if one still arrives — is about pixels nobody is looking at. Dropped with the pin it
+  // belonged to, never left in flight to create a pin against the previous render.
+  deps.interaction.pendingPinSave.set(null);
   deps.interaction.hover.set(null);
   deps.interaction.selectionRect.set(null);
   // A new frame reseals the hit grid, the rectangles and the layout tree together
@@ -147,6 +174,17 @@ export function requestGeometry(
     tracePin("ui.preview.requestGeometry", purpose, {
       step: "refused",
       reason: "screen is read-only",
+    });
+    return;
+  }
+  // A `pin-anchor` reply carries no coordinates (`PreviewGeometryResultPayloadV1`), so the
+  // only way to tell "this is the anchor for a NEW pin input" from "this is the re-anchor a
+  // save is waiting on" is that never more than one of them is outstanding. A right-click
+  // landing mid-save is refused rather than allowed to make the two indistinguishable.
+  if (purpose === "pin" && deps.interaction.pendingPinSave() !== null) {
+    tracePin("ui.preview.requestGeometry", purpose, {
+      step: "refused",
+      reason: "a pin save is already re-anchoring",
     });
     return;
   }
@@ -270,6 +308,212 @@ function applyElementRects(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Saving a pin (the pin-loss defect, 2026-08-11)
+// ---------------------------------------------------------------------------
+
+/**
+ * The anchor is gone: nothing at that point resolves any more, or the Kernel refused the
+ * token this save just minted. The pin popup stays open with what the user typed, so Enter
+ * retries and a re-click re-places — design's own `✗ <what> — <what to do>` error voice
+ * (`design/termcraft-engine.js:1169`, `:1178`).
+ */
+const PIN_SAVE_ANCHOR_LOST = "✗ anchor lost — click the spot again";
+
+/** The save never reached the Kernel at all. Retryable as-is, nothing about the anchor is known to be wrong. */
+const PIN_SAVE_UNREACHABLE = "✗ pin not saved — try again";
+
+/** Records why a save did not land, keeping the popup, the pending pin and the draft exactly as they are. */
+function failPinSave(deps: PreviewInteractionDeps, message: string, reason: string): void {
+  tracePin("ui.preview.pinSave", "pin", { step: "failed", reason, message });
+  deps.local.pinSaveError.set(message);
+}
+
+/**
+ * Saves the open pin popup: re-anchors FIRST, then creates the pin with the token that
+ * re-anchor query minted.
+ *
+ * THE DEFECT THIS SHAPE EXISTS FOR (2026-08-11, `termcraft-debug/run-2026-08-11T10-17-11
+ * -500Z-26068.jsonl`). The right-click's geometry token was previously carried, unspent,
+ * through however long the user spent typing, and `pin.create` was dispatched with it on
+ * Enter. The Kernel's geometry ledger keeps a token for 30 seconds (`core/preview/model/
+ * geometry-token-ledger.ts`, KCC §8.1), so a comment that took longer than that to type was
+ * rejected as `GEOMETRY_TOKEN_INVALID` — and since the UI closed the popup and cleared the
+ * draft the instant it dispatched, the user saw the input vanish, no pin appear, and no
+ * error: "I pressed Enter and nothing happened". In the recorded session two saves out of
+ * six died this way, at 34.5s and 35.8s, while every save under 26s worked.
+ *
+ * Re-anchoring makes the token milliseconds old at the moment it is spent, so the TTL stops
+ * being a deadline on typing. It also re-checks the anchor against what is on screen NOW —
+ * the same question `GEOMETRY_TOKEN_STALE` asks, answered before anything is written rather
+ * than after.
+ *
+ * Nothing local is cleared until the Kernel accepts. On any failure the popup, the pending
+ * pin and the draft all stay put and {@link PreviewInteractionDeps.local.pinSaveError} says
+ * why — the treatment `composer-submit`/`home-submit` (`ui/app/model/intent.ts`) already
+ * give their own text.
+ */
+export function savePendingPin(deps: PreviewInteractionDeps): void {
+  const pending = deps.interaction.pendingPin();
+  if (pending === null) return;
+  // A second Enter while the first is still re-anchoring would mint a second token and create
+  // a second pin for one comment.
+  if (deps.interaction.pendingPinSave() !== null) {
+    tracePin("ui.preview.pinSave", "pin", {
+      step: "ignored",
+      reason: "a save is already in flight",
+    });
+    return;
+  }
+  if (deps.screen() === "read-only") {
+    tracePin("ui.preview.pinSave", "pin", { step: "refused", reason: "screen is read-only" });
+    return;
+  }
+
+  const displayedFrameToken = deps.interaction.displayedFrameToken();
+  const current = deps.previewFrame();
+  if (
+    displayedFrameToken === null ||
+    current === null ||
+    current.frameToken !== displayedFrameToken
+  ) {
+    failPinSave(deps, PIN_SAVE_ANCHOR_LOST, "no displayed frame to re-anchor against");
+    return;
+  }
+
+  const request: PendingPinSave = {
+    frameToken: displayedFrameToken,
+    point: pending.point,
+    text: deps.local.pinDraft(),
+  };
+  deps.local.pinSaveError.set(null);
+  deps.interaction.pendingPinSave.set(request);
+  tracePin("ui.preview.pinSave", "pin", {
+    step: "re-anchoring",
+    x: request.point.x,
+    y: request.point.y,
+  });
+
+  const dispatched = deps.dispatcher.dispatch("preview.queryGeometry", {
+    frameToken: request.frameToken,
+    query: { kind: "pin-anchor", x: request.point.x, y: request.point.y },
+  });
+  void dispatched.then(
+    wrap((result) => {
+      const error =
+        result instanceof Error
+          ? result
+          : result.status === "rejected"
+            ? new GeometryQueryRejectedError({ code: result.code })
+            : null;
+      if (error === null) return;
+      log.error("UI pin re-anchor query failed:", error);
+      // Only if THIS save is still the one in flight — a newer frame may already have
+      // dropped it (`acknowledgeFrame`), and clearing the lane then would clear someone else's.
+      if (deps.interaction.pendingPinSave() !== request) return;
+      deps.interaction.pendingPinSave.set(null);
+      failPinSave(deps, PIN_SAVE_UNREACHABLE, `re-anchor query failed: ${error.message}`);
+    }),
+  );
+}
+
+/**
+ * Withdraws the open pin: the pending anchor AND whatever save was re-anchoring against it.
+ *
+ * The counterpart to {@link savePendingPin}, and beside it deliberately — the rule that makes
+ * clearing `pendingPin` sufficient to cancel an in-flight save is {@link applyPinSaveResult}'s
+ * own abandon check, and a caller in another module clearing these lanes by hand would be
+ * authoring that correlation from outside the file that defines it. The caller still owns its
+ * own layer: closing the overlay and syncing the live editor buffer are not this function's
+ * business.
+ */
+export function cancelPendingPin(deps: PreviewInteractionDeps): void {
+  deps.interaction.pendingPin.set(null);
+  deps.interaction.pendingPinSave.set(null);
+  deps.local.pinSaveError.set(null);
+}
+
+/**
+ * Turns one re-anchor reply into `pin.create`, subject to the same correlation checks a
+ * pointer-driven result gets: the reply must be about the frame still displayed, from the
+ * session still live, and the one this lane actually asked for.
+ */
+function applyPinSaveResult(
+  deps: PreviewInteractionDeps,
+  envelope: EventOf<"preview.geometryResult">,
+  save: PendingPinSave,
+): void {
+  const payload = envelope.payload;
+  deps.interaction.pendingPinSave.set(null);
+
+  // Esc closed the popup while the re-anchor was in flight — the user withdrew the pin, so
+  // creating it now would be a pin they cancelled.
+  if (deps.interaction.pendingPin() === null) {
+    tracePin("ui.preview.pinSave", "pin", {
+      step: "abandoned",
+      reason: "the pin input was closed",
+    });
+    return;
+  }
+
+  const current = deps.previewFrame();
+  if (
+    payload.frameTokenId !== save.frameToken ||
+    deps.interaction.displayedFrameToken() !== save.frameToken ||
+    current === null ||
+    current.frameToken !== save.frameToken ||
+    current.handle.previewSessionId !== payload.previewSessionId
+  ) {
+    failPinSave(deps, PIN_SAVE_ANCHOR_LOST, "the displayed frame changed during the re-anchor");
+    return;
+  }
+  if (payload.geometryToken === null) {
+    failPinSave(deps, PIN_SAVE_ANCHOR_LOST, "the host resolved no anchor at this point");
+    return;
+  }
+
+  tracePin("ui.preview.pinSave", "pin", {
+    step: "creating",
+    geometryToken: payload.geometryToken,
+    textLength: save.text.length,
+  });
+  void deps.dispatcher
+    .dispatch("pin.create", { geometryToken: payload.geometryToken, text: save.text })
+    .then(
+      wrap((result) => {
+        if (result instanceof Error) {
+          log.error("UI pin.create dispatch failed:", result);
+          failPinSave(deps, PIN_SAVE_UNREACHABLE, `pin.create dispatch failed: ${result.message}`);
+          return;
+        }
+        if (result.status === "rejected") {
+          failPinSave(
+            deps,
+            `✗ ${reasonLabel(result.reasons[0])} — not saved`,
+            `pin.create rejected: ${result.code}`,
+          );
+          return;
+        }
+        // `no-op` is `pin.create`'s own idempotent refusal, and its handler has exactly one
+        // reason to return it: the geometry token no longer names the displayed frame
+        // (`core/kernel/model/handlers/page-pin.ts`). Nothing was written, so nothing here
+        // may be cleared either.
+        if (result.disposition === "no-op") {
+          failPinSave(deps, PIN_SAVE_ANCHOR_LOST, "the Kernel refused the freshly minted token");
+          return;
+        }
+        tracePin("ui.preview.pinSave", "pin", { step: "created" });
+        deps.interaction.pendingPin.set(null);
+        // The mirror atom only: the popup unmounts with the overlay, and its editor seeds
+        // itself from this atom at its next mount (`createEditorBridge`'s `readSeed`), so
+        // there is no live buffer left to write through.
+        deps.local.pinDraft.set("");
+        deps.local.pinSaveError.set(null);
+        deps.local.overlay.set(null);
+      }),
+    );
+}
+
 /** Applies a geometry event only when both of its capability correlation fields still match. */
 export function handleGeometryResult(
   deps: PreviewInteractionDeps,
@@ -278,6 +522,15 @@ export function handleGeometryResult(
   // The element-rect lane owns every `layout` reply and is correlated separately — see
   // `requestElementRects`. Checked before `pendingGeometry`, which that lane never touches.
   if (envelope.payload.queryKind === "layout") return applyElementRects(deps, envelope);
+
+  // The pin-save lane owns the ONE `pin-anchor` reply it is waiting on, for the same reason:
+  // `pendingGeometry` never holds it, so the shared lane below would drop it as uncorrelated.
+  // `requestGeometry` refuses a new pin request while this is set, so at most one of the two
+  // pin-anchor meanings is ever outstanding.
+  const pinSave = deps.interaction.pendingPinSave();
+  if (pinSave !== null && envelope.payload.queryKind === "pin-anchor") {
+    return applyPinSaveResult(deps, envelope, pinSave);
+  }
 
   const pending = deps.interaction.pendingGeometry();
   if (pending === null) return;

@@ -502,6 +502,41 @@ edit a token binding or synthesize one from a rectangle. This is one-way:
 `FrameTokenV1 -> geometry query -> GeometryTokenV1 -> pin.create`; no token depends
 on a later token in the chain.
 
+**Amendment (pin-loss defect, 2026-08-11).** Two changes to the paragraph above,
+both narrowing what a geometry token's validity depends on without loosening what a
+pin is allowed to anchor to.
+
+1. *The identity comparison excludes `frameSeq`.* "Session/source/incarnation/
+   displayed-frame change invalidates it immediately" is implemented as equality on
+   `previewSessionId`, `nonce` and `sourceHash` — the first three fields of
+   `FrameIdentityV1` — and NOT on its fourth, `frameSeq`. What the comparison
+   protects is that the anchor's `(elementId, fx, fy)` still names the thing the user
+   pointed at: a different session or incarnation may reuse element ids for an
+   entirely different tree, and a different `sourceHash` IS a different tree — those
+   three must still match exactly. A later frame of the SAME source is the same
+   element tree with different dynamic content, so `elementId` still names the same
+   element and `fx`/`fy` are still fractions of that element's own rectangle;
+   requiring `frameSeq` equality rejected nothing unsafe and made pin creation
+   impossible by construction in an animated or interactive preview, where the host
+   may emit up to 240 frames per second (host-supervision §8) and no token can
+   survive to the next one. The temporal guard that remains is the 30-second TTL,
+   plus the frame token's own separate `FRAME_TOKEN_STALE` check on the query that
+   mints the geometry token in the first place.
+2. *`pin.create` reaches its token verdict at admission.* §10.2's "token-ledger
+   checks run AFTER the guard" is unchanged, but the check is now made
+   SYNCHRONOUSLY, before the command's own async operation starts, and a token that
+   cannot create a pin is answered with `Accepted{disposition: "no-op"}` — §8.3's
+   "an explicitly idempotent no-op was recognized" — rather than admitted as
+   `started` and refused later inside the operation. The control-event registry (§9)
+   is closed and has no post-admission command-failure kind, so a refusal decided
+   after admission has no channel to reach the UI at all: it was reported only to the
+   debug log, and on screen a refused pin save was indistinguishable from a keystroke
+   that did nothing. This requires reading the ledger entry without spending it — the
+   `inspect` companion to `consume` (`core/preview/model/geometry-token-ledger.ts`),
+   which is side-effect free so the ONE consumption still happens inside `createPin`.
+   A token can still die between the verdict and that consumption; that residual path
+   keeps the previous behavior (logged, no events, nothing written).
+
 ### 8.2 External command kinds
 
 This table is the authoritative v1 intent registry. A feature may add a new kind only
@@ -1013,7 +1048,7 @@ turn-locked slash rows stay visible but dimmed with `TURN_RUNNING`.
 | `FRAME_TOKEN_INVALID` | A geometry query names an absent, malformed, or non-canonical Kernel frame token. |
 | `FRAME_TOKEN_STALE` | The frame token is not the broker's current display-acknowledged frame for its live session/incarnation/source. |
 | `GEOMETRY_TOKEN_INVALID` | `pin.create` names an absent, malformed, expired, already-consumed, or non-canonical Kernel geometry token. |
-| `GEOMETRY_TOKEN_STALE` | The token's session/incarnation/source/frame is not the current frame acknowledged as displayed. |
+| `GEOMETRY_TOKEN_STALE` | The token's session/incarnation/source is not that of the frame currently acknowledged as displayed (§8.1's 2026-08-11 amendment: the frame SEQUENCE is deliberately not part of this comparison). |
 | `CAPABILITY_UNAVAILABLE` | Typed fallback for a guard reason that has no more specific public code. |
 
 `UnavailableReason` is a discriminated union using these stable codes plus bounded,
@@ -1179,8 +1214,11 @@ frameSeq)` tuple.
    separate `GeometryTokenV1` from `(FrameIdentityV1, pageSlug, elementId, fx, fy)`.
 6. `pin.create` accepts only that geometry token plus pin text. The Kernel matches the
    canonical ledger entry to the frame currently acknowledged as displayed and
-   consumes it once; stale incarnation/session/source/frame rejects. The resulting
+   consumes it once; stale incarnation/session/source rejects. The resulting
    `pins.changed` carries the complete affected `PinDtoV1`, including `pinId`.
+   (§8.1's 2026-08-11 amendment: the match excludes `frameSeq`, and the verdict is
+   reached at admission — a token that cannot create a pin is an `Accepted` `no-op`,
+   not a `started` command that refuses itself later.)
 
 ### 12.7 Migration and startup recovery
 

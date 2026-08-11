@@ -81,6 +81,15 @@ export interface UiLocalState {
   /** Draft text for the new-pin popup (phase 7 local state; pin issuance lands in Task 3). */
   readonly pinDraft: Atom<string>;
   /**
+   * Why the last pin save did not land, or `null` — drawn in the pin popup's own footer row
+   * in place of its hint (`ui/popups/ui/PinInputPopup.tsx`).
+   *
+   * Written only by `savePendingPin`/`applyPinSaveResult` (`ui/preview/model/interaction.ts`),
+   * which is also the one place that decides the copy: a failed save keeps the popup, the
+   * pending pin and the draft, so this line is what tells the user why Enter did nothing.
+   */
+  readonly pinSaveError: Atom<string | null>;
+  /**
    * The mounted composer / Home-prompt / pin editors, or `null` when none is mounted.
    *
    * The mirror atoms above are the downstream projection of these buffers; these are how an
@@ -659,9 +668,6 @@ export function createUiDeps(
           seq: distributed.eventSeq,
           ...(/reject|fail/i.test(distributed.kind) ? { payload: distributed.payload } : {}),
         });
-        if (distributed.kind === "preview.geometryResult") {
-          handleGeometryResult(deps, distributed);
-        }
         // WP-9 (design-agent-feedback-loop repair, Task 11): the ONE spot every turn-terminal
         // event lands, so it is also the ONE spot that can restore (or discard) the in-flight
         // turn's own remembered text — see `applyTurnTerminal`'s own doc (`primary-input.ts`)
@@ -674,6 +680,19 @@ export function createUiDeps(
           applyTurnTerminal(deps, distributed.kind);
         }
         mirror.apply(distributed);
+        // AFTER the mirror fold, for the same reason `resyncPreviewSession` below is (STALE
+        // _REVISION defect, 2026-08-11): geometry results are the ONE event kind the UI answers
+        // by dispatching a command of its own — `selection.set` for a resolved click, and
+        // `pin.create` once a pin save's re-anchor lands. `Dispatcher` stamps every command with
+        // the mirror's CURRENT `stateRevision` (`ui/kernel/model/dispatcher.ts`) and the Kernel
+        // demands exact equality (§8.4, `core/mailbox/model/revision-guard.ts`), so answering
+        // from BEFORE the fold stamped the revision this very event had already superseded —
+        // every such command was refused `STALE_REVISION` on arrival. The mirror ignores
+        // `preview.geometryResult` for domain state (nothing but `stateRevision` moves), so
+        // folding first changes only which revision the answer carries.
+        if (distributed.kind === "preview.geometryResult") {
+          handleGeometryResult(deps, distributed);
+        }
         // AFTER the mirror fold, not before: `preview.sessionReady`/`preview.sourceChanged` are
         // what make `port.preview()` report the successor, and the fold is what the rest of the
         // UI reads. Cheap — a reference comparison per event.
@@ -1016,6 +1035,7 @@ export function createUiDeps(
   const promptEditor = atom<TextEditorHandle | null>(null, "ui.local.promptEditor");
   const pinEditor = atom<TextEditorHandle | null>(null, "ui.local.pinEditor");
   const pinDraft = atom("", "ui.local.pinDraft");
+  const pinSaveError = atom<string | null>(null, "ui.local.pinSaveError");
 
   const local: UiLocalState = {
     prompt,
@@ -1026,6 +1046,7 @@ export function createUiDeps(
     slashSelection,
     chatSelection: atom(0, "ui.local.chatSelection"),
     pinDraft,
+    pinSaveError,
     composerEditor,
     promptEditor,
     pinEditor,

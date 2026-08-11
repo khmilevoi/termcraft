@@ -849,24 +849,44 @@ describe("applyIntent — Home agent-health re-check (M15)", () => {
 });
 
 describe("applyIntent — pin draft", () => {
-  test("save dispatches only the opaque geometry token plus text", () => {
+  /**
+   * Saving re-anchors before it creates (the pin-loss defect, 2026-08-11 — see
+   * `ui/preview/model/interaction.ts`'s `savePendingPin`), so this intent never dispatches
+   * `pin.create` itself and never closes the popup on the way out. The happy path, which
+   * needs a live display-acknowledged frame, is covered in `ui/preview`'s own
+   * `interaction.test.ts`; what belongs here is that a save which CANNOT re-anchor keeps
+   * every piece of the user's work on screen.
+   */
+  test("a save that cannot re-anchor keeps the popup, the draft and the pending pin, and says why", () => {
     const kernel = createFakeKernel();
     const deps = createUiDeps(kernel, { w: 120, h: 36 });
     deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
-    const geometryToken = uuidv7();
-    deps.interaction.pendingPin.set({ geometryToken, point: { x: 4, y: 5 } });
+    deps.interaction.pendingPin.set({ geometryToken: uuidv7(), point: { x: 4, y: 5 } });
     deps.local.pinDraft.set("why is this always on top?");
     deps.local.overlay.set("pin-input");
 
     applyIntent({ kind: "pin-save" }, deps);
 
-    const command = kernel.dispatched[0] as { kind: string; payload: Record<string, unknown> };
-    expect(command.kind).toBe("pin.create");
-    expect(command.payload).toEqual({ geometryToken, text: "why is this always on top?" });
-    expect(command.payload).not.toHaveProperty("pageSlug");
-    expect(command.payload).not.toHaveProperty("elementId");
-    expect(deps.local.overlay()).toBeNull();
-    expect(deps.local.pinDraft()).toBe("");
+    expect(kernel.dispatched).toHaveLength(0);
+    expect(deps.local.overlay()).toBe("pin-input");
+    expect(deps.local.pinDraft()).toBe("why is this always on top?");
+    expect(deps.interaction.pendingPin()).not.toBeNull();
+    expect(deps.local.pinSaveError()).not.toBeNull();
+  });
+
+  test("dismissing the popup clears the failed save's message with it", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.apply(snapshot({ projectId: uuidv7(), activePageSlug: "main", trust: "trusted" }));
+    deps.interaction.pendingPin.set({ geometryToken: uuidv7(), point: { x: 4, y: 5 } });
+    deps.local.overlay.set("pin-input");
+    deps.local.pinSaveError.set("✗ anchor lost — click the spot again");
+
+    applyIntent({ kind: "overlay-dismiss" }, deps);
+
+    expect(deps.local.pinSaveError()).toBeNull();
+    expect(deps.interaction.pendingPin()).toBeNull();
+    expect(deps.interaction.pendingPinSave()).toBeNull();
   });
 
   test("save remains inert after transition to read-only", () => {
