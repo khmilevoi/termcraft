@@ -3,7 +3,7 @@
 // OUTSIDE every project, beside the trust ledger and the turn sandboxes; the one stage-1 source
 // is a local directory, implemented THROUGH the port so a GitHub adapter can join it without
 // changing the port (§8.6).
-export type { AbsPath, Sha256Hex } from "./types";
+export type { AbsPath, PackageFile, Sha256Hex } from "./types";
 
 export {
   CACHE_DIRNAME,
@@ -26,3 +26,10 @@ export {
   localSystemDir,
   sourcesConfigPath,
 } from "./model/layout";
+export {
+  DESIGN_SYSTEM_PACKAGE_V1_PREFIX,
+  DuplicatePackageFileError,
+  designSystemContentHash,
+  encodeDesignSystemPackageV1,
+  normalizePackageRelPath,
+} from "./model/content-hash";
