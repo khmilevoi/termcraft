@@ -44,3 +44,14 @@ export {
 } from "./model/errors";
 export type { SourceError } from "./model/errors";
 export { allowAllPackageAdmission, nodeDesignSystemFsDeps } from "./model/fs-deps";
+export type { ConfiguredSourceV1, SourcesConfigV1 } from "./model/sources-config";
+export {
+  BUILT_IN_LOCAL_SOURCE,
+  DEFAULT_SOURCES_CONFIG,
+  MAX_SOURCES_CONFIG_BYTES,
+  SOURCES_CONFIG_SCHEMA_VERSION,
+  decodeSourcesConfig,
+  encodeSourcesConfig,
+  readSourcesConfig,
+  writeSourcesConfig,
+} from "./model/sources-config";
