@@ -83,6 +83,15 @@ export { createFakeStagingService } from "./staging";
 export type { TrustGateCall, TrustGateFailableMethod, FakeTrustGate } from "./trust";
 export { createFakeTrustGate } from "./trust";
 
+// ---- design-system sources ----------------------------------------------------------------
+export type {
+  DesignSystemSourceFailableMethod,
+  FakeDesignSystemSource,
+  FakeDesignSystemSourceCall,
+  FakeDesignSystemSourceOptions,
+} from "./design-system-source";
+export { createFakeDesignSystemSource } from "./design-system-source";
+
 export type {
   DiagnosticsCacheCall,
   FakeDiagnosticsCache,
