@@ -1,8 +1,27 @@
 /**
- * Palette theme id bound at page level via `meta.theme` (§5.4). MVP ships
- * `dark-default` only; `light-default` arrives in v1.0.
+ * A theme id declared by the project's own design system (spec §4.6). It was a closed
+ * one-member union while a single `dark-default` palette was compiled into this binary; the
+ * truth now lives in the project's `design/system/design-system.json`, and the GATE — not this
+ * type — validates a concrete id against that manifest. Widening it here rather than enumerating
+ * project names is the whole point: a closed union in the binary would make every project's
+ * theme names part of the binary's identity.
  */
-export type ThemeId = "dark-default";
+export type ThemeId = string;
+
+/**
+ * A concrete terminal colour: a lowercase `#rrggbb` string (spec §4.5).
+ *
+ * TEMPLATE-LITERAL RATHER THAN `string`, ON PURPOSE. A `string` alias would leave
+ * `color="foregroundMuted"` compiling, and §4.5 replaces two ways of naming a colour with one:
+ * the checked `t.accent` path. §9's migration depends on the old spelling being a fatal
+ * `TS2322` that the Gate's warning can attach an exact rewrite to.
+ *
+ * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: TypeScript cannot express "exactly six
+ * lowercase hex digits", so this type checks the `#` prefix and nothing else. The full
+ * `#rrggbb` form is enforced where the values ENTER the system — the design-system manifest's
+ * Gate schema (§7) — not at every prop site.
+ */
+export type Color = `#${string}`;
 
 /** A terminal-cell size (columns × rows). */
 export interface Size {
@@ -13,7 +32,10 @@ export interface Size {
 /**
  * The themed token palette a page renders against (runtime-api §5.4). Token NAMES
  * are the stable contract the design-system components bind to; the concrete hues
- * belong to the resolved `ThemeId`. Every value is a lowercase `#rrggbb` string.
+ * belong to the resolved `ThemeId`. Every value is a {@link Color}. The NAMES are the
+ * mandatory core roles every project theme must declare (spec §4.1) — the component
+ * catalog's defaults bind to them; the VALUES are the project's, delivered through
+ * {@link TokenMap} at mount.
  *
  * The 17 roles map 1:1 onto the design system's real `termcraft-engine.js` palette
  * (a warm amber-on-near-black terminal theme). `warning` has no dedicated engine
@@ -22,39 +44,54 @@ export interface Size {
  */
 export interface ThemeTokens {
   /** Global terminal background (engine `bg`); also the knocked-out fg on solid amber chips. */
-  readonly background: string;
+  readonly background: Color;
   /** Elevated fill — status bar, lifted card/input bodies (engine `statusBg`). */
-  readonly surface: string;
+  readonly surface: Color;
   /** Primary body text (engine `fg`). */
-  readonly foreground: string;
+  readonly foreground: Color;
   /** Secondary/dim text — labels, metadata, sub-panel titles (engine `dim`). */
-  readonly foregroundMuted: string;
+  readonly foregroundMuted: Color;
   /** Faintest text — placeholders, disabled/ghost rows, hints, column headers (engine `faint`). */
-  readonly foregroundFaint: string;
+  readonly foregroundFaint: Color;
   /** Active structural frame — panel borders, pane dividers, gauge track (engine `border`). */
-  readonly border: string;
+  readonly border: Color;
   /** Subtle/inactive chrome — interior dividers, dimmed frames, quiet-chip bg (engine `line`). */
-  readonly line: string;
+  readonly line: Color;
   /** Primary accent — prompt/cursor, titles, active tab, ▸ marker, gauge fill (engine `amber`). */
-  readonly accent: string;
+  readonly accent: Color;
   /** Bright emphasis — popup/active titles, selected values, hover borders, warning emphasis (engine `amberHi`). */
-  readonly accentHi: string;
+  readonly accentHi: Color;
   /** Dimmed amber — generating-state borders, low-emphasis warning (engine `amberDim`). */
-  readonly accentDim: string;
+  readonly accentDim: Color;
   /** Selected-row background — the back-fill behind the current list/table/pin row (engine `sel`). */
-  readonly selection: string;
+  readonly selection: Color;
   /** Selected-row text — text/columns on the highlighted row (engine `selFg`). */
-  readonly selectionFg: string;
+  readonly selectionFg: Color;
   /** Success/live — ● live, ✓ resolved, sparkline bars (engine `green`). */
-  readonly success: string;
+  readonly success: Color;
   /** Warning/caution — ⚠ hints, ctx-threshold (engine `amberHi`; no dedicated warning hue). */
-  readonly warning: string;
+  readonly warning: Color;
   /** Error text/border — ✗ failures, invalid input, error modal (engine `red`). */
-  readonly danger: string;
+  readonly danger: Color;
   /** Error-band background — the strip behind a red error message (engine `redDim`). */
-  readonly dangerDim: string;
+  readonly dangerDim: Color;
   /** Status-bar background — bottom row + segment fills (engine `statusBg`). */
-  readonly statusBg: string;
+  readonly statusBg: Color;
+}
+
+/**
+ * The active theme's whole token map (spec §4.1): the mandatory core roles above, plus any
+ * number of token names the project declared. The index signature is what makes a
+ * project-declared name expressible at all.
+ *
+ * A page never indexes this type by a computed string — it reads a named field off its own
+ * manifest-derived `Tokens` type (§4.3), where every key is known, so
+ * `noUncheckedIndexedAccess` never widens a read to `| undefined`. The seventeen core roles
+ * stay declared PROPERTIES here for the same reason: the catalog's own defaults
+ * (`activeTokens().border`, `.foreground`, …) must be checked reads, not index accesses.
+ */
+export interface TokenMap extends ThemeTokens {
+  readonly [token: string]: Color;
 }
 
 /**
@@ -71,6 +108,15 @@ export interface PageMeta {
   readonly title: string;
   /** Smallest export size and the status-bar warning threshold. */
   readonly minSize: Size;
-  /** Token palette (§5.4). */
-  readonly theme: ThemeId;
+  /**
+   * The declared theme this page pins to (spec §4.6). OPTIONAL: absent means the project
+   * manifest's `defaultTheme`, which is the ordinary case; present, it pins the page to one
+   * declared theme. The Gate checks the name against the project's manifest.
+   *
+   * KNOWN GAP until plan P4 lands: the host child's own `pageMetaSchema`
+   * (`src/host/session/model/source-mount.ts`) still REQUIRES `theme`, so a page that omits it
+   * type-checks here and is refused at mount with `MALFORMED_PROTOCOL`. P4 relaxes that schema
+   * as part of the host wiring; nothing in the repository omits `theme` today.
+   */
+  readonly theme?: ThemeId;
 }

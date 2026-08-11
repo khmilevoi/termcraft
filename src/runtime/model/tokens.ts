@@ -1,6 +1,16 @@
 import type { ThemeId, ThemeTokens } from "../types";
 
 /**
+ * The one theme id the COMPILED SEED carries. Deliberately NOT {@link ThemeId}, which spec §4.6
+ * widened to `string` because a project's theme names live in its own manifest: a
+ * `Record<ThemeId, …>` would become an index signature and, under this repository's
+ * `noUncheckedIndexedAccess: true`, make {@link themeTokens} return `TokenMap | undefined` —
+ * breaking three call sites outside this module for no gain. The seed registry is a closed,
+ * one-member thing and says so in its own type.
+ */
+export type SeedThemeId = "dark-default";
+
+/**
  * The `dark-default` palette (runtime-api §5.4). These are the design system's
  * REAL hues, taken 1:1 from `design/termcraft-engine.js`'s `pal` object (a warm
  * amber-on-near-black terminal theme) — not a placeholder. Every token is a
@@ -29,17 +39,17 @@ const DARK_DEFAULT: ThemeTokens = {
   statusBg: "#231d12",
 };
 
-const THEMES: Record<ThemeId, ThemeTokens> = {
+const THEMES: Record<SeedThemeId, ThemeTokens> = {
   "dark-default": DARK_DEFAULT,
 };
 
 /** Resolve a theme id to its token palette (§5.4). Closed to the declared `ThemeId`. */
-export function themeTokens(id: ThemeId): ThemeTokens {
+export function themeTokens(id: SeedThemeId): ThemeTokens {
   return THEMES[id];
 }
 
 /** The default theme every MVP page renders against until a theme override lands. */
-export const DEFAULT_THEME_ID: ThemeId = "dark-default";
+export const DEFAULT_THEME_ID: SeedThemeId = "dark-default";
 
 /**
  * The active theme's tokens for a component to render against. MVP resolves the

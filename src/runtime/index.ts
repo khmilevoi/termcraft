@@ -6,7 +6,7 @@
 // primitive escape hatch land task-by-task in phase 1.
 
 // Page contract (§4)
-export type { PageMeta, Size, ThemeId, ThemeTokens } from "./types";
+export type { Color, PageMeta, Size, ThemeId, ThemeTokens, TokenMap } from "./types";
 export { CURRENT_KIT_API_VERSION, definePage } from "./model/define-page";
 
 // Reatom state, async/derivation, and the React binding (§3.2, §5)
