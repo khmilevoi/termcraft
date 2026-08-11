@@ -13,8 +13,10 @@ const utf8 = (text: string) => new Uint8Array(Buffer.from(text, "utf8"));
  *  reasons unrelated to what it is testing. `validManifestObject` is the one shared valid manifest
  *  (see its own doc) — used here instead of a second, hand-rolled one. */
 const MANIFEST = validManifestObject();
-const DEFAULT_THEME = (MANIFEST.themes as Record<string, { label: string; tokens: Record<string, string> }>)
-  .dark;
+// Non-null: `validManifestObject`'s own fixture always declares a "dark" theme.
+const DEFAULT_THEME = (
+  MANIFEST.themes as Record<string, { label: string; tokens: Record<string, string> }>
+).dark!;
 
 const read = (value: unknown) => readDesignSystemSummary(utf8(JSON.stringify(value)), "m.json");
 

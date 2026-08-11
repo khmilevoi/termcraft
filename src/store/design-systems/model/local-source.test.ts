@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { parseDesignSystemId, parseDesignSystemVersion } from "entities/design-system-ref";
 import { systemClock } from "infrastructure/clock";
 
@@ -22,21 +23,14 @@ afterAll(() => {
 
 const utf8 = (text: string) => new Uint8Array(Buffer.from(text, "utf8"));
 
+// `readDesignSystemSummary` now decodes through `entities/design-system`'s decoder (project-
+// design-systems §10.1 sync point 1), which enforces materially more than a picker used to need —
+// every core token role, cross-theme parity, lowercase-hex values. `validManifestObject` is the
+// one shared manifest the decoder actually accepts (see its own doc).
 const FILES: readonly PackageFile[] = [
   {
     relPath: "design-system.json",
-    bytes: utf8(
-      JSON.stringify({
-        schemaVersion: 1,
-        id: "midnight",
-        name: "Midnight",
-        version: "1.2.0",
-        kitApiVersion: 1,
-        defaultTheme: "dark",
-        themes: { dark: { label: "Dark", tokens: { accent: "#4cc9f0" } } },
-        components: [],
-      }),
-    ),
+    bytes: utf8(JSON.stringify({ ...validManifestObject(), components: [] })),
   },
 ];
 
