@@ -121,6 +121,12 @@ describe("checkDesignSystemSlice", () => {
     expect(result.errors.map((e) => e.code)).toEqual(["UNSUPPORTED_KIT_API"]);
     expect(result.errors[0]?.message).toContain("99");
     expect(result.unverified).toBe(true);
+    // The manifest DID decode, but `manifest` is still null: Task 6's `runTree` wiring must
+    // suppress the containment scan and the `meta.theme` check exactly as it does for a manifest
+    // that failed to decode — a system this binary cannot target gets ONE fatal, not one PLUS a
+    // containment fatal PLUS a theme fatal per page.
+    expect(result.manifest).toBeNull();
+    expect(result.componentRoots).toEqual([]);
   });
 
   test("a components[] entry naming no tree file is DESIGN_SYSTEM_COMPONENT_UNRESOLVED", () => {
@@ -158,6 +164,24 @@ describe("checkDesignSystemSlice", () => {
     );
     expect(result.errors).toEqual([]);
     expect(result.componentRoots).toContain("system/components/Button.tsx");
+  });
+
+  test("an unresolved component and an export-missing component both fatal — fan-out, not short-circuit (B-1)", () => {
+    // Every other component-fatal test above produces exactly ONE error, so an implementation
+    // that `return`ed after the first fatal instead of accumulating would pass all of them —
+    // including the `componentRoots` check, since Button precedes PageShell in the fixture and
+    // an early return yields the same prefix. This case breaks BOTH components at once, each a
+    // DIFFERENT fatal code, so only an implementation that keeps checking every component after
+    // the first failure can produce both.
+    const t = tree({ "system/components/Button.tsx": "export const Btn = 1\n" });
+    t.files.delete("system/components/PageShell.tsx");
+    const result = checkDesignSystemSlice({ files: t.files, treePaths: [...t.files.keys()] });
+    expect(result.errors.map((e) => e.code).sort()).toEqual([
+      "DESIGN_SYSTEM_COMPONENT_EXPORT_MISSING",
+      "DESIGN_SYSTEM_COMPONENT_UNRESOLVED",
+    ]);
+    expect(result.unverified).toBe(true);
+    expect(result.componentRoots).toEqual(["system/components/Button.tsx"]);
   });
 
   test("every fatal carries no blockedPages — a manifest fault names no page (D6)", () => {

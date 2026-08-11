@@ -29,7 +29,9 @@ export interface DesignSystemScanInput {
  *  walk (Task 5) and the page `meta.theme` check (Task 6) need from a decoded manifest. */
 export interface DesignSystemScanResultV1 {
   readonly errors: readonly GateError[];
-  /** The decoded manifest, or `null` when the tree declares none or it did not decode. */
+  /** The decoded manifest, or `null` when the tree declares none, it did not decode, or it
+   *  targets a kit API version this binary does not support (in which case downstream checks —
+   *  the closure roots, the containment scan, the `meta.theme` check — never ran either). */
   readonly manifest: DesignSystemManifestV1 | null;
   /** True when the tree NAMES a design system this pass could not fully verify — the
    *  dead-module suppression signal (decision D8). False when the tree declares none. */
@@ -51,7 +53,8 @@ const NO_DESIGN_SYSTEM: DesignSystemScanResultV1 = {
 /**
  * `system/design-system.json`'s own component export check could not read a resolved
  * component's source to the end — `scanNamedExports` shares the recursive-descent JSX reader
- * that can throw (see `gate/model/exports-scan.ts`'s own doc comment). Mirrors
+ * that can throw (see `gate/model/lexer.ts:454`'s `./jsx` reader, wrapped in `errore.try` for
+ * its residual `RangeError`, and `gate/model/gate.ts:189`'s identical boundary). Mirrors
  * `gate/adapters/gate-runner.ts`'s `DeterminismLintUnreadableError`.
  */
 class DesignSystemExportScanUnreadableError extends errore.createTaggedError({
@@ -104,10 +107,15 @@ export function hasDesignSystem(treePaths: readonly string[]): boolean {
  * reports exactly one `DESIGN_SYSTEM_SOURCE_MISSING` fatal (mirrors `CLOSURE_SOURCE_MISSING`'s
  * honesty rule: an unread manifest is not an absent one). A manifest that does not decode
  * reports exactly ONE fatal — `decodeDesignSystemManifest` itself stops at the first problem —
- * and `manifest: null`. An unsupported `kitApiVersion` also reports exactly one fatal and skips
- * every component check: a system built for another runtime API says so once, rather than once
- * per component it happens to declare. Only a decoded manifest whose `kitApiVersion` is
- * supported reaches the component-resolution and export checks, which fan out — every
+ * and `manifest: null`. An unsupported `kitApiVersion` also reports exactly one fatal, skips
+ * every component check, and ALSO returns `manifest: null` — even though the manifest itself
+ * decoded — because "this binary cannot even target this kit" is the same class of "we are not
+ * reading this system" as a decode failure, and Task 6's `runTree` wiring branches on
+ * `manifest === null` to suppress the containment scan and the `meta.theme` check the identical
+ * way: a system built for another runtime API says so once, rather than once per component it
+ * happens to declare AND once per page whose theme it never validated. Only a decoded manifest
+ * whose `kitApiVersion` is supported reaches the component-resolution and export checks, which
+ * fan out — every
  * unresolved entry and every resolved-but-export-missing module gets its own independent fatal
  * (spec §7); they never short-circuit each other, because they are independent facts about
  * independent files.
@@ -148,6 +156,10 @@ export function checkDesignSystemSlice(input: DesignSystemScanInput): DesignSyst
 
   if (!SUPPORTED_KIT_API_VERSIONS.has(manifest.kitApiVersion)) {
     const supported = [...SUPPORTED_KIT_API_VERSIONS].join(", ");
+    // `manifest: null`, not the decoded value — Task 6's `runTree` wiring branches on
+    // `manifest === null` to skip `scanSystemContainment`/`checkPageThemes` entirely, exactly
+    // as it already does for a manifest that failed to decode: reporting a containment or
+    // theme fatal for a system this binary cannot even target would report the wrong fix.
     return {
       errors: [
         manifestError(
@@ -155,15 +167,24 @@ export function checkDesignSystemSlice(input: DesignSystemScanInput): DesignSyst
           `kitApiVersion ${manifest.kitApiVersion} is not supported (this binary accepts ${supported})`,
         ),
       ],
-      manifest,
+      manifest: null,
       unverified: true,
       componentRoots: [],
     };
   }
 
   const present = new Set(input.treePaths);
+  // Keyed by the component's own TREE-relative path, not by object reference: a Set built from
+  // `findUnresolvedComponents`'s result happens to hold the SAME array elements today (it
+  // `.filter()`s `manifest.components`), but keying membership on that incidental identity
+  // would make the `DESIGN_SYSTEM_COMPONENT_UNRESOLVED` fatal silently disappear the moment that
+  // implementation changed to `.map()` or similar — a fail-open regression with nothing here to
+  // catch it. `designSystemComponentRelPath` is the entity's own function, reused rather than
+  // re-derived, so this can never read a path differently than `findUnresolvedComponents` did.
   const unresolved = new Set(
-    findUnresolvedComponents({ manifest, has: (relPath) => present.has(relPath) }),
+    findUnresolvedComponents({ manifest, has: (relPath) => present.has(relPath) }).map(
+      designSystemComponentRelPath,
+    ),
   );
 
   const errors: GateError[] = [];
@@ -172,7 +193,7 @@ export function checkDesignSystemSlice(input: DesignSystemScanInput): DesignSyst
   for (const component of manifest.components) {
     const relPath = designSystemComponentRelPath(component);
 
-    if (unresolved.has(component)) {
+    if (unresolved.has(relPath)) {
       errors.push(
         componentError(
           "DESIGN_SYSTEM_COMPONENT_UNRESOLVED",
@@ -192,8 +213,12 @@ export function checkDesignSystemSlice(input: DesignSystemScanInput): DesignSyst
       catch: (cause) => new DesignSystemExportScanUnreadableError({ file: relPath, cause }),
     });
     if (scanned instanceof Error) {
+      // `scanned.message` alone cannot always be attributed to `relPath`: the THROWN arm's
+      // `DesignSystemExportScanUnreadableError` carries `$file` in its own template, but the
+      // RETURNED `SourceStreamTruncatedError` (`lexer.ts:463`, `"...: $reason"`) names no file
+      // at all — so `relPath` is included explicitly rather than assumed to be in the message.
       log.warn(
-        `gate\\model\\design-system: ${scanned.message} — the flat allowlist scan already carries this file's own UNSCANNABLE_SOURCE fatal, so no export-missing diagnostic is manufactured for it`,
+        `gate/model/design-system: could not verify "${relPath}"'s export "${component.export}" — ${scanned.message} — the flat allowlist scan already carries this file's own UNSCANNABLE_SOURCE fatal, so no export-missing diagnostic is manufactured for it`,
       );
       continue;
     }
