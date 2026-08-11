@@ -5,6 +5,7 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
+import { hostModeAtom } from "../model/capabilities";
 import { activeTokens } from "../model/tokens";
 import { Box } from "./primitive";
 import { Text } from "./text";
@@ -13,9 +14,22 @@ let open: RenderHandle | null = null;
 afterEach(() => {
   open?.destroy();
   open = null;
+  hostModeAtom.set("preview");
 });
 
 const allRuns = (frame: { rows: StyledRun[][] }): StyledRun[] => frame.rows.flat();
+
+/** Render one tree into a throwaway renderer and return its frame. */
+const renderOnce = async (node: unknown, size: { w: number; h: number }) => {
+  const handle = await createHeadlessRenderer(size);
+  try {
+    handle.mount(node);
+    await handle.render();
+    return handle.capture();
+  } finally {
+    handle.destroy();
+  }
+};
 
 describe("Box low-level primitive (§3.2 escape hatch)", () => {
   test("renders children and paints a token-resolved background fill", async () => {
@@ -162,5 +176,170 @@ describe("Box border surface (spec §6.2)", () => {
     // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().accent`.
     const rejected = <Box id="rejected-title" title="t" titleColor="accent" />;
     expect(rejected).toBeDefined();
+  });
+});
+
+describe("Box layout surface (spec §6.2)", () => {
+  test("a percentage width resolves against the parent", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 2 });
+    open = handle;
+    handle.mount(
+      <Box id="outer" width={20} height={1} direction="row">
+        <Box id="half" width="50%" height={1} background={activeTokens().surface} />
+      </Box>,
+    );
+    await handle.render();
+    expect(handle.rectOf("half")?.width).toBe(10);
+  });
+
+  test("auto sizing falls back to content", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 2 });
+    open = handle;
+    handle.mount(
+      <Box id="auto-outer" width="auto" height={1} direction="row">
+        <Text id="auto-body">abcde</Text>
+      </Box>,
+    );
+    await handle.render();
+    // CORRECTED AGAINST OBSERVED YOGA OUTPUT (handle.layoutTree()), not the brief's assumed 5:
+    // `auto-outer` is a direct child of the renderer's root box, whose default `flexDirection`
+    // is `column` and default `alignItems` is `stretch`. `width="auto"` means "no explicit
+    // cross-axis size", so the stretch default fills it to the parent's full width (20) — the
+    // CHILD Text still sizes to its own content, confirmed at width 5 in the same layout tree.
+    expect(handle.rectOf("auto-outer")?.width).toBe(20);
+    expect(handle.rectOf("auto-body")?.width).toBe(5);
+  });
+
+  test("maxWidth clamps a box that would otherwise grow", async () => {
+    const handle = await createHeadlessRenderer({ w: 20, h: 2 });
+    open = handle;
+    handle.mount(
+      <Box id="clamp-outer" width={20} height={1} direction="row">
+        <Box id="clamped" grow={1} maxWidth={6} height={1} background={activeTokens().surface} />
+      </Box>,
+    );
+    await handle.render();
+    expect(handle.rectOf("clamped")?.width).toBe(6);
+  });
+
+  test("minHeight raises a box above its content height", async () => {
+    const handle = await createHeadlessRenderer({ w: 12, h: 6 });
+    open = handle;
+    handle.mount(<Box id="tall" minHeight={4} width={4} background={activeTokens().surface} />);
+    await handle.render();
+    expect(handle.rectOf("tall")?.height).toBe(4);
+  });
+
+  test("margin offsets a box inside its parent", async () => {
+    const handle = await createHeadlessRenderer({ w: 12, h: 4 });
+    open = handle;
+    handle.mount(
+      <Box id="margin-outer" width={12} height={4}>
+        <Box id="inset" margin={2} width={4} height={1} background={activeTokens().surface} />
+      </Box>,
+    );
+    await handle.render();
+    const rect = handle.rectOf("inset");
+    expect(rect?.x).toBe(2);
+    expect(rect?.y).toBe(2);
+  });
+
+  test("position absolute with offsets places a box at exact coordinates", async () => {
+    const handle = await createHeadlessRenderer({ w: 12, h: 5 });
+    open = handle;
+    handle.mount(
+      <Box id="abs-outer" width={12} height={5}>
+        <Box
+          id="floating"
+          position="absolute"
+          left={3}
+          top={2}
+          width={2}
+          height={1}
+          zIndex={5}
+          background={activeTokens().accent}
+        />
+      </Box>,
+    );
+    await handle.render();
+    const rect = handle.rectOf("floating");
+    expect(rect?.x).toBe(3);
+    expect(rect?.y).toBe(2);
+  });
+
+  test("wrap moves an overflowing child onto the next line", async () => {
+    const handle = await createHeadlessRenderer({ w: 8, h: 4 });
+    open = handle;
+    handle.mount(
+      <Box id="wrap-outer" direction="row" wrap="wrap" width={8} height={4}>
+        <Box id="w1" width={6} height={1} background={activeTokens().surface} />
+        <Box id="w2" width={6} height={1} background={activeTokens().accent} />
+      </Box>,
+    );
+    await handle.render();
+    expect(handle.rectOf("w2")?.y).toBe(1);
+  });
+
+  test("shrink lets an oversized child give way", async () => {
+    const handle = await createHeadlessRenderer({ w: 8, h: 2 });
+    open = handle;
+    handle.mount(
+      <Box id="shrink-outer" direction="row" width={8} height={1}>
+        <Box id="rigid" width={6} shrink={0} height={1} background={activeTokens().surface} />
+        <Box id="giving" width={6} shrink={1} height={1} background={activeTokens().accent} />
+      </Box>,
+    );
+    await handle.render();
+    const giving = handle.rectOf("giving")?.width ?? 0;
+    expect(giving).toBeLessThan(6);
+  });
+
+  test("alignSelf overrides the parent's cross-axis alignment for one child", async () => {
+    const handle = await createHeadlessRenderer({ w: 10, h: 4 });
+    open = handle;
+    handle.mount(
+      <Box id="self-outer" direction="row" align="start" width={10} height={4}>
+        <Box id="pinned" alignSelf="end" width={2} height={1} background={activeTokens().accent} />
+      </Box>,
+    );
+    await handle.render();
+    expect(handle.rectOf("pinned")?.y).toBe(3);
+  });
+
+  test("overflow hidden clips a child that exceeds the box", async () => {
+    const handle = await createHeadlessRenderer({ w: 10, h: 3 });
+    open = handle;
+    handle.mount(
+      <Box id="clip" width={4} height={1} overflow="hidden">
+        <Text id="clip-body">abcdefghij</Text>
+      </Box>,
+    );
+    await handle.render();
+    expect(frameText(handle.capture())).not.toContain("abcdefghij");
+  });
+
+  test("export mode renders the identical frame (spec §6.3)", async () => {
+    const tree = (
+      <Box
+        id="det"
+        border
+        borderStyle="rounded"
+        borderColor={activeTokens().border}
+        title="T"
+        titleAlign="center"
+        titleColor={activeTokens().accent}
+        width="100%"
+        minHeight={3}
+        margin={0}
+        overflow="hidden"
+        background={activeTokens().surface}
+      >
+        <Text id="det-body">body</Text>
+      </Box>
+    );
+    const preview = await renderOnce(tree, { w: 12, h: 4 });
+    hostModeAtom.set("export");
+    const exported = await renderOnce(tree, { w: 12, h: 4 });
+    expect(exported.rows).toEqual(preview.rows);
   });
 });

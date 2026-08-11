@@ -313,6 +313,13 @@ declare module "@termcraft/runtime" {
       /** The four-way junction where two interior rules cross. */
       readonly cross: string;
   }
+  /**
+   * A layout length (spec §6.2): a cell count, a percentage of the containing box, or `auto` —
+   * "whatever the content or the flex algorithm decides". termcraft declares this locally rather
+   * than re-exporting OpenTUI's own union, so an OpenTUI upgrade changes the adapter and not one
+   * saved page (§6).
+   */
+  type Dimension = number | "auto" | `${number}%`;
 
   // ── src/runtime/ui/button
   /** Props for the themed `Button` component. `id` is the mandatory stable id (§3.2). */
@@ -496,8 +503,39 @@ declare module "@termcraft/runtime" {
       readonly padding?: number;
       /** Flex grow factor — a 0 keeps the box at content size; ≥1 lets it expand. */
       readonly grow?: number;
-      readonly width?: number;
-      readonly height?: number;
+      /** Flex shrink factor — a 0 refuses to give way when the line is over-full. */
+      readonly shrink?: number;
+      /** Flex basis — the main-axis starting size before grow/shrink, or `auto` for content size. */
+      readonly basis?: number | "auto";
+      /** Whether an over-full row/column wraps onto further lines. */
+      readonly wrap?: "nowrap" | "wrap" | "wrap-reverse";
+      /** Cross-axis placement of THIS box, overriding its parent's `align` for it alone. */
+      readonly alignSelf?: "auto" | "start" | "center" | "end" | "stretch" | "baseline";
+      readonly width?: Dimension;
+      readonly height?: Dimension;
+      readonly minWidth?: Dimension;
+      readonly maxWidth?: Dimension;
+      readonly minHeight?: Dimension;
+      readonly maxHeight?: Dimension;
+      /**
+       * Outer spacing on all four sides. DELIBERATE OMISSION: OpenTUI also offers per-side and
+       * per-axis margins; spec §6.2 asks for the scalar form only, and exposing more is additive.
+       */
+      readonly margin?: Dimension;
+      /**
+       * `absolute` takes the box out of its parent's flex flow and places it by the offsets below.
+       * DELIBERATE OMISSION: OpenTUI's third value, `static`, is Yoga's own default and §6.2 does not
+       * ask for it.
+       */
+      readonly position?: "relative" | "absolute";
+      readonly top?: Dimension;
+      readonly right?: Dimension;
+      readonly bottom?: Dimension;
+      readonly left?: Dimension;
+      /** Paint order among overlapping siblings; higher paints later. */
+      readonly zIndex?: number;
+      /** What happens to content larger than the box. */
+      readonly overflow?: "visible" | "hidden" | "scroll";
       /**
        * The frame: `true` for all four sides, `false`/omitted for none, or exactly the sides to
        * draw (spec §6.2).
@@ -738,7 +776,7 @@ declare module "@termcraft/runtime" {
   export type { GaugeProps };
   export { Sparkline };
   export type { SparklineProps };
-  export type { BorderGlyphs, BorderSide };
+  export type { BorderGlyphs, BorderSide, Dimension };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {

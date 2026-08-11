@@ -152,3 +152,11 @@ export interface BorderGlyphs {
   /** The four-way junction where two interior rules cross. */
   readonly cross: string;
 }
+
+/**
+ * A layout length (spec §6.2): a cell count, a percentage of the containing box, or `auto` —
+ * "whatever the content or the flex algorithm decides". termcraft declares this locally rather
+ * than re-exporting OpenTUI's own union, so an OpenTUI upgrade changes the adapter and not one
+ * saved page (§6).
+ */
+export type Dimension = number | "auto" | `${number}%`;

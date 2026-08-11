@@ -1,4 +1,4 @@
-import type { BorderGlyphs, BorderSide, Color } from "../types";
+import type { BorderGlyphs, BorderSide, Color, Dimension } from "../types";
 
 const ALIGN = {
   start: "flex-start",
@@ -12,6 +12,23 @@ const JUSTIFY = {
   end: "flex-end",
   between: "space-between",
   around: "space-around",
+} as const;
+
+/** Public prop value → Yoga `alignSelf`. `start`/`end` gain the `flex-` prefix; the rest pass through. */
+const ALIGN_SELF = {
+  auto: "auto",
+  start: "flex-start",
+  center: "center",
+  end: "flex-end",
+  stretch: "stretch",
+  baseline: "baseline",
+} as const;
+
+/** Public prop value → Yoga `flexWrap`. Only `nowrap` is respelled (`no-wrap` upstream). */
+const WRAP = {
+  nowrap: "no-wrap",
+  wrap: "wrap",
+  "wrap-reverse": "wrap-reverse",
 } as const;
 
 /**
@@ -33,8 +50,39 @@ export interface BoxProps {
   readonly padding?: number;
   /** Flex grow factor — a 0 keeps the box at content size; ≥1 lets it expand. */
   readonly grow?: number;
-  readonly width?: number;
-  readonly height?: number;
+  /** Flex shrink factor — a 0 refuses to give way when the line is over-full. */
+  readonly shrink?: number;
+  /** Flex basis — the main-axis starting size before grow/shrink, or `auto` for content size. */
+  readonly basis?: number | "auto";
+  /** Whether an over-full row/column wraps onto further lines. */
+  readonly wrap?: "nowrap" | "wrap" | "wrap-reverse";
+  /** Cross-axis placement of THIS box, overriding its parent's `align` for it alone. */
+  readonly alignSelf?: "auto" | "start" | "center" | "end" | "stretch" | "baseline";
+  readonly width?: Dimension;
+  readonly height?: Dimension;
+  readonly minWidth?: Dimension;
+  readonly maxWidth?: Dimension;
+  readonly minHeight?: Dimension;
+  readonly maxHeight?: Dimension;
+  /**
+   * Outer spacing on all four sides. DELIBERATE OMISSION: OpenTUI also offers per-side and
+   * per-axis margins; spec §6.2 asks for the scalar form only, and exposing more is additive.
+   */
+  readonly margin?: Dimension;
+  /**
+   * `absolute` takes the box out of its parent's flex flow and places it by the offsets below.
+   * DELIBERATE OMISSION: OpenTUI's third value, `static`, is Yoga's own default and §6.2 does not
+   * ask for it.
+   */
+  readonly position?: "relative" | "absolute";
+  readonly top?: Dimension;
+  readonly right?: Dimension;
+  readonly bottom?: Dimension;
+  readonly left?: Dimension;
+  /** Paint order among overlapping siblings; higher paints later. */
+  readonly zIndex?: number;
+  /** What happens to content larger than the box. */
+  readonly overflow?: "visible" | "hidden" | "scroll";
   /**
    * The frame: `true` for all four sides, `false`/omitted for none, or exactly the sides to
    * draw (spec §6.2).
@@ -90,8 +138,24 @@ export function Box(props: BoxProps) {
       gap={props.gap}
       padding={props.padding}
       flexGrow={props.grow}
+      flexShrink={props.shrink}
+      flexBasis={props.basis}
+      flexWrap={props.wrap !== undefined ? WRAP[props.wrap] : undefined}
+      alignSelf={props.alignSelf !== undefined ? ALIGN_SELF[props.alignSelf] : undefined}
       width={props.width}
       height={props.height}
+      minWidth={props.minWidth}
+      maxWidth={props.maxWidth}
+      minHeight={props.minHeight}
+      maxHeight={props.maxHeight}
+      margin={props.margin}
+      position={props.position}
+      top={props.top}
+      right={props.right}
+      bottom={props.bottom}
+      left={props.left}
+      zIndex={props.zIndex}
+      overflow={props.overflow}
       border={borderOption(props.border)}
       borderStyle={props.borderStyle}
       customBorderChars={props.borderChars}
