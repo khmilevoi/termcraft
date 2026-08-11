@@ -355,6 +355,82 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    */
   function Column(props: ColumnProps): React.ReactNode;
 
+  // ── src/runtime/ui/diff
+  /** Props for the themed \`Diff\` view. \`id\` is the mandatory stable id (§3.2). */
+  interface DiffProps {
+      /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */
+      readonly id: string;
+      /**
+       * The change to render, as ONE unified diff (a \`--- / +++ / @@\` patch). Only the first patch
+       * in the string is rendered. An empty or unparseable value renders nothing rather than failing.
+       */
+      readonly patch: string;
+      /** \`unified\` stacks the two sides, \`split\` puts them side by side. Defaults to \`unified\`. */
+      readonly view?: "unified" | "split";
+      /**
+       * Whether to draw the line-number gutters — and with them, the \`+\`/\`-\` sign column, since the
+       * vendor paints the signs INSIDE the gutter (see the component's own note). Defaults to \`true\`:
+       * turning this off leaves added and removed rows with no marker distinguishing them at all.
+       */
+      readonly showLineNumbers?: boolean;
+      /** How over-long lines break. Defaults to \`"word"\` (the code renderable's own default when unset). */
+      readonly wrap?: "word" | "char" | "none";
+      /** The content hue; defaults to the theme's \`foreground\`. */
+      readonly color?: Color;
+      /** The gutter digits' hue; defaults to the theme's \`foregroundFaint\`. */
+      readonly lineNumberColor?: Color;
+      /** The \`+\` sign's hue; defaults to the theme's \`success\`. */
+      readonly addedColor?: Color;
+      /** The \`-\` sign's hue; defaults to the theme's \`danger\`. */
+      readonly removedColor?: Color;
+      /**
+       * The band behind an added line. Defaults to the theme's \`background\` — i.e. NO band; see the
+       * component's own note on why, and supply a project token here to paint one.
+       */
+      readonly addedBackground?: Color;
+      /** The band behind a removed line. Defaults to the theme's \`background\` — i.e. NO band. */
+      readonly removedBackground?: Color;
+  }
+  /**
+   * A themed unified/split diff view (design-system §6.1, the "Documents and code" group). Takes
+   * one unified \`patch\` string and renders it with \`+\`/\`-\` signs riding inside the (by-default-on)
+   * line-number gutters, and every colour resolved from the active theme. The mandatory \`id\` flows
+   * to the element so the host can answer geometry queries and the shell can select/pin it.
+   *
+   * DEGRADATION, NOT FAILURE. An empty patch, or a string that is not a patch at all, renders an
+   * empty frame; nothing throws. A patch whose hunk header disagrees with its body renders the
+   * renderer's own parse-error message instead of the diff — a divergence recorded here because the
+   * message is drawn in the renderer's own red, which is not a theme colour and cannot be
+   * overridden through any prop.
+   *
+   * THE GUTTER AND THE SIGN COLUMN ARE ONE OBJECT — A VENDOR DIVERGENCE. \`@opentui/core\` paints the
+   * \`+\`/\`-\` signs INSIDE the gutter renderable itself, and \`showLineNumbers\` toggles that same
+   * object's visibility (there is no prop that keeps the signs and drops only the digits). Because
+   * this component deliberately paints no background band (see the COLOURS note below), the sign
+   * column is the ONLY thing that distinguishes an added row from a removed one — with it hidden, a
+   * changed line reads as declared twice with nothing marking which version is which. \`showLineNumbers\`
+   * therefore defaults to \`true\`: the bare \`<Diff id={..} patch={..} />\` call an author is most
+   * likely to write must not silently discard the diff's own meaning. This still satisfies the
+   * "every prop is passed explicitly" rule below — the value is written, not left to the vendor's
+   * own default; it simply now agrees with it.
+   *
+   * COLOURS, AND THE ONE GAP. \`color\`/\`lineNumberColor\`/\`addedColor\`/\`removedColor\` default to the
+   * theme's \`foreground\`/\`foregroundFaint\`/\`success\`/\`danger\` — the design's own vocabulary, where
+   * green marks the live/resolved/positive and red the failed/negative.
+   *
+   * The row BACKGROUNDS are the gap. The design system carries no diff view at all: it paints no
+   * green band anywhere, and the only red band it paints is the failure strip (\`danger\` on
+   * \`dangerDim\`), which means something else. Rather than invent a diff palette, this component
+   * carries the semantics on the signs and leaves both rows on the ordinary \`background\` — and
+   * exposes \`addedBackground\`/\`removedBackground\` so a project whose own design system declares
+   * diff hues can supply them. Passing the theme background EXPLICITLY is also what keeps
+   * \`@opentui/core\`'s hard-coded \`#1a4d1a\`/\`#4d1a1a\` bands out of an authored page.
+   *
+   * Selection colours are passed from the theme but are not props: selection is host-driven chrome,
+   * not page styling. The syntax-highlighting client is never exposed (spec §6).
+   */
+  function Diff(props: DiffProps): React.ReactNode;
+
   // ── src/runtime/ui/gauge
   /** Props for the themed \`Gauge\` component. \`id\` is the mandatory stable id (§3.2). */
   interface GaugeProps {
@@ -398,6 +474,63 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * in the static headless render the handler is inert. Colors are semantic token names.
    */
   function Input(props: InputProps): React.ReactNode;
+
+  // ── src/runtime/ui/line-number
+  /** Props for the themed \`LineNumber\` gutter. \`id\` is the mandatory stable id (§3.2). */
+  interface LineNumberProps {
+      /** Stable id the host selects and answers geometry on. Mandatory on every catalog component. */
+      readonly id: string;
+      /**
+       * The content whose lines are numbered — EXACTLY ONE text-like child (\`Text\` today; \`Input\`,
+       * and later \`Textarea\`/\`Code\`, qualify too). A second child is silently dropped and a child
+       * that is not text-like leaves the gutter unbuilt, so nothing renders at all. See the
+       * component's own note.
+       */
+      readonly children?: unknown;
+      /** The gutter digits' hue; defaults to the theme's \`foregroundFaint\`. */
+      readonly color?: Color;
+      /** The gutter's fill; defaults to the theme's \`background\` (the design paints no gutter fill). */
+      readonly background?: Color;
+      /** The number the first line carries; defaults to \`1\`. */
+      readonly startAt?: number;
+      /**
+       * Minimum gutter width in cells, so a growing file does not shift the content sideways.
+       * Defaults to \`3\`. The vendor also applies this as the outer box's own minimum width, which is
+       * harmless here since the gutter is already at least that wide.
+       */
+      readonly minWidth?: number;
+      /**
+       * Cells of space between the digits and the content. Defaults to \`1\`. The vendor option this
+       * maps to (\`paddingRight\`) is ALSO a base layout prop, so it double-applies: it inserts the gap
+       * on the left of the content AND pads the same number of cells onto the component's own right
+       * edge, costing that much content width there too. There is no prop that separates the two
+       * effects; a large \`gap\` narrows the content column on both sides.
+       */
+      readonly gap?: number;
+  }
+  /**
+   * A themed line-number gutter around one text-like child (design-system §6.1, the "Documents and
+   * code" group). Renders an OpenTUI \`<line-number>\` whose numbering target is wired from the child
+   * itself — the underlying \`target\` is a renderer object and is deliberately never a prop (spec
+   * §6). The mandatory \`id\` flows to the element so the host can answer geometry queries and the
+   * shell can select/pin it.
+   *
+   * ONE CHILD, AND IT MUST BE TEXT-LIKE. The renderable adopts the FIRST child that reports line
+   * information (\`Text\`, \`Input\`, and later \`Textarea\`/\`Code\`) as its numbering target; every later
+   * child is refused and never appears. A child that reports no line information — a \`Row\`, a
+   * \`Panel\`, a \`Box\` — leaves the gutter unbuilt and the whole component draws nothing. Neither
+   * case throws; both are covered by tests beside this file.
+   *
+   * \`Diff\` can NOT be a child: it carries no line information of its own (it composes its own
+   * internal gutters). Use \`Diff\`'s \`showLineNumbers\` instead.
+   *
+   * COLOURS. \`color\` defaults to \`foregroundFaint\` — the role the design gives placeholders, ghost
+   * rows and column headers, which is the weight a gutter reads at; the design draws no gutter of
+   * its own, so this is the closest faithful mapping rather than a quoted value. \`background\`
+   * defaults to the theme's \`background\`: the design paints no gutter fill, and passing the value
+   * explicitly is what stops \`@opentui/core\`'s own \`#888888\` default from reaching the frame.
+   */
+  function LineNumber(props: LineNumberProps): React.ReactNode;
 
   // ── src/runtime/ui/list
   /** One selectable row in a \`List\` (design-system §3.2). */
@@ -706,6 +839,10 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   export type { GaugeProps };
   export { Sparkline };
   export type { SparklineProps };
+  export { LineNumber };
+  export type { LineNumberProps };
+  export { Diff };
+  export type { DiffProps };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {
