@@ -115,6 +115,21 @@ function norm(p: string): string {
  *    (`src/runtime/model/reatom.ts`). Nothing a design page can name reaches it. If the facade
  *    ever re-exports `withPersist`, `reatomField`/`reatomForm` or the routing surface, this line
  *    stops being free and the specifier has to be dealt with.
+ *  - `@opentui/core` (`SyntaxStyle`, `StyleDefinitionInput`) — unresolved, added by plan P8 Task
+ *    6's `runtime/model/syntax-style.ts`, which imports both directly. Cost today is NIL, and
+ *    that is checked rather than assumed, the same way as `@standard-schema/spec` above:
+ *    `syntax-style.ts`'s own exports (`activeSyntaxStyle`, `syntaxScopeStyles`, `buildSyntaxStyle`,
+ *    `syntaxStyleAtom`, `SyntaxStyleUnavailableError`) DO reach the flattened declaration text —
+ *    every file the program's graph touches gets flattened, not only what `index.ts` re-exports
+ *    (the extra non-exported declarations this generator carries; a separate, reviewed and
+ *    deliberately deferred item) — but none of them is named in `index.d.ts`'s own re-export
+ *    list, so no page-visible identifier ever resolves to `SyntaxStyle`/`StyleDefinitionInput`.
+ *    If the facade ever exports `activeSyntaxStyle` or a prop typed with one of these two names,
+ *    this line stops being free.
+ *  - `errore` (`FactoryTaggedErrorClass`, the base `SyntaxStyleUnavailableError_base` extends) —
+ *    unresolved for the same reason and with the same measured, checked-nil cost: `errore` is
+ *    used nowhere else under `src/runtime`, and `SyntaxStyleUnavailableError`'s own flattened
+ *    class declaration is the same kind of inert, unreachable text described in the bullet above.
  *
  * A page's own PROP types are unaffected by all of this: every `*Props` interface is declared
  * inside the ambient block and is checked for real.

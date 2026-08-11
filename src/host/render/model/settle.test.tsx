@@ -1,6 +1,19 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+
+// Cross-module test-only edge (precedent: `src/gate/model/type-check.test.ts` imports
+// `runtime/generated/runtime-dts`; `docs/architecture/code-structure.md` records that nothing
+// restricts who may import `runtime`, only `runtime`'s own outgoing imports). This module's
+// `collectHighlightingPromises` correctness rests on `instanceof CodeRenderable` genuinely
+// matching a REAL `@opentui/core` mount — the fake `SettleDriver` used everywhere else in this
+// file cannot prove that, only a real `Code`/`Markdown` component mounted on the real headless
+// renderer can.
+import { DARK_DEFAULT, DEFAULT_THEME_ID, seedThemeCapability } from "runtime/model/tokens";
+import { Code } from "runtime/ui/code";
+import { Markdown } from "runtime/ui/markdown";
 
 import type { StyledRun } from "../../protocol";
+import type { RenderHandle } from "../types";
+import { createHeadlessRenderer } from "./renderer";
 import { DEFAULT_FRAME_SETTLE, frameFingerprint, settleFrames } from "./settle";
 
 // Deviation from the brief's literal snippet: `StyledRun.fg`/`bg` are `Color`
@@ -60,8 +73,12 @@ describe("frameFingerprint", () => {
     // THE ASSERTION THIS WHOLE MECHANISM RESTS ON. Highlighting changes ONLY colour. A
     // text-only fingerprint would call the plain-text frame 'quiet' on its first comparison
     // and return before a single hue arrived — the export hazard wearing a green test.
-    const plain = frameFingerprint(frame([run("const", "#d7d0c2")]));
-    const highlighted = frameFingerprint(frame([run("const", "#e6a23c")]));
+    // `#010101`/`#020202` are synthetic fixture values, not design colours (review finding,
+    // 2026-08-11): this test is about fingerprint SENSITIVITY — that two distinct colours
+    // produce two distinct fingerprints — not about which hues the design system uses, so any
+    // two distinct, obviously-fake values do the job without a design hex literal.
+    const plain = frameFingerprint(frame([run("const", "#010101")]));
+    const highlighted = frameFingerprint(frame([run("const", "#020202")]));
     expect(plain).not.toBe(highlighted);
   });
 
@@ -140,5 +157,44 @@ describe("settleFrames", () => {
     // highlight is exactly the case the quiet-frames backstop exists to fall through to.
     const result = await settleFrames(driver);
     expect(result.settled).toBe(true);
+  });
+});
+
+describe("collectHighlightingPromises against a REAL @opentui/core renderable tree (IMPORTANT-2, final review)", () => {
+  // Every test above proves `settleFrames`'s GATING logic against a hand-rolled `SettleDriver`
+  // whose `pending()` is whatever the test hands it — none of them ever run `collectHighlighting
+  // Promises` itself. That function's whole job rests on `node instanceof CodeRenderable`
+  // (`./settle.ts`), which silently depends on THIS file and the renderer resolving the SAME
+  // `@opentui/core` module instance — the package ships two builds (`chunk-bun-*`,
+  // `chunk-node-*`). If that ever desynced, the walk would return `[]` for every mount, the
+  // "precise signal" half of the settle fix would silently degrade to "quiet frames only", and
+  // every test in this file would stay green regardless — exactly the regression `settle.ts`'s
+  // header comment warns about. These two tests mount a REAL `Code` and a REAL `Markdown`
+  // (`runtime/ui`) on the real headless renderer and assert the walk actually finds a promise for
+  // each, which only happens if the `instanceof` check genuinely matches at runtime.
+  let open: RenderHandle | null = null;
+  afterEach(() => {
+    open?.destroy();
+    open = null;
+    seedThemeCapability({ themeId: DEFAULT_THEME_ID, tokens: DARK_DEFAULT });
+  });
+
+  test("finds at least one highlight promise for a real <Code> mount", async () => {
+    const handle = await createHeadlessRenderer({ w: 40, h: 6 });
+    open = handle;
+    handle.mount(<Code id="snippet" content="const a = 1" language="typescript" />);
+    await handle.render();
+    expect(handle.pendingHighlights().length).toBeGreaterThan(0);
+  });
+
+  test("finds at least one highlight promise for a real <Markdown> fenced block", async () => {
+    const document = ["# Heading", "", "```ts", "const a = 1", "```", ""].join("\n");
+    const handle = await createHeadlessRenderer({ w: 40, h: 12 });
+    open = handle;
+    handle.mount(<Markdown id="doc" content={document} />);
+    await handle.render();
+    // Every block — fenced code AND prose — is itself a `CodeRenderable` (`./settle.ts`'s doc
+    // comment), so a document with a heading, prose and one fenced block yields more than one.
+    expect(handle.pendingHighlights().length).toBeGreaterThan(0);
   });
 });

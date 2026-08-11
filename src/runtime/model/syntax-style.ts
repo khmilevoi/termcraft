@@ -139,15 +139,28 @@ export function buildSyntaxStyle(tokens: TokenMap): SyntaxStyleUnavailableError 
  * A `computed` rather than a hand-rolled `Map` keyed on the token object: Reatom already owns
  * exactly this memo, and it invalidates on precisely the right input (`themeTokensAtom`).
  *
- * ACCEPTED, STATED LEAK: a superseded `SyntaxStyle` is not `destroy()`ed. Stage 1 seeds the
- * theme once per mount and ships no switcher (spec §4.2), so a process holds at most two.
- * THE TRIGGER TO REVISIT: a shell-side theme switcher, at which point this needs a disconnect
- * hook that destroys the previous handle.
+ * ACCEPTED, STATED LEAK: a superseded `SyntaxStyle` is not `destroy()`ed. Stage 1 ships no
+ * theme SWITCHER (spec §4.2), so a given mounted theme never changes underneath a page — but
+ * the host state machine already supports repeated `mount`s within one incarnation (task 1), and
+ * each mount seeds `themeTokensAtom` fresh, so this atom recomputes and builds a NEW `SyntaxStyle`
+ * on every one of them. "At most two per process" undersold the trigger: it holds for a single
+ * seed in a process that never re-mounts, but a process that accepts N mounts leaks one handle
+ * per mount, not a fixed ceiling of two.
+ * THE TRIGGER TO REVISIT: a shell-side theme switcher OR repeated re-mounts within one
+ * incarnation — either needs a disconnect hook that destroys the previous handle.
  */
 export const syntaxStyleAtom = computed<SyntaxStyleUnavailableError | SyntaxStyle>(
   () => buildSyntaxStyle(themeTokensAtom()),
   "runtime.syntaxStyle",
 );
+
+/**
+ * Whether {@link activeSyntaxStyle} has already logged the unavailable-style warning once this
+ * process. Module-level rather than an atom: this is a degraded-mode DIAGNOSTIC flag, not
+ * reactive UI state — nothing renders differently off it, and Reatom's own reactivity has no use
+ * for a value nothing ever reads back through the graph.
+ */
+let unavailableWarningLogged = false;
 
 /**
  * A catalog component's read of the active syntax style — the same current-value (untracked)
@@ -157,10 +170,17 @@ export const syntaxStyleAtom = computed<SyntaxStyleUnavailableError | SyntaxStyl
  * native handle, and handing one to an authored page is the renderer-internal access the
  * wrapper layer exists to prevent. Plan P9's `Diff` consumes it the same way this module's
  * siblings consume `activeTokens()` — `import { activeSyntaxStyle } from "../model/syntax-style"`.
+ *
+ * LOGS ONCE, NOT ON EVERY CALL (review finding, 2026-08-11): every `Code`/`Markdown` render calls
+ * this, so an unguarded `log.warn` here would repeat once per render for as long as the
+ * degradation lasts, drowning the trace in copies of the same diagnostic. `unavailableWarningLogged`
+ * gates it to the first occurrence per process, matching what `code.tsx`/`markdown.tsx` and
+ * `docs/architecture/modules.md` already promise callers.
  */
 export function activeSyntaxStyle(): SyntaxStyleUnavailableError | SyntaxStyle {
   const style = syntaxStyleAtom();
-  if (style instanceof Error) {
+  if (style instanceof Error && !unavailableWarningLogged) {
+    unavailableWarningLogged = true;
     log.warn(
       "runtime/syntax-style: no syntax style could be allocated; code and markdown render as " +
         "plain text:",

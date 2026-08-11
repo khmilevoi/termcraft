@@ -55,11 +55,17 @@ export interface HostStdioIo {
 export async function runHostStdio(io: HostStdioIo): Promise<void> {
   registerRuntimeResolver();
 
-  // THIS CHILD'S STDOUT IS THE PROTOCOL PIPE. A dependency writing a diagnostic to it — and
-  // `@opentui/core` writes one on every highlight failure — does not garble a picture, it
-  // corrupts framing and kills the incarnation. The renderer runs with `consoleMode: "disabled"`,
-  // which RESTORES the real console rather than silencing it, so this bridge is the only thing
-  // standing between a tree-sitter warning and a broken session.
+  // `@opentui/core` reports highlight failures with `console.warn` and worker/init failures with
+  // `console.error`. The renderer runs with `consoleMode: "disabled"`, which RESTORES the real
+  // `console` rather than silencing it, so those calls reach it — and `console.warn`/`console.error`
+  // write to STDERR, a pipe separate from `io.output`'s stdout protocol frames, which the
+  // supervisor drains independently. So there is no framing-corruption path here to guard against:
+  // nothing in `src/host/**` ever calls `suspendConsolePassthrough()` (the only call site is
+  // `ui/app/model/render-root.tsx`, the interactive shell, where stdout and stderr ARE the same
+  // tty), so a bridged line still reaches stderr exactly as an unbridged one would. What this
+  // bridge buys HERE is recoverability, not protection: the line also lands in this incarnation's
+  // debug trace file, so a dependency diagnostic that would otherwise vanish the moment this
+  // process exits can be read back after the fact.
   installThirdPartyConsoleBridge();
 
   let liveRenderer: { destroy(): void } | null = null;

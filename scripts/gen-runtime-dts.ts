@@ -469,6 +469,19 @@ function buildDeclaration(outDir: string): string | RuntimeDtsEmitError {
   const emitted = collectEmitted(outDir)
     .filter((name) => name.startsWith(RUNTIME_PREFIX))
     .map((name) => name.slice(RUNTIME_PREFIX.length));
+  // Cheap insurance (review finding, 2026-08-11): the filter above fails OPEN by construction — a
+  // `RUNTIME_PREFIX` that stops matching anything (a future `src/runtime` move, a `rootDir`
+  // change) would silently narrow `emitted` to `[]` with no diagnostic of its own. The two
+  // named checks below already catch that in practice today (an empty list can never contain
+  // `"index.d.ts"` or `JSX_CHUNK`), but they do so incidentally, by naming two SPECIFIC files
+  // rather than by asserting the filter's own postcondition — so this checks the postcondition
+  // directly, with the same error type every other failure in this function already uses, rather
+  // than leaving "the filter kept something" to be true only as a side effect of what happens to
+  // be checked next.
+  if (emitted.length === 0)
+    return new RuntimeDtsEmitError({
+      reason: `no emitted declaration file started with "${RUNTIME_PREFIX}" under ${outDir}; the facade would be empty`,
+    });
   if (!emitted.includes("index.d.ts"))
     return new RuntimeDtsEmitError({ reason: `no index.d.ts under ${outDir}/${RUNTIME_PREFIX}` });
   if (!emitted.includes(JSX_CHUNK))

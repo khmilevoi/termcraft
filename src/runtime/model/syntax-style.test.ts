@@ -86,8 +86,7 @@ describe("the theme → syntax-scope mapping (plan P8 D1)", () => {
 
   test("no hue is invented — every registered fg is one of the active theme's own values", () => {
     const declared = new Set<string>(Object.values(t));
-    for (const [scope, style] of Object.entries(styles)) {
-      expect({ scope, fg: style.fg }).toEqual({ scope, fg: style.fg });
+    for (const style of Object.values(styles)) {
       // `StyleDefinitionInput.fg` is typed `ColorInput` (`string | RGBA`) by @opentui/core, but
       // this module (`syntaxScopeStyles`) only ever assigns a theme `Color` string to it — the
       // cast reflects that runtime invariant, not a widening of what this test checks.

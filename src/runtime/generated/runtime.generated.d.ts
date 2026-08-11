@@ -172,10 +172,15 @@ declare module "@termcraft/runtime" {
    * A `computed` rather than a hand-rolled `Map` keyed on the token object: Reatom already owns
    * exactly this memo, and it invalidates on precisely the right input (`themeTokensAtom`).
    *
-   * ACCEPTED, STATED LEAK: a superseded `SyntaxStyle` is not `destroy()`ed. Stage 1 seeds the
-   * theme once per mount and ships no switcher (spec §4.2), so a process holds at most two.
-   * THE TRIGGER TO REVISIT: a shell-side theme switcher, at which point this needs a disconnect
-   * hook that destroys the previous handle.
+   * ACCEPTED, STATED LEAK: a superseded `SyntaxStyle` is not `destroy()`ed. Stage 1 ships no
+   * theme SWITCHER (spec §4.2), so a given mounted theme never changes underneath a page — but
+   * the host state machine already supports repeated `mount`s within one incarnation (task 1), and
+   * each mount seeds `themeTokensAtom` fresh, so this atom recomputes and builds a NEW `SyntaxStyle`
+   * on every one of them. "At most two per process" undersold the trigger: it holds for a single
+   * seed in a process that never re-mounts, but a process that accepts N mounts leaks one handle
+   * per mount, not a fixed ceiling of two.
+   * THE TRIGGER TO REVISIT: a shell-side theme switcher OR repeated re-mounts within one
+   * incarnation — either needs a disconnect hook that destroys the previous handle.
    */
   const syntaxStyleAtom: import("@reatom/core").Computed<SyntaxStyle | SyntaxStyleUnavailableError>;
   /**
@@ -186,6 +191,12 @@ declare module "@termcraft/runtime" {
    * native handle, and handing one to an authored page is the renderer-internal access the
    * wrapper layer exists to prevent. Plan P9's `Diff` consumes it the same way this module's
    * siblings consume `activeTokens()` — `import { activeSyntaxStyle } from "../model/syntax-style"`.
+   *
+   * LOGS ONCE, NOT ON EVERY CALL (review finding, 2026-08-11): every `Code`/`Markdown` render calls
+   * this, so an unguarded `log.warn` here would repeat once per render for as long as the
+   * degradation lasts, drowning the trace in copies of the same diagnostic. `unavailableWarningLogged`
+   * gates it to the first occurrence per process, matching what `code.tsx`/`markdown.tsx` and
+   * `docs/architecture/modules.md` already promise callers.
    */
   function activeSyntaxStyle(): SyntaxStyleUnavailableError | SyntaxStyle;
 

@@ -85,10 +85,18 @@ function writeThrough(method: ConsoleMethod, args: readonly unknown[]): void {
  * `console.warn("Code highlighting failed, falling back to plain text:", error)` and its
  * `TreeSitterClient` reports worker/init failures with `console.error`. Under
  * `consoleMode: "disabled"` OpenTUI does not silence those — `TerminalConsoleCache.deactivate()`
- * RESTORES the real console — so they write to real stdout. In the interactive shell that
- * corrupts the frame; in the `_host --stdio` child, whose stdout IS the protocol pipe, it
- * corrupts framing. termcraft's own call sites already report through `log.*`; this closes the
- * one hole left, for code termcraft does not own.
+ * RESTORES the real console — so they write to the real `console`, which sends `warn`/`error` to
+ * STDERR. In the interactive shell, which owns the whole terminal (raw mode + alternate screen)
+ * for the run's lifetime, stdout and stderr are the SAME tty, so an unbridged line still corrupts
+ * the visible frame — `suspendConsolePassthrough` (below) is what actually guards that case. In
+ * the `_host --stdio` child, by contrast, stderr is a pipe SEPARATE from the stdout protocol
+ * pipe, drained independently by the supervisor — nothing there calls
+ * `suspendConsolePassthrough()` (its only call site is `ui/app/model/render-root.tsx`), so a
+ * bridged line reaches stderr exactly as an unbridged one would; this bridge is not a
+ * framing guard for that process. What it buys in BOTH processes is recoverability: the line
+ * also lands in the trace file, so a dependency diagnostic that would otherwise be gone the
+ * moment the process exits can be read back after the fact. termcraft's own call sites already
+ * report through `log.*`; this closes the one hole left, for code termcraft does not own.
  *
  * DELIBERATELY NOT THE OLD GLOBAL TEE. This is installed by the two processes that own a byte
  * stream and by nothing else, it is uninstalled when they hand the stream back, and it is never

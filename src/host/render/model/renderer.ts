@@ -93,6 +93,9 @@ export async function createHeadlessRenderer(size: Size): Promise<RenderHandle> 
     layoutTree() {
       return layoutTreeOf(renderer);
     },
+    pendingHighlights() {
+      return collectHighlightingPromises(renderer.root);
+    },
   };
 }
 

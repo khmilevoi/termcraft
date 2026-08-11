@@ -120,4 +120,19 @@ export interface RenderHandle {
    * see `model/geometry.ts`'s doc comment.
    */
   layoutTree(): LayoutNode;
+  /**
+   * Every in-flight syntax-highlight promise `settle()` collects from the CURRENTLY MOUNTED tree
+   * — `model/settle.ts`'s `collectHighlightingPromises(renderer.root)`, called fresh on each read
+   * (see that function's own doc comment on why it is re-walked rather than cached).
+   *
+   * A NARROW, PURPOSE-BUILT SEAM, deliberately not a `root`/`renderer` accessor: exposing the
+   * whole `Renderable` tree or the native `CliRenderer` would hand a caller renderer-internal
+   * access this module exists to keep inside `host/render`. This exists so a test can prove the
+   * one thing that cannot be proven through a fake `SettleDriver` — that `collectHighlightingPromises`'s
+   * `instanceof CodeRenderable` check genuinely matches against a REAL `@opentui/core` mount, not
+   * just a hand-rolled stand-in (`@opentui/core` ships two builds, `chunk-bun-*` and
+   * `chunk-node-*`, so a silent module-instance mismatch would degrade the walk to always
+   * returning `[]` with every existing settle test still green).
+   */
+  pendingHighlights(): readonly Promise<void>[];
 }
