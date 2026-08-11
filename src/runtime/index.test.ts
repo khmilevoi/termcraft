@@ -73,6 +73,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "Sparkline",
       "Box",
       "Slider",
+      "ScrollBar",
     ] as const) {
       // See the rationale on the first loop above: tsc already validates `name`.
       // oxlint-disable-next-line import/namespace

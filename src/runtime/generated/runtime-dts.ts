@@ -532,6 +532,61 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    */
   function Row(props: RowProps): React.ReactNode;
 
+  // ── src/runtime/ui/scroll-bar
+  /**
+   * Props for the themed \`ScrollBar\`. \`id\` is the mandatory stable id (§3.2); \`orientation\` is
+   * REQUIRED by the underlying renderable's constructor, and the scroll state is required because
+   * an export snapshot must render it from props rather than from the renderable's own mutable
+   * offset (spec §6.3). There is deliberately NO \`children\`: the renderable is a leaf (spec §6.1's
+   * spike).
+   */
+  interface ScrollBarProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      readonly orientation: "horizontal" | "vertical";
+      /** The full scrollable extent, in cells. */
+      readonly contentSize: number;
+      /** The visible window's extent, in cells. */
+      readonly viewportSize: number;
+      /** The window's offset into the content, in cells; clamped to \`0..contentSize - viewportSize\`. */
+      readonly position: number;
+      /** The track hue. Read one off \`useTokens()\` (spec §4.5). Defaults to \`line\`. */
+      readonly trackColor?: Color;
+      /** The thumb hue. Read one off \`useTokens()\` (spec §4.5). Defaults to \`accentDim\`. */
+      readonly thumbColor?: Color;
+      /** Step arrows at both ends; OFF by default, matching the design's scrollbar. */
+      readonly showArrows?: boolean;
+      /** The arrow hue when \`showArrows\` is set. Defaults to \`foregroundFaint\`. */
+      readonly arrowColor?: Color;
+      readonly width?: number;
+      readonly height?: number;
+      /** Invoked with the new offset when the bar is dragged; inert in the static render. */
+      readonly onScroll?: (position: number) => void;
+  }
+  /**
+   * A proportional scroll indicator (spec §6.1). Renders the OpenTUI \`ScrollBarRenderable\` — a
+   * renderable with no intrinsic tag, registered by {@link registerRenderableTags} — whose inner
+   * track is a \`SliderRenderable\` drawing a \`█\`/\`▀\`/\`▄\` thumb at half-cell precision.
+   *
+   * COLOURS AND ARROWS COME FROM THE DESIGN (\`design/termcraft-engine.js\`'s \`scrollbar()\`): a track
+   * in \`line\`, a thumb in \`amberDim\` (the \`accentDim\` role), arrows off.
+   *
+   * DIVERGENCE, DOCUMENTED RATHER THAN SUBSTITUTED (CLAUDE.md): the design draws the track as a
+   * \`│\` glyph rule, while \`SliderRenderable\` paints its track as a solid background fill. The glyph
+   * half cannot be reproduced through this renderable, so the closest faithful mapping is used —
+   * track BACKGROUND \`line\`, thumb FOREGROUND \`accentDim\`.
+   *
+   * PROP ORDER IS LOAD-BEARING, and this is measured rather than assumed. \`scrollSize\`,
+   * \`viewportSize\` and \`scrollPosition\` are not constructor options; \`@opentui/react\`'s
+   * \`setInitialProperties\` applies them as plain property writes, iterating \`for (const propKey in
+   * props)\` — i.e. in the order written below. \`scrollPosition\`'s setter clamps against
+   * \`scrollSize - viewportSize\`, so a position written before its bounds would clamp to 0.
+   *
+   * The same constructor-captured-handler divergence recorded on \`./slider.tsx\` applies to
+   * \`onChange\` here.
+   */
+  function ScrollBar(props: ScrollBarProps): React.ReactNode;
+
   // ── src/runtime/ui/separator
   /** Props for the \`Separator\` rule. \`id\` is the mandatory stable id (§3.2). */
   interface SeparatorProps {
@@ -768,6 +823,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   export type { SparklineProps };
   export { Slider };
   export type { SliderProps };
+  export { ScrollBar };
+  export type { ScrollBarProps };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {

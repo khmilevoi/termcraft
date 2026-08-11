@@ -97,3 +97,7 @@ mandatory `id`.
   `"vertical"`), `value`. Optional `min`/`max` (0/100), `trackColor`/`fillColor`,
   `width`/`height`, `onChange(value)`. Its rendered position always comes from `value`, so an
   export snapshot is deterministic.
+- `ScrollBar` — a proportional scroll indicator; a leaf, it takes no children. Required: `id`,
+  `orientation`, `contentSize`, `viewportSize`, `position` (all in cells). Optional
+  `trackColor`/`thumbColor`/`arrowColor`, `showArrows` (off by default), `width`/`height`,
+  `onScroll(position)`.

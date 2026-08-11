@@ -89,3 +89,5 @@ export { Sparkline } from "./ui/sparkline";
 export type { SparklineProps } from "./ui/sparkline";
 export { Slider } from "./ui/slider";
 export type { SliderProps } from "./ui/slider";
+export { ScrollBar } from "./ui/scroll-bar";
+export type { ScrollBarProps } from "./ui/scroll-bar";
