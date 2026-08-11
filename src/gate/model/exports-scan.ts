@@ -61,32 +61,38 @@ function endsDeclaratorList(kind: SyntaxKind): boolean {
  * reject a legal design-system component for a shape this scan cannot enumerate, not for anything
  * the author did wrong. Failing OPEN on that rare shape, loudly modelled in the return type as
  * `exhaustive: false`, beats a false fatal: a caller checks `exhaustive` and, when it is `false`,
- * MUST NOT report a missing name as a fatal. `exhaustive` goes `false` on THREE triggers:
- * a destructuring export target (`export const { … } = …` / `export const [ … ] = …`, in either
- * a `const`, `let` or `var` declaration); a star re-export (`export * from "…"`); and a bare
- * `function`/`class`/`async` keyword as the FIRST declarator's own initializer in a `const`/
- * `let`/`var` list (`export const a = function () {}, b = 2` — see below). The import allowlist,
+ * MUST NOT report a missing name as a fatal. `exhaustive` goes `false` on THREE triggers: a
+ * destructuring export target (`export const { … } = …` / `export const [ … ] = …`, in either a
+ * `const`, `let` or `var` declaration); a star re-export (`export * from "…"`); and — the safety
+ * net described below — a declarator initializer whose `function`/`class`/`async` shape this
+ * scanner could not skip past cleanly (truncated/unbalanced brackets). The import allowlist,
  * which IS a perimeter, is untouched by this file — a `REEXPORT`/`DYNAMIC_IMPORT` violation this
  * scan happens to see through is still `scanImportAllowlist`'s call to make.
  *
- * THE THIRD TRIGGER (fix round 1, task review Important finding). This scanner tracks bracket
- * balance, not expressions, so it cannot tell where a bare `function`/`class`/`async` initializer
- * ends without becoming a body parser; continuing to search for a comma past it risks reading
- * INTO the function/class body (a nested `,` there is not a declarator separator) or, worse,
- * silently stopping before a LATER declarator's name is ever seen — `export const a = function ()
- * {}, b = 2` used to report `{a}`, `exhaustive: true`, silently dropping the real export `b`.
- * Fixed by treating this exactly like a destructuring target: fail open on the FIRST declarator's
- * bare keyword initializer rather than risk it.
+ * A MULTI-DECLARATOR `const`/`let`/`var` LIST MAY HOLD A FUNCTION/CLASS/ASYNC-ARROW EXPRESSION
+ * AS ANY DECLARATOR'S INITIALIZER (fix rounds 1 and 2, task review Important findings), e.g.
+ * `export const a = function () {}, b = 2` or the common named-function-expression pattern
+ * `export const Button = function Button() {}`. `function`, `class` and `async` are also
+ * `DECLARATION_STARTS` members (they can start a top-level STATEMENT), so naively treating any
+ * occurrence of one as "the declarator list ended" mis-happens twice over: round 1 fixed a
+ * false-CLOSED failure — `b` silently lost while `exhaustive` stayed `true` — but only for the
+ * FIRST declarator, which round 2's review then measured as (a) OVER-firing on a single-name
+ * declaration with no sibling to lose (`export const a = function () {}` wrongly went
+ * `exhaustive: false`) and (b) leaving the identical loss unfixed one declarator later
+ * (`export const a = 1, b = function(){}, c = 2` still lost `c`). Both were the same root cause:
+ * refusing to read PAST the keyword instead of reading THROUGH it.
  *
- * Deliberately scoped to the FIRST declarator only. `export const a = 1, b = function(){}` — the
- * bare keyword on a LATER declarator, with nothing after it — stays `exhaustive: true`: the
- * existing declarator-list walk already stops cleanly there with every name so far intact, and
- * widening the trigger to fire on every declarator (not only the first) would falsely flag that
- * safe shape too. A bare keyword on a later, NON-final declarator (`export const a = 1, b =
- * function(){}, c = 2`) remains a KNOWN RESIDUAL GAP: `c` is silently lost while `exhaustive`
- * stays `true`. Recorded rather than fixed here — the task review's reproduction only exercises
- * the first-declarator shape, and closing the general case needs the same body-skipping this fix
- * was deliberately told not to attempt.
+ * THE FIX: skip the initializer's own tokens (see {@link skipInitializerKeyword}) and keep
+ * collecting — `function`'s optional name and parameter list, `class`'s optional name and
+ * `extends <expr>` clause, `async`'s arrow parameter and `=>` — then let the ordinary depth-0 walk
+ * (which already understands balanced brackets and a depth-0 comma) read the body/arrow-result
+ * exactly as it reads any other initializer expression. THE SAFETY NET: when that skip cannot
+ * find the shape it expects — a truncated source, an initializer this function does not
+ * recognize — {@link skipInitializerKeyword} returns `null` and the caller stops collecting for
+ * this declarator list and sets `exhaustive = false`, exactly like a destructuring target. It is
+ * always acceptable for this scanner to say `exhaustive: false`; it is never acceptable for it to
+ * omit a real export while claiming exhaustiveness — that invariant is the whole reason this type
+ * exists, and both round-2 findings were breaches of it in opposite directions.
  *
  * SUPPORTED FORMS, each contributing zero or more names to `names`:
  * - `export const|let|var <name>[ = …][, <name>[ = …] …]` — every top-level declarator name in
@@ -110,10 +116,10 @@ export interface NamedExportScanV1 {
   readonly names: ReadonlySet<string>;
   /**
    * False when a form this scanner cannot read exhaustively was seen — a destructuring export
-   * (`export const { a } = x`), an `export * from`, or a bare `function`/`class`/`async`
-   * keyword as the first declarator's own initializer in a multi-name `const`/`let`/`var` list
-   * (`export const a = function () {}, b = 2`). A caller must then NOT report a missing name as
-   * a fatal.
+   * (`export const { a } = x`), an `export * from`, or a declarator initializer whose
+   * `function`/`class`/`async` shape this scanner could not skip past (a truncated source, or an
+   * initializer shape it does not recognize). A caller must then NOT report a missing name as a
+   * fatal.
    */
   readonly exhaustive: boolean;
 }
@@ -188,29 +194,38 @@ export function scanNamedExports(
 
     if (!isDeclaratorForm) continue;
 
-    // The FIRST declarator's own initializer opens with a bare `function`/`class`/`async`
-    // keyword (`export const a = function () {}, b = 2`) — this scanner tracks bracket
-    // balance, not expressions, so it cannot safely tell where that initializer ends. Reading
-    // on risks either wandering into the body's own tokens or, as measured (fix round 1),
-    // silently stopping at the keyword itself — `DECLARATION_STARTS` matches all three — before
-    // a later declarator (`b`) is ever seen. Fail open exactly like a destructuring target.
-    if (
-      toks[nameIdx + 1]?.kind === SK.EqualsToken &&
-      isBareInitializerKeyword(toks[nameIdx + 2]?.kind)
-    ) {
-      exhaustive = false;
-      continue;
-    }
-
     // `const`/`let`/`var` may declare more than one binding: keep collecting names at this
-    // declaration's own top level until the declarator list ends.
+    // declaration's own top level until the declarator list ends. A bare `function`/`class`/
+    // `async` keyword — on ANY declarator, not only the first — is not itself an end: it is
+    // skipped past (see `skipInitializerKeyword`) so the walk keeps reading past it exactly as
+    // it already reads past a bracketed initializer.
     let k = nameIdx + 1;
-    while (k < toks.length && !endsDeclaratorList(toks[k]!.kind)) {
-      if (isOpener(toks[k]!.kind)) {
-        k = skipBalanced(toks, k);
+    while (k < toks.length) {
+      const kind = toks[k]!.kind;
+
+      if (kind === SK.FunctionKeyword || kind === SK.ClassKeyword || kind === SK.AsyncKeyword) {
+        const after = skipInitializerKeyword(toks, k);
+        if (after === null) {
+          exhaustive = false; // an initializer shape this scan does not recognize — fail open
+          break;
+        }
+        k = after;
         continue;
       }
-      if (toks[k]!.kind === SK.CommaToken) {
+
+      if (endsDeclaratorList(kind)) break;
+
+      if (isOpener(kind)) {
+        const after = skipBalanced(toks, k);
+        if (after === null) {
+          exhaustive = false; // unbalanced brackets — the stream ran out before this closed
+          break;
+        }
+        k = after;
+        continue;
+      }
+
+      if (kind === SK.CommaToken) {
         const afterComma = toks[k + 1];
         if (afterComma?.kind === SK.OpenBraceToken || afterComma?.kind === SK.OpenBracketToken) {
           exhaustive = false; // a later destructuring declarator in the same list
@@ -221,21 +236,12 @@ export function scanNamedExports(
         k += 2;
         continue;
       }
+
       k += 1;
     }
   }
 
   return { names, exhaustive };
-}
-
-/**
- * `function`/`class`/`async` — the three `DECLARATION_STARTS` members that can legally open a
- * VALUE expression (a function/class expression, or an async arrow) rather than only a
- * statement. Used only to detect a declarator's bare initializer; see the fix-round-1 note on
- * `NamedExportScanV1.exhaustive` and its call site above.
- */
-function isBareInitializerKeyword(kind: SyntaxKind | undefined): boolean {
-  return kind === SK.FunctionKeyword || kind === SK.ClassKeyword || kind === SK.AsyncKeyword;
 }
 
 /** `{`/`(`/`[` — every opener the depth counter tracks. */
@@ -252,11 +258,18 @@ function isCloser(kind: SyntaxKind): boolean {
 
 /**
  * Skip one balanced `{…}`/`(…)`/`[…]` run starting at an opener, returning the index one past
- * its matching closer (or `toks.length` if the stream ends first). Used only to step over a
- * destructuring pattern's own interior once it has already made the scan non-exhaustive, so a
- * brace inside it cannot be mistaken for the declarator list's own end.
+ * its matching closer, or `null` when the stream ends before it closes. Used to step over a
+ * destructuring pattern's own interior once it has already made the scan non-exhaustive (a brace
+ * inside it must not be mistaken for the declarator list's own end), and by
+ * {@link skipInitializerKeyword} to step over a function/class/async initializer's own brackets.
+ *
+ * `null` ON AN UNBALANCED RUN (fix round 2, task review Important finding), not the index the
+ * stream happened to stop at. A caller that treated a stalled scan as "closed here" would silently
+ * accept a truncated source as complete — exactly the kind of false exhaustiveness this whole
+ * scanner exists to avoid. Every caller must fail open (`exhaustive = false`, stop collecting)
+ * rather than guess where an unterminated bracket run was "meant" to end.
  */
-function skipBalanced(toks: Tok[], openerIdx: number): number {
+function skipBalanced(toks: Tok[], openerIdx: number): number | null {
   let depth = 0;
   let k = openerIdx;
   for (; k < toks.length; k += 1) {
@@ -266,7 +279,90 @@ function skipBalanced(toks: Tok[], openerIdx: number): number {
       if (depth === 0) return k + 1;
     }
   }
-  return k;
+  return null;
+}
+
+/**
+ * Skip past a bare `function`/`class`/`async` keyword sitting in a declarator's INITIALIZER
+ * position (`toks[k]` is one of the three), returning the index of the first token the ordinary
+ * depth-0 declarator walk should resume from — typically an opening bracket that walk already
+ * knows how to skip (a parameter list, a class body) — or `null` when the shape that follows does
+ * not match any of the three forms below, or a bracket run inside it never closes. `null` means
+ * "fail open, exactly like a destructuring target" to every caller; see this module's doc comment
+ * on `exhaustive` for why silence is never the alternative.
+ *
+ * The THREE forms, none of which this function reads further than the point where the ordinary
+ * walk can safely take back over:
+ * - `function`/`async function`, optionally generator (`function*`) and optionally named
+ *   (`function foo() {}`, the named-function-expression pattern) — skipped up to and including
+ *   the parameter list's own `(`, which the caller's depth-0 walk then balances itself, and whose
+ *   matching `)` is immediately followed by the body's `{`, which the SAME walk balances next;
+ * - `class`, optionally named and optionally followed by an `extends <expr>` clause — walked
+ *   token by token (balancing any brackets the `extends` expression itself contains, e.g. a call
+ *   `extends someMixin(Base)`) up to the class body's own `{`, left for the caller's walk;
+ * - `async` NOT followed by `function` — an async arrow. Its parameter list (a bare identifier or
+ *   a balanced `(…)`) and the mandatory `=>` are consumed here; the arrow's result — a balanced
+ *   `{…}` block or a bare expression — is left for the caller's walk, which already stops
+ *   correctly at a depth-0 comma or semicolon either way.
+ */
+function skipInitializerKeyword(toks: Tok[], k: number): number | null {
+  const kind = toks[k]!.kind;
+  if (kind === SK.AsyncKeyword) {
+    if (toks[k + 1]?.kind === SK.FunctionKeyword) return skipFunctionHead(toks, k + 1);
+    return skipAsyncArrowHead(toks, k + 1);
+  }
+  if (kind === SK.FunctionKeyword) return skipFunctionHead(toks, k);
+  if (kind === SK.ClassKeyword) return skipClassHead(toks, k);
+  return null;
+}
+
+/** `toks[k]` is `function`: skip an optional `*`, an optional name, to the parameter list `(`. */
+function skipFunctionHead(toks: Tok[], k: number): number | null {
+  let j = k + 1;
+  if (toks[j]?.kind === SK.AsteriskToken) j += 1; // generator
+  if (toks[j]?.kind === SK.Identifier) j += 1; // optional name
+  if (toks[j]?.kind !== SK.OpenParenToken) return null;
+  return j;
+}
+
+/** `toks[k]` is `class`: skip an optional name and an optional `extends <expr>`, to the body `{`. */
+function skipClassHead(toks: Tok[], k: number): number | null {
+  let j = k + 1;
+  if (toks[j]?.kind === SK.Identifier) j += 1; // optional name
+  if (toks[j]?.kind === SK.ExtendsKeyword) {
+    j += 1;
+    while (j < toks.length && toks[j]!.kind !== SK.OpenBraceToken) {
+      if (isOpener(toks[j]!.kind)) {
+        const after = skipBalanced(toks, j);
+        if (after === null) return null;
+        j = after;
+        continue;
+      }
+      if (isCloser(toks[j]!.kind)) return null; // an unmatched closer — not a shape we recognize
+      j += 1;
+    }
+  }
+  if (toks[j]?.kind !== SK.OpenBraceToken) return null;
+  return j;
+}
+
+/**
+ * `toks[j]` is the token right after a bare `async` that is NOT followed by `function`: skip the
+ * arrow's own parameter (a bare identifier, or a balanced `(…)` list) and its mandatory `=>`.
+ */
+function skipAsyncArrowHead(toks: Tok[], startJ: number): number | null {
+  let j = startJ;
+  if (toks[j]?.kind === SK.Identifier) {
+    j += 1;
+  } else if (toks[j]?.kind === SK.OpenParenToken) {
+    const after = skipBalanced(toks, j);
+    if (after === null) return null;
+    j = after;
+  } else {
+    return null; // neither a bare param nor a parenthesised list — not a shape we recognize
+  }
+  if (toks[j]?.kind !== SK.EqualsGreaterThanToken) return null;
+  return j + 1;
 }
 
 /**

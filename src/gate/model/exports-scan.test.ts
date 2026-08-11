@@ -81,29 +81,73 @@ describe("scanNamedExports", () => {
   });
 });
 
-// Fix round 1 (task review Important finding): a bare `function`/`class`/`async` keyword in the
-// FIRST declarator's own initializer used to end the declarator-list walk silently, dropping any
-// later declarator name while still reporting `exhaustive: true`. See the doc comment on
-// `NamedExportScanV1.exhaustive` and on `scanNamedExports` for the full rationale.
-describe("scanNamedExports — declarator initializer edge cases (fix round 1)", () => {
+// Fix round 2 (task review Important findings, superseding round 1's fail-open pre-check): a
+// bare `function`/`class`/`async` keyword in a declarator's own initializer is now SKIPPED PAST
+// — not treated as ending the declarator list — so the walk keeps collecting every real name.
+// Round 1's pre-check only guarded the FIRST declarator, which the round-2 review measured as
+// both over-firing (a single declarator with nothing to lose still went non-exhaustive) and
+// under-firing (a bare keyword on a later, non-final declarator still lost the name after it).
+// See the doc comments on `scanNamedExports` and `NamedExportScanV1.exhaustive` for the full
+// rationale, and `skipInitializerKeyword` for the skip itself.
+describe("scanNamedExports — declarator initializer edge cases (fix round 2)", () => {
   test.each([
     "export const a = function () {}, b = 2",
-    "export const a = class {}, b = 2",
-    "export const a = async () => 1, b = 2",
-    "export var a = function () {}, b = 2",
+    "export const a = function foo() {}, b = 2",
     "export const a = function* () {}, b = 2",
-  ])("%s fails open (exhaustive: false) instead of silently dropping a later name", (source) => {
-    expect(names(source).exhaustive).toBe(false);
+    "export const a = async function () {}, b = 2",
+    "export const a = class {}, b = 2",
+    "export const a = class Foo extends Bar {}, b = 2",
+    "export const a = async () => 1, b = 2",
+    "export const a = async () => { return 1 }, b = 2",
+    "export var a = function () {}, b = 2",
+  ])("%s still names both bindings and stays exhaustive", (source) => {
+    const result = names(source);
+    expect([...result.names].sort()).toEqual(["a", "b"]);
+    expect(result.exhaustive).toBe(true);
   });
 
+  test("a bare keyword on a later, non-final declarator no longer loses the name after it", () => {
+    const result = names("export const a = 1, b = function(){}, c = 2");
+    expect([...result.names].sort()).toEqual(["a", "b", "c"]);
+    expect(result.exhaustive).toBe(true);
+  });
+
+  test.each([
+    "export const a = function () {}",
+    "export const a = class {}",
+    "export const a = async () => 1",
+    "export const Button = function Button() {}",
+  ])("%s names its single binding and stays exhaustive (no sibling to lose)", (source) => {
+    const result = names(source);
+    expect(result.exhaustive).toBe(true);
+    expect(result.names.size).toBe(1);
+  });
+
+  // Regression guards carried over from round 1 — shapes that were already safe and must stay so.
   test.each([
     "export const a = 1, b = function(){}",
     "export const a = (function () {})(), b = 2",
     "export const a = { const: 1 }, b = 2",
     "export const a = () => { const x = function(){}; return x }, b = 2",
-  ])("%s still names both bindings and stays exhaustive", (source) => {
+  ])("%s still names both bindings and stays exhaustive (regression guard)", (source) => {
     const result = names(source);
     expect([...result.names].sort()).toEqual(["a", "b"]);
     expect(result.exhaustive).toBe(true);
+  });
+
+  test.each([
+    "export const { Button } = kit",
+    "export const [Button] = kit",
+    `export * from "./kit"`,
+  ])("%s stays non-exhaustive (regression guard)", (source) => {
+    expect(names(source).exhaustive).toBe(false);
+  });
+
+  test("a truncated function initializer is returned as a value and does not claim exhaustiveness", () => {
+    const result = scanNamedExports("export const a = function () {", "no-jsx");
+    expect(() => scanNamedExports("export const a = function () {", "no-jsx")).not.toThrow();
+    expect(result === null).toBe(false);
+    if (result instanceof Error) return;
+    expect(result.exhaustive).toBe(false);
   });
 });
