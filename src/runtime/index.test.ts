@@ -56,7 +56,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     expect(runtime.Fragment).toBeDefined();
   });
 
-  test("exports the full 13-component design-system catalog + the low-level Box escape hatch", () => {
+  test("exports the full 14-component design-system catalog + the low-level Box escape hatch", () => {
     for (const name of [
       "Row",
       "Column",
@@ -71,6 +71,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "Table",
       "Gauge",
       "Sparkline",
+      "Code",
       "Box",
     ] as const) {
       // See the rationale on the first loop above: tsc already validates `name`.
@@ -95,7 +96,13 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     const surface = Object.keys(runtime);
     // The host's seeding seam and the raw theme atoms are deliberately NOT on the facade: an
     // authored page must not be able to repaint its own theme (see ./model/tokens' notes).
-    for (const withheld of ["seedThemeCapability", "themeIdAtom", "themeTokensAtom"]) {
+    for (const withheld of [
+      "seedThemeCapability",
+      "themeIdAtom",
+      "themeTokensAtom",
+      "activeSyntaxStyle",
+      "syntaxStyleAtom",
+    ]) {
       expect(surface).not.toContain(withheld);
     }
   });

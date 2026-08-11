@@ -87,3 +87,5 @@ export { Gauge } from "./ui/gauge";
 export type { GaugeProps } from "./ui/gauge";
 export { Sparkline } from "./ui/sparkline";
 export type { SparklineProps } from "./ui/sparkline";
+export { Code } from "./ui/code";
+export type { CodeProps } from "./ui/code";

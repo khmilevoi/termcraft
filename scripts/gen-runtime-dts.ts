@@ -125,6 +125,7 @@ export class RuntimeDtsEmitError extends errore.createTaggedError({
 }) {}
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..");
+const SRC_DIR = path.join(REPO_ROOT, "src");
 const RUNTIME_DIR = path.join(REPO_ROOT, "src/runtime");
 const ENTRY = path.join(RUNTIME_DIR, "index.ts");
 const OUT_FILE = path.join(REPO_ROOT, "src/runtime/generated/runtime-dts.ts");
@@ -134,6 +135,15 @@ const REATOM_CORE_SPECIFIER = "@reatom/core";
 /** The emitted chunk that owns the JSX factory re-exports, and the upstream scope it re-exports. */
 const JSX_CHUNK = "model/jsx.d.ts";
 const UPSTREAM_JSX_SCOPE = "@opentui/react/";
+/**
+ * Every file this emit actually flattens lives under this prefix of the (now repo-`src`-rooted)
+ * `outDir` tree — see {@link emitTsconfig}'s note on why `rootDir` is `SRC_DIR` and not
+ * `RUNTIME_DIR`. Everything collected outside this prefix (currently: `infrastructure/*`, pulled
+ * in by `runtime/model/syntax-style.ts`'s `import { log } from "infrastructure/debug-log"` once
+ * `Code` made that reachable from `index.ts`) is filtered out before flattening — see
+ * {@link buildDeclaration}.
+ */
+const RUNTIME_PREFIX = "runtime/";
 
 /** Forward slashes everywhere: a tsconfig path is JSON, where a Windows backslash is an escape. */
 function posix(p: string): string {
@@ -166,6 +176,23 @@ function resolveTscExe(): string | RuntimeDtsEmitError {
  * The temp project that drives the emit. `extends` the repo tsconfig so every real compiler
  * setting (including `paths`) applies; `include: []` + `files` narrow the program to the
  * runtime facade's own graph.
+ *
+ * WHY `rootDir` IS `SRC_DIR`, NOT `RUNTIME_DIR` (plan P8 Task 6). `rootDir` must contain every
+ * file TypeScript compiles into this program, not merely the ones this generator cares about —
+ * and once a `src/runtime` production file imports a sibling top-level module by its `infra-
+ * structure`/`host`/… path alias (allowed: "`src/runtime` production code may import
+ * `infrastructure/*` and nothing else outside itself"), that sibling's `.ts` sources join the
+ * program too. `Code` (Task 6) is the first wrapper reachable from `index.ts` whose graph does
+ * this — `ui/code.tsx` → `model/syntax-style.ts` → `import { log } from "infrastructure/debug-
+ * log"` — so `rootDir: RUNTIME_DIR` started failing with TS6059 ("File … is not under 'rootDir'")
+ * on `infrastructure/debug-log`'s own sources, which is `tsc` correctly reporting a REAL
+ * violation of a `rootDir` too narrow for the program it was given, not a bug in that file.
+ * Widening to `SRC_DIR` (the common ancestor of every top-level module) fixes the violation;
+ * `buildDeclaration` then filters the emitted tree back down to `RUNTIME_PREFIX` before
+ * flattening, so nothing outside `src/runtime` reaches the facade text. (In practice `log`'s own
+ * import does not even need that filter: its type never appears in any exported signature, so
+ * declaration emit drops the import statement entirely — see `runtime/model/syntax-style.d.ts`
+ * in a fresh emit.)
  */
 function emitTsconfig(outDir: string): string {
   return JSON.stringify(
@@ -176,7 +203,7 @@ function emitTsconfig(outDir: string): string {
         declaration: true,
         emitDeclarationOnly: true,
         outDir: posix(outDir),
-        rootDir: posix(RUNTIME_DIR),
+        rootDir: posix(SRC_DIR),
         typeRoots: [posix(path.join(REPO_ROOT, "node_modules/@types"))],
       },
       include: [],
@@ -424,20 +451,37 @@ function indent(text: string): string {
     .join("\n");
 }
 
+/**
+ * Read one `RUNTIME_PREFIX`-relative chunk's emitted text, from its ACTUAL location on disk —
+ * `outDir` is rooted at `SRC_DIR` (see {@link emitTsconfig}), so the read re-adds the prefix
+ * `buildDeclaration` strips from every chunk label.
+ */
+function readRuntimeChunk(outDir: string, label: string): string {
+  return fs.readFileSync(path.join(outDir, RUNTIME_PREFIX + label), "utf8");
+}
+
 /** Assemble the whole `declare module "@termcraft/runtime" { … }` text from the emitted chunks. */
 function buildDeclaration(outDir: string): string | RuntimeDtsEmitError {
-  const emitted = collectEmitted(outDir);
+  // `outDir` mirrors all of `SRC_DIR` (every top-level module the program's graph reaches, not
+  // only `src/runtime` — see `emitTsconfig`'s note), so only the `RUNTIME_PREFIX` slice is this
+  // facade's own text; everything else (e.g. `infrastructure/*`, pulled in by `Code`'s
+  // `syntax-style` → `infrastructure/debug-log` import) is filtered out before flattening.
+  const emitted = collectEmitted(outDir)
+    .filter((name) => name.startsWith(RUNTIME_PREFIX))
+    .map((name) => name.slice(RUNTIME_PREFIX.length));
   if (!emitted.includes("index.d.ts"))
-    return new RuntimeDtsEmitError({ reason: `no index.d.ts under ${outDir}` });
+    return new RuntimeDtsEmitError({ reason: `no index.d.ts under ${outDir}/${RUNTIME_PREFIX}` });
   if (!emitted.includes(JSX_CHUNK))
-    return new RuntimeDtsEmitError({ reason: `no ${JSX_CHUNK} under ${outDir}` });
+    return new RuntimeDtsEmitError({
+      reason: `no ${JSX_CHUNK} under ${outDir}/${RUNTIME_PREFIX}`,
+    });
 
   const imports = new Map<string, HoistedImport>();
   const chunks: Chunk[] = [];
   const declaredBy = new Map<string, string>();
 
   for (const file of emitted.filter((name) => name !== "index.d.ts")) {
-    const chunk = flattenChunk(file, fs.readFileSync(path.join(outDir, file), "utf8"), imports);
+    const chunk = flattenChunk(file, readRuntimeChunk(outDir, file), imports);
     if (chunk instanceof Error) return chunk;
     for (const name of chunk.declared) {
       const owner = declaredBy.get(name);
@@ -450,7 +494,7 @@ function buildDeclaration(outDir: string): string | RuntimeDtsEmitError {
     if (chunk.body.length > 0) chunks.push(chunk);
   }
 
-  const exports = flattenIndex(fs.readFileSync(path.join(outDir, "index.d.ts"), "utf8"));
+  const exports = flattenIndex(readRuntimeChunk(outDir, "index.d.ts"));
   if (exports instanceof Error) return exports;
 
   const importLines = renderImports(imports);
@@ -464,7 +508,7 @@ function buildDeclaration(outDir: string): string | RuntimeDtsEmitError {
     }
   }
 
-  const jsxSubmodules = buildJsxSubmodules(fs.readFileSync(path.join(outDir, JSX_CHUNK), "utf8"));
+  const jsxSubmodules = buildJsxSubmodules(readRuntimeChunk(outDir, JSX_CHUNK));
   if (jsxSubmodules instanceof Error) return jsxSubmodules;
 
   const sections = [

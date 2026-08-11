@@ -21,6 +21,8 @@
  * the smaller sibling file `runtime.generated.d.ts` instead (§WP-3).
  */
 export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
+  import { SyntaxStyle } from "@opentui/core";
+  import type { StyleDefinitionInput } from "@opentui/core";
   import { jsxDEV } from "@opentui/react/jsx-dev-runtime";
   import { Fragment, jsx, jsxs } from "@opentui/react/jsx-runtime";
   import { action, atom, computed, withAbort, withAsync, withAsyncData, withComputed, wrap } from "@reatom/core";
@@ -130,6 +132,84 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * \`withConnectHook\` below with no cast.
    */
   function withConnectHook<Target extends AtomLike>(cb: (target: Target) => ConnectionHookResult): Ext<Target>;
+
+  // ── src/runtime/model/syntax-style
+  import * as errore from "errore";
+  const SyntaxStyleUnavailableError_base: errore.FactoryTaggedErrorClass<"SyntaxStyleUnavailableError", "the terminal render library could not allocate a syntax style", Error>;
+  /**
+   * The native render library could not allocate a syntax style. Every consumer degrades to
+   * plain text on it (plan P8 D3) — \`syntaxStyle\` is a REQUIRED prop on OpenTUI's \`CodeOptions\`
+   * and \`MarkdownOptions\`, so there is no "render \`<code>\` without a style" branch to take.
+   */
+  class SyntaxStyleUnavailableError extends SyntaxStyleUnavailableError_base {
+  }
+  /**
+   * THE ROLES → SYNTAX-SCOPES MAPPING, AND THE DESIGN GAP IT ANSWERS (plan P8, Decision D1).
+   *
+   * FLAGGED, NOT INVENTED. termcraft's design system covers no code display: \`design/\`'s
+   * \`termcraft-engine.js\` carries fifteen palette keys and a cell model of
+   * \`{ch, fg, bg, bold, blink}\`, has no draw method for source text, diffs or fenced blocks, and
+   * none of the 27 \`design/*.dc.html\` screens shows code. There is therefore NO per-scope design
+   * source to copy, and this table does not pretend there is one. It is the closest faithful
+   * reading of the design's own vocabulary, and it is what a future design pass overrides.
+   *
+   * THE PRINCIPLE, instead of a borrowed editor theme. The design's language is warm amber
+   * emphasis over a neutral ramp, with green reserved for healthy/complete (\`● live\`,
+   * \`✓ read current design\`) and red for failure (\`✗ codex not found\`). Painting strings green —
+   * the reflex from every mainstream editor theme — would import a foreign convention AND
+   * contradict the design's own semantics. So the mapping uses the neutral ramp
+   * (\`foreground\` → \`foregroundMuted\` → \`foregroundFaint\`) and the accent family
+   * (\`accent\` → \`accentHi\` → \`accentDim\`) along the design's existing three-step emphasis
+   * hierarchy, and touches a status hue exactly once: \`markup.list.checked\` → \`success\`, where
+   * the design's own green \`✓\` already means "done".
+   *
+   * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: \`markup.italic\` is not italic. The
+   * design's cell model has \`bold\` and \`blink\` and no italic, so italic is outside its
+   * vocabulary; the faithful reading of "lighter emphasis" is the design's own secondary tier,
+   * \`foregroundMuted\`.
+   *
+   * WHY THE DOTTED \`markup.*\` SCOPES ARE REGISTERED EXPLICITLY, and why this list is longer than
+   * a base-scope list would be. \`SyntaxStyle.getStyleId\`/\`getStyle\` fall back with
+   * \`name.split(".")[0]\` — the FIRST segment, not one level up. \`markup.heading.1\` therefore
+   * resolves to \`markup\`, never to \`markup.heading\`. Registering only base scopes would render
+   * every markdown heading as plain body text. (The design spec's wording — "strips one dot level
+   * only" — describes the intent, not the shipped behaviour; the behaviour is what this follows.)
+   *
+   * \`spell\`, \`nospell\` and \`none\` are deliberately absent: tree-sitter applies them to whole
+   * prose runs, so registering them would repaint entire paragraphs. Unregistered, they fall
+   * through to \`default\`, which is the intent.
+   */
+  function syntaxScopeStyles(tokens: TokenMap): Record<string, StyleDefinitionInput>;
+  /**
+   * Build one native \`SyntaxStyle\` from a theme's token map.
+   *
+   * \`SyntaxStyle.create()\` reaches the native render library through \`resolveRenderLib()\`, which
+   * is an uncontrolled boundary — so it is wrapped once, HERE, with \`errore.try\`, and the failure
+   * travels as a value (plan P8 D3). Nothing above this line ever throws.
+   */
+  function buildSyntaxStyle(tokens: TokenMap): SyntaxStyleUnavailableError | SyntaxStyle;
+  /**
+   * The active theme's syntax style, memoised by Reatom.
+   *
+   * A \`computed\` rather than a hand-rolled \`Map\` keyed on the token object: Reatom already owns
+   * exactly this memo, and it invalidates on precisely the right input (\`themeTokensAtom\`).
+   *
+   * ACCEPTED, STATED LEAK: a superseded \`SyntaxStyle\` is not \`destroy()\`ed. Stage 1 seeds the
+   * theme once per mount and ships no switcher (spec §4.2), so a process holds at most two.
+   * THE TRIGGER TO REVISIT: a shell-side theme switcher, at which point this needs a disconnect
+   * hook that destroys the previous handle.
+   */
+  const syntaxStyleAtom: import("@reatom/core").Computed<SyntaxStyle | SyntaxStyleUnavailableError>;
+  /**
+   * A catalog component's read of the active syntax style — the same current-value (untracked)
+   * shape \`activeTokens()\` uses, for the same stage-1 reason recorded there.
+   *
+   * INTERNAL, and not on the \`@termcraft/runtime\` facade (plan P8 D10): a \`SyntaxStyle\` is a
+   * native handle, and handing one to an authored page is the renderer-internal access the
+   * wrapper layer exists to prevent. Plan P9's \`Diff\` consumes it the same way this module's
+   * siblings consume \`activeTokens()\` — \`import { activeSyntaxStyle } from "../model/syntax-style"\`.
+   */
+  function activeSyntaxStyle(): SyntaxStyleUnavailableError | SyntaxStyle;
 
   // ── src/runtime/model/tokens
   /**
@@ -331,6 +411,50 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * no handler. Colors are semantic token names, never raw hues.
    */
   function Button(props: ButtonProps): React.ReactNode;
+
+  // ── src/runtime/ui/code
+  /** Props for the themed \`Code\` component. \`id\` is the mandatory stable id (§3.2). */
+  interface CodeProps {
+      /** Stable id selection and pins key on (§3.2). Mandatory on every catalog component. */
+      readonly id: string;
+      /** The source text to display, verbatim. Newlines are honoured. */
+      readonly content: string;
+      /**
+       * Which grammar highlights the content — \`"typescript"\`, \`"javascript"\`, \`"markdown"\` or
+       * \`"zig"\`. ANY OTHER VALUE, AND OMITTING IT ENTIRELY, RENDERS PLAIN TEXT: those four (plus
+       * \`markdown_inline\`, used internally by \`Markdown\`) are the only grammars this binary ships,
+       * and termcraft never downloads another one. That is a supported outcome, which is why this
+       * is an open string rather than a closed union — a page naming a language this build cannot
+       * highlight is correct code, not a type error.
+       *
+       * Syntax colours come from the ACTIVE THEME, never from a prop.
+       */
+      readonly language?: string;
+  }
+  /**
+   * A themed block of source code (design-system §6.1). Renders one OpenTUI \`<code>\` renderable
+   * whose syntax colours are built from the active theme's tokens.
+   *
+   * WHAT IS DELIBERATELY NOT A PROP. \`syntaxStyle\` is REQUIRED on OpenTUI's own \`CodeOptions\`;
+   * termcraft constructs it from the theme instead of exposing it, so a page cannot hand the
+   * renderer an arbitrary palette. \`treeSitterClient\` is never exposed at all — it is
+   * renderer-internal access, and reaching it is what the wrapper layer exists to prevent.
+   *
+   * WHY THE ELEMENT'S OWN \`fg\` IS SET. OpenTUI paints the frame BEFORE highlighting lands (the
+   * highlight runs in a worker) using the renderable's own default foreground, whose upstream
+   * default is opaque white — not a colour in this design system. Every un-highlighted span, and
+   * every span in an unsupported language, draws in this value.
+   *
+   * WHY \`width="100%"\`. A code renderable's intrinsic width is its longest line, which clips
+   * wrapped content in a column parent. This is the same sizing OpenTUI's own \`Markdown\` gives
+   * the code blocks it creates.
+   *
+   * FAILURE DEGRADES TO PLAIN TEXT, AS A VALUE. If the native render library cannot allocate a
+   * syntax style, \`activeSyntaxStyle()\` returns an error (it logs once, through
+   * \`infrastructure/debug-log\` — never through \`console\`, which under the renderer's
+   * \`consoleMode: "disabled"\` writes to the real stdout) and this renders themed plain text.
+   */
+  function Code(props: CodeProps): React.ReactNode;
 
   // ── src/runtime/ui/column
   /** Props for the \`Column\` layout container. \`id\` is the mandatory stable id (§3.2). */
@@ -706,6 +830,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   export type { GaugeProps };
   export { Sparkline };
   export type { SparklineProps };
+  export { Code };
+  export type { CodeProps };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {
