@@ -614,7 +614,31 @@ export function createThemeSeedLoader(
       });
     }
 
-    const requested = manifest.themes[args.theme];
+    // `Object.hasOwn`, NOT bracket-access `!== undefined`: `manifest.themes` is a plain object off
+    // a `z.record` and still carries `Object.prototype`, so `args.theme === "constructor"` (or
+    // `toString`/`valueOf`/`hasOwnProperty`/`__proto__`) would otherwise resolve to an INHERITED
+    // member instead of `undefined` — `requested.tokens` would then be `undefined`, and
+    // `toTokenMap(undefined)` would silently seed an EMPTY token map with no `trace` and no
+    // fatal, worse than either documented D2 outcome. `request.theme` is only bounded as a
+    // non-empty string ≤64 chars on the wire (`host-state-machine.ts`'s `parseMountRequest`), and
+    // `core/project`'s `resolveActiveThemeId` passes a page's declared `meta.theme` through
+    // verbatim ("resolves; it does not validate"), so this is reachable. Same fix, same reasoning,
+    // as `entities/design-system/model/manifest.ts`'s `TOKEN_PARITY`/`DEFAULT_THEME_UNDECLARED`
+    // checks already apply to this identical hazard.
+    // `Object.hasOwn`, NOT bracket-access `!== undefined`: `manifest.themes` is a plain object off
+    // a `z.record` and still carries `Object.prototype`, so `args.theme === "constructor"` (or
+    // `toString`/`valueOf`/`hasOwnProperty`/`__proto__`) would otherwise resolve to an INHERITED
+    // member instead of `undefined` — `requested.tokens` would then be `undefined`, and
+    // `toTokenMap(undefined)` would silently seed an EMPTY token map with no `trace` and no
+    // fatal, worse than either documented D2 outcome. `request.theme` is only bounded as a
+    // non-empty string ≤64 chars on the wire (`host-state-machine.ts`'s `parseMountRequest`), and
+    // `core/project`'s `resolveActiveThemeId` passes a page's declared `meta.theme` through
+    // verbatim ("resolves; it does not validate"), so this is reachable. Same fix, same reasoning,
+    // as `entities/design-system/model/manifest.ts`'s `TOKEN_PARITY`/`DEFAULT_THEME_UNDECLARED`
+    // checks already apply to this identical hazard.
+    const requested = Object.hasOwn(manifest.themes, args.theme)
+      ? manifest.themes[args.theme]
+      : undefined;
     if (requested !== undefined) {
       return { themeId: args.theme, tokens: toTokenMap(requested.tokens) };
     }

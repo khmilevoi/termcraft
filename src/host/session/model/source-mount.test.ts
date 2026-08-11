@@ -924,6 +924,20 @@ describe("createThemeSeedLoader (design-systems §4.6, P4 D2)", () => {
     expect(seed.themeId).toBe("dark-default");
   });
 
+  test("a theme id that names an inherited Object.prototype member also takes the fallback path, not an empty seed", async () => {
+    // Regression: `manifest.themes` is a plain object off a `z.record`, so it still carries
+    // `Object.prototype`. A bracket-access `!== undefined` check would resolve `"constructor"` to
+    // the INHERITED constructor function rather than `undefined`, and the (then-truthy) `requested`
+    // would have `.tokens === undefined` — `toTokenMap(undefined)` would silently seed an EMPTY
+    // token map, worse than either documented D2 outcome. This must take the SAME fallback path as
+    // any other undeclared id.
+    const seed = await load({ files: withManifest(), theme: "constructor" });
+    if (seed === null || seed instanceof Error) throw new Error("expected a seed");
+    expect(seed.themeId).toBe("dark-default");
+    expect(Object.keys(seed.tokens).length).toBeGreaterThan(0);
+    expect(seed.tokens.accent).toBe("#e6a23c");
+  });
+
   test("a manifest whose bytes do not match expectedFiles is SOURCE_HASH_MISMATCH", async () => {
     const seed = await load({ files: withManifest(), theme: "dark-default", corruptHash: true });
     expect(seed).toBeInstanceOf(Error);

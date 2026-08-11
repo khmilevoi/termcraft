@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { DARK_DEFAULT, themeIdAtom, themeTokensAtom } from "runtime/model/tokens";
+import {
+  DARK_DEFAULT,
+  DEFAULT_THEME_ID,
+  seedThemeCapability,
+  themeIdAtom,
+  themeTokensAtom,
+} from "runtime/model/tokens";
 
 import {
   type ClientHelloV1,
@@ -915,6 +921,13 @@ function lastFatalCode(_session: unknown): string | undefined {
 }
 
 describe("mount seeds the theme capability (design-systems §4.6)", () => {
+  // The atoms are HOST INPUTS with process-wide lifetime; restore the seed after every test so
+  // ordering never leaks a theme from one case into the next — same convention
+  // `runtime/model/tokens.test.ts` states and follows for the same atoms.
+  afterEach(() => {
+    seedThemeCapability({ themeId: DEFAULT_THEME_ID, tokens: DARK_DEFAULT });
+  });
+
   test("the child seeds BOTH theme atoms from the manifest before the tree is mounted", async () => {
     const seen: string[] = [];
     const session = createHostSession(
@@ -943,7 +956,7 @@ describe("mount seeds the theme capability (design-systems §4.6)", () => {
     expect(seen).toEqual(["loadThemeSeed", "mount"]);
   });
 
-  test("a null seed leaves the compiled defaults in place and still mounts", async () => {
+  test("a null seed leaves the current tokens unchanged, and still mounts", async () => {
     const before = themeTokensAtom().accent;
     const session = createHostSession(depsWith({ loadThemeSeed: async () => null }));
     await handshakeAndMount(session);
