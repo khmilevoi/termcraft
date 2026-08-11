@@ -33,3 +33,14 @@ export {
   encodeDesignSystemPackageV1,
   normalizePackageRelPath,
 } from "./model/content-hash";
+export type { DesignSystemFsDeps, DirEntry, PackageAdmission } from "./types";
+export {
+  DesignSystemPackageInvalidError,
+  DesignSystemPackageTooLargeError,
+  DesignSystemPublishRefusedError,
+  DesignSystemRefRejectedError,
+  DesignSystemSourceIoError,
+  SourcesConfigInvalidError,
+} from "./model/errors";
+export type { SourceError } from "./model/errors";
+export { allowAllPackageAdmission, nodeDesignSystemFsDeps } from "./model/fs-deps";
