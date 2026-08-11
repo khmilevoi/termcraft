@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
 
 import { activeSyntaxStyle, buildSyntaxStyle, syntaxScopeStyles } from "./syntax-style";
 import { DARK_DEFAULT, DEFAULT_THEME_ID, seedThemeCapability } from "./tokens";
@@ -122,5 +123,29 @@ describe("the SyntaxStyle handle", () => {
     expect(activeSyntaxStyle()).not.toBe(first);
 
     seedThemeCapability({ themeId: DEFAULT_THEME_ID, tokens: DARK_DEFAULT });
+  });
+});
+
+describe("the tree-sitter runtime dependency (plan P8 D7)", () => {
+  test("web-tree-sitter is a DIRECT dependency pinned to @opentui/core's peer version", async () => {
+    // WHY THIS IS ASSERTED AT ALL. Highlighting runs through @opentui/core's worker, which
+    // imports `web-tree-sitter` and loads its wasm through `import.meta.resolve`. Today the
+    // package resolves only because the package manager HOISTED @opentui/core's peer. A
+    // lockfile or linker change would remove it with no build error, and `bun build --compile`
+    // would silently ship a binary that renders every Code and Markdown as plain text.
+    // `import.meta.dir` + node:path, never `new URL(...).pathname` — the latter yields `/C:/…`
+    // on Windows and no file opens.
+    const root = path.resolve(import.meta.dir, "../../..");
+    const ours = (await Bun.file(path.join(root, "package.json")).json()) as {
+      dependencies: Record<string, string>;
+    };
+    const core = (await Bun.file(
+      path.join(root, "node_modules/@opentui/core/package.json"),
+    ).json()) as { peerDependencies: Record<string, string> };
+
+    expect(ours.dependencies["web-tree-sitter"]).toBeDefined();
+    expect(ours.dependencies["web-tree-sitter"]).toBe(
+      core.peerDependencies["web-tree-sitter"] as string,
+    );
   });
 });
