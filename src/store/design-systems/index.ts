@@ -70,3 +70,5 @@ export { listLocalSystems } from "./model/list";
 export type { FetchedPackage } from "./types";
 export { fetchLocalPackage } from "./model/fetch";
 export { readPackageDirectory } from "./model/walk";
+export type { LocalPackage, PublishReceipt } from "./types";
+export { publishLocalPackage } from "./model/publish";

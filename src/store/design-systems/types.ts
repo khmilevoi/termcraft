@@ -1,4 +1,8 @@
-import type { DesignSystemRef } from "entities/design-system-ref";
+import type {
+  DesignSystemId,
+  DesignSystemRef,
+  DesignSystemVersion,
+} from "entities/design-system-ref";
 import type { Clock } from "infrastructure/clock";
 
 /**
@@ -120,4 +124,19 @@ export interface FetchedPackage {
   readonly contentHash: Sha256Hex;
   readonly files: readonly PackageFile[];
   readonly summary: DesignSystemSummary;
+}
+
+/** A package handed to `publish` — the folder as it would sit at `design/system/` in a project. */
+export interface LocalPackage {
+  readonly systemId: DesignSystemId;
+  readonly version: DesignSystemVersion;
+  readonly files: readonly PackageFile[];
+}
+
+/** Proof of a completed publish, carrying the address the package now answers to. */
+export interface PublishReceipt {
+  readonly ref: DesignSystemRef;
+  readonly contentHash: Sha256Hex;
+  /** RFC 3339 UTC. */
+  readonly publishedAt: string;
 }
