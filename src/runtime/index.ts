@@ -87,3 +87,5 @@ export { Gauge } from "./ui/gauge";
 export type { GaugeProps } from "./ui/gauge";
 export { Sparkline } from "./ui/sparkline";
 export type { SparklineProps } from "./ui/sparkline";
+export { Slider } from "./ui/slider";
+export type { SliderProps } from "./ui/slider";

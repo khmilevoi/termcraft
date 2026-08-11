@@ -92,3 +92,8 @@ allowlist.
 Beyond the components named above, the runtime exposes these wrappers over OpenTUI's remaining
 elements. `runtime.d.ts` alongside this file carries their exact prop types; every one takes a
 mandatory `id`.
+
+- `Slider` — a draggable value track. Required: `id`, `orientation` (`"horizontal"` |
+  `"vertical"`), `value`. Optional `min`/`max` (0/100), `trackColor`/`fillColor`,
+  `width`/`height`, `onChange(value)`. Its rendered position always comes from `value`, so an
+  export snapshot is deterministic.

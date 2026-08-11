@@ -376,10 +376,11 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // `runtime/model/tokens.reactivity.test.tsx`, taking it to 949.
     // The project-design-systems P5 plan (renderable wrappers) Task 1 adds
     // `runtime/ui/renderable-tags.ts`, `runtime/ui/renderable-tags.augmentation.d.ts` and
-    // `runtime/ui/renderable-tags.test.tsx`, taking it to 952.
+    // `runtime/ui/renderable-tags.test.tsx`, taking it to 952. Task 2 adds
+    // `runtime/ui/slider.tsx` and `runtime/ui/slider.test.tsx`, taking it to 954.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(952);
+    expect(files.length).toBe(954);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {
