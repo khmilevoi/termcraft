@@ -578,3 +578,115 @@ describe("scanNamedExports — a `<` costs only what it must (fix round 5)", () 
     });
   });
 });
+
+// Fix round 6 (task review Critical finding, found in the OUTER loop, not the declarator walk —
+// pre-existing since round 1 and in no prior round's test matrix, which is why five rounds of
+// declarator-walk work never touched it). The outer loop's `depth` counter over `{`/`(`/`[` is
+// what decides "is this `export` top-level" (`t.kind !== SK.ExportKeyword || depth !== 0`), and
+// it used to be neither clamped nor checked for imbalance. The lexer, BY DELIBERATE DESIGN, lexes
+// JSX prose text exactly like code and carries no prose mark (`./lexer.ts`'s own doc comment —
+// "a mark exists only to suppress"), so an ordinary `)`, `]`, `}` or `(` typed as JSX children
+// TEXT — `<text>Press ] to close</text>`, `<text>1) Install</text>` — is a REAL closer/opener
+// token to this scanner. That skewed `depth` permanently off zero, silently hiding every export
+// after the skew while `exhaustive` stayed `true` — a real export omitted while claiming
+// exhaustiveness, the worst-direction error this type exists to prevent, and for a TUI design
+// system, prose like `1) Install` or `ok :)` is ordinary content, not exotica.
+//
+// Fixed with two fail-open guards on the SAME counter — never by teaching the walk to recognize
+// JSX prose, which the lexer's own design deliberately does not support: a closer that would take
+// `depth` below `0` sets `exhaustive = false` and clamps `depth` back to `0` (collection
+// continues; the flag protects the consumer); after the walk ends, `depth !== 0` (an opener never
+// closed) also sets `exhaustive = false`. See `scanNamedExports`'s doc comment for the full
+// mechanism, and its "KNOWN LIMITATIONS" paragraph for the one shape (JSX prose text that happens
+// to spell `export const … = …` verbatim) adjudicated as ship-with-a-ruling rather than fixed.
+describe("scanNamedExports — JSX prose text no longer skews the outer depth counter (fix round 6)", () => {
+  describe("fabricated-fatal shapes: a real export is no longer lost while exhaustive stays true", () => {
+    test("a `)` inside JSX prose text (closer-in-prose) no longer hides the next export", () => {
+      const result = names(
+        "export function Smile() { return <text>ok :)</text> }\nexport const Panel = () => <box />",
+        "jsx",
+      );
+      // Either every real name is present, or exhaustive is false — never a silent loss.
+      if (result.exhaustive) {
+        expect([...result.names].sort()).toEqual(["Panel", "Smile"]);
+      } else {
+        expect(result.names.has("Smile")).toBe(true);
+      }
+    });
+
+    test("a `]` inside JSX prose text no longer hides the next export", () => {
+      const result = names(
+        "export function Hint() { return <text>Press ] to close</text> }\nexport const Panel = 1",
+        "jsx",
+      );
+      if (result.exhaustive) {
+        expect([...result.names].sort()).toEqual(["Hint", "Panel"]);
+      } else {
+        expect(result.names.has("Hint")).toBe(true);
+      }
+    });
+
+    test("nested JSX prose with two closer-shaped list markers no longer hides the next export", () => {
+      const result = names(
+        "export function Steps() { return (<box><text>1) Install</text><text>2) Run</text></box>) }\nexport const Panel = 1",
+        "jsx",
+      );
+      if (result.exhaustive) {
+        expect([...result.names].sort()).toEqual(["Panel", "Steps"]);
+      } else {
+        expect(result.names.has("Steps")).toBe(true);
+      }
+    });
+
+    test("an unmatched `(` inside JSX prose text (unmatched opener) no longer hides EVERY later export", () => {
+      const result = names(
+        "export function A() { return <text>Press ( to open</text> }\nexport const B = 1\nexport const C = 2",
+        "jsx",
+      );
+      // This shape cannot recover the lost names (depth never returns to 0 for the rest of the
+      // file), so the invariant's only remaining guarantee is that `exhaustive` must be false —
+      // asserting that is what actually protects the consumer from a fabricated fatal against B/C.
+      expect(result.names.has("A")).toBe(true);
+      expect(result.exhaustive).toBe(false);
+    });
+  });
+
+  describe("unmatched bracket cases, pinned directly", () => {
+    test("an unmatched closer partway through the file sets exhaustive: false", () => {
+      const result = names(
+        "export const A = 1\nexport function Bad() { return <box>oops)</box> }",
+        "jsx",
+      );
+      expect(result.names.has("A")).toBe(true);
+      expect(result.exhaustive).toBe(false);
+    });
+
+    test("an unmatched opener partway through the file sets exhaustive: false", () => {
+      const result = names(
+        "export function Bad() { return <box>oops(</box> }\nexport const Z = 1",
+        "jsx",
+      );
+      expect(result.names.has("Bad")).toBe(true);
+      expect(result.exhaustive).toBe(false);
+    });
+
+    test("a closer with an empty stack (no opener ever seen) still fails open, not throws", () => {
+      expect(() => scanNamedExports(")export const a = 1", "no-jsx")).not.toThrow();
+      const result = names(")export const a = 1");
+      expect(result.exhaustive).toBe(false);
+    });
+  });
+
+  // PARKED, not fixed — see `scanNamedExports`'s "KNOWN LIMITATIONS" doc comment for the full
+  // ruling. JSX prose text that happens to spell `export const … = …` verbatim is read exactly
+  // like real code (the same "no prose mark" fact behind the fixes above) and invents a phantom
+  // name. This is the one shape in the file that still violates "never invent while exhaustive" —
+  // pinned here, with this comment, so the next reader sees it as a deliberate, adjudicated gap
+  // rather than an unnoticed regression.
+  test("KNOWN LIMITATION (parked, not fixed): JSX prose spelling `export const B = 2` invents a phantom `B`", () => {
+    const result = names("export const A = () => <box>export const B = 2</box>", "jsx");
+    expect(result.names.has("A")).toBe(true);
+    expect(result.names.has("B")).toBe(true); // the phantom — documented, not desired
+    expect(result.exhaustive).toBe(true);
+  });
+});

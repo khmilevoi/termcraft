@@ -130,10 +130,13 @@ const STATEMENT_START_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
  * a star re-export (`export * from "…"`); a `<` at the walk's own top level whose statement, read
  * ahead to its own boundary, turns out to contain a depth-0 comma (or an unbalanced/unterminated
  * bracket or template along the way — see {@link scanPastAngleBracket}); an unmatched/truncated
- * bracket run, template literal, or closer; or a declaration/declarator whose OWN binding name is
+ * bracket run, template literal, or closer; a declaration/declarator whose OWN binding name is
  * a contextual keyword (`export const type = 1`) rather than a plain Identifier — this scan can
  * prove such a name exists but, per `Tok`'s own shape, cannot read what it is (see the
- * `first?.kind !== SK.Identifier` branch below).
+ * `first?.kind !== SK.Identifier` branch below); or the OUTER `{`/`(`/`[` depth counter itself
+ * going unbalanced — a closer that would take it below `0`, or an opener the counter never saw
+ * close by the time the token stream ends (fix round 6, task review Critical finding — see the
+ * paragraph on JSX prose text below).
  *
  * SUPPORTED FORMS, each contributing zero or more names to `names`:
  * - `export const|let|var <name>[ = …][, <name>[ = …] …]` — every top-level declarator name in
@@ -148,9 +151,47 @@ const STATEMENT_START_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
  *   itself);
  * - `export default …` — contributes NOTHING: a default export binds no NAMED export.
  *
- * Only a top-level `export` counts — depth tracking excludes `export` keywords nested inside a
- * function/class/block body, matching `import-scan.ts`'s own approach to "what counts as a module
- * edge" for the same structural reason.
+ * ONLY A TOP-LEVEL `export` COUNTS, IN THE SENSE INTENDED — a `depth` counter over `{`/`(`/`[`
+ * excludes `export` keywords nested inside a function/class/block body, matching
+ * `import-scan.ts`'s own approach to "what counts as a module edge" for the same structural
+ * reason. THAT COUNTER IS NOT SOUND ON ITS OWN, though (fix round 6, task review Critical
+ * finding): the lexer, BY DELIBERATE DESIGN, lexes a JSX prose window exactly like a code window
+ * and carries no prose mark on its tokens (`./lexer.ts`'s `tokenize` doc comment — "a mark exists
+ * only to suppress" — and its `lexWindow`, which routes every window through the SAME code
+ * scanner). So an ordinary `)`, `]` or `}` typed as JSX children TEXT — `<text>Press ] to
+ * close</text>`, `<text>1) Install</text>` — is emitted as a real `CloseParenToken` /
+ * `CloseBracketToken` / `CloseBraceToken`, and an ordinary `(` the same way as a real opener.
+ * Measured: `export function Hint() { return <text>Press ] to close</text> }` followed by another
+ * export used to skew `depth` permanently negative (an unmatched closer inside the prose) or
+ * permanently positive (an unmatched opener), silently hiding every export after it while
+ * `exhaustive` stayed `true` — the worst-direction error this type exists to prevent, and a real
+ * one: `<text>1) Install</text>` is ordinary content in a TUI design system, not exotica. Fixed by
+ * two fail-open guards on the SAME counter, not by teaching the walk to recognize JSX prose (the
+ * lexer's refusal to mark it is deliberate, so that information genuinely is not available here):
+ * a closer that would take `depth` below `0` sets `exhaustive = false` and clamps `depth` back to
+ * `0` (collection continues best-effort; the flag is what protects the consumer); and after the
+ * walk ends, `depth !== 0` — an opener the counter never saw close — also sets `exhaustive =
+ * false`.
+ *
+ * KNOWN LIMITATIONS, SHIPPED WITH A RULING rather than fixed, because both require information the
+ * lexer deliberately does not provide (a prose mark, or a token's own source text for a keyword
+ * kind — see `./scanner.ts`'s `Tok`) and fixing either would mean teaching this walk to parse JSX
+ * or re-deriving identifier text the lexer already threw away, not narrowing an existing rule:
+ * - a declaration/declarator whose OWN binding name is a contextual keyword rather than a plain
+ *   Identifier (`export const type = 1`) is not a name this scan can recover — see the
+ *   `first?.kind !== SK.Identifier` branch. It correctly reports `exhaustive: false` rather than
+ *   silently dropping the name, so this is a false-negative-safe gap, not a soundness one;
+ * - JSX prose text that happens to spell `export const <name> = …` verbatim, e.g.
+ *   `export const A = () => <box>export const B = 2</box>`, is read by this scan exactly like
+ *   real code (the same "no prose mark" fact that motivates the depth guards above) and INVENTS a
+ *   phantom name (`B`) with `exhaustive: true`. This is the one shape in the file that still
+ *   violates the invariant's "never invent while exhaustive" half. It ships anyway: the direction
+ *   is a MISSED fatal (a manifest entry named `B` that does not really exist stops raising
+ *   `DESIGN_SYSTEM_COMPONENT_EXPORT_MISSING`) rather than a fabricated one against legal source,
+ *   the trigger is degenerate (prose that happens to be syntactically valid TypeScript, spelling
+ *   the exact three keywords `export`, `const`/`let`/`var`, and `=` in sequence), and it is
+ *   unfixable at this scanner's level. Pinned as a documented, deliberate gap in
+ *   `exports-scan.test.ts`, not silently left uncovered.
  */
 export interface NamedExportScanV1 {
   /** Every top-level NAMED export binding this scan is confident about. */
@@ -161,9 +202,13 @@ export interface NamedExportScanV1 {
    * declarator's own top level whose statement provably contains a depth-0 comma after it (see
    * {@link scanNamedExports}'s doc comment and {@link scanPastAngleBracket} — a `<` with NO comma
    * after it, e.g. JSX markup, leaves `exhaustive` unchanged), an unmatched/truncated bracket run,
-   * template literal, or closer, or a binding name this scan proved exists but could not read (a
-   * contextual keyword, e.g. `export const type = 1`). A caller must then NOT report a missing
-   * name as a fatal.
+   * template literal, or closer, a binding name this scan proved exists but could not read (a
+   * contextual keyword, e.g. `export const type = 1`), or the outer `{`/`(`/`[` depth counter
+   * itself going unbalanced (e.g. by a `)`/`]`/`}` typed as ordinary JSX prose text — see
+   * {@link scanNamedExports}'s doc comment). A caller must then NOT report a missing name as a
+   * fatal. See that same doc comment for the one shape (JSX prose text spelling out
+   * `export const … = …` verbatim) still capable of the opposite mistake, shipped with a ruling
+   * rather than fixed.
    */
   readonly exhaustive: boolean;
 }
@@ -187,6 +232,17 @@ export function scanNamedExports(
     }
     if (isCloser(t.kind)) {
       depth -= 1;
+      if (depth < 0) {
+        // A closer with no opener this counter ever saw — see the doc comment above on JSX
+        // prose text (`<text>Press ] to close</text>` lexes its own `)`/`]`/`}` as REAL closer
+        // tokens; there is no other way this counter can go negative). The counter has lost its
+        // place in the file: it can no longer tell top-level `export` from nested `export`, so
+        // any export counted from here on cannot be trusted to be exhaustive. Clamp to 0 and keep
+        // collecting — best-effort names are still useful — but the flag, not the count, is what
+        // protects the consumer now.
+        exhaustive = false;
+        depth = 0;
+      }
       continue;
     }
     if (t.kind !== SK.ExportKeyword || depth !== 0) continue;
@@ -342,6 +398,17 @@ export function scanNamedExports(
       // branches above), so reading past it one token at a time is safe.
       k += 1;
     }
+  }
+
+  if (depth !== 0) {
+    // An opener the outer counter saw was never closed — the same JSX-prose mechanism as the
+    // negative-depth guard above, just the other direction (an unmatched `(`/`[`/`{` inside JSX
+    // children text, e.g. `<text>Press ( to open</text>`, rather than an unmatched closer). Once
+    // this happens `depth` never returns to `0` for the rest of the file, so every `export`
+    // after the unmatched opener was silently skipped by the `depth !== 0` guard above without
+    // this scan ever noticing — the worst-direction error this whole type exists to prevent: a
+    // real export omitted while `exhaustive` would otherwise still read `true`.
+    exhaustive = false;
   }
 
   return { names, exhaustive };
