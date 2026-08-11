@@ -1,6 +1,15 @@
 import type { FailureDtoV1 } from "core/protocol";
 import { PagesManifestInvalidError } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
+import {
+  DesignSystemPackageInvalidError,
+  DesignSystemPackageTooLargeError,
+  DesignSystemPublishRefusedError,
+  DesignSystemRefRejectedError,
+  DesignSystemSourceIoError,
+  DuplicatePackageFileError,
+  SourcesConfigInvalidError,
+} from "store/design-systems";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
 import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease";
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
@@ -152,6 +161,23 @@ function isLeaseError(error: Error): boolean {
 }
 
 /**
+ * `SourceError` minus `DesignSystemPackageTooLargeError` (`store/design-systems`), which gets
+ * its own `RESOURCE_LIMIT_EXCEEDED` above. Everything else here is the same generic durable
+ * read/write/decode fault every sibling on the `PERSISTENCE_FAILED` list is — the closed v1
+ * union has no "design-system source" family of its own, and inventing one is forbidden.
+ */
+function isDesignSystemSourceError(error: Error): boolean {
+  return (
+    error instanceof DesignSystemSourceIoError ||
+    error instanceof DesignSystemPackageInvalidError ||
+    error instanceof DesignSystemRefRejectedError ||
+    error instanceof DesignSystemPublishRefusedError ||
+    error instanceof SourcesConfigInvalidError ||
+    error instanceof DuplicatePackageFileError
+  );
+}
+
+/**
  * `ProjectionsError = PageMetaCacheIoError | DiagnosticsStoreIoError | RenderCacheIoError`
  * (`store/projections`). FLAGGED (plan Task 1 table): the table pairs "`ProjectionsError`
  * (quota)" with `StorageLimitExceededError` under `RESOURCE_LIMIT_EXCEEDED`, but the landed
@@ -179,7 +205,10 @@ function isProjectionsError(error: Error): boolean {
  * `FailureDtoV1` by hand. Not itself a port implementation: no `AssertConforms` line.
  */
 export function toFailureDto(error: Error): FailureDtoV1 {
-  if (error instanceof StorageLimitExceededError) {
+  if (
+    error instanceof StorageLimitExceededError ||
+    error instanceof DesignSystemPackageTooLargeError
+  ) {
     return {
       code: "RESOURCE_LIMIT_EXCEEDED",
       retryable: false,
@@ -372,6 +401,7 @@ export function toFailureDto(error: Error): FailureDtoV1 {
     isTrustError(error) ||
     isLeaseError(error) ||
     isProjectionsError(error) ||
+    isDesignSystemSourceError(error) ||
     error instanceof JsonlOpenError ||
     error instanceof JournalCorruptError ||
     error instanceof ManifestCorruptError
