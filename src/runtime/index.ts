@@ -101,3 +101,7 @@ export { Bold, Italic, Underline } from "./ui/inline";
 export type { BoldProps, ItalicProps, UnderlineProps } from "./ui/inline";
 export { Link, LineBreak } from "./ui/inline";
 export type { LinkProps, LineBreakProps } from "./ui/inline";
+
+// Display text (§6.1).
+export { AsciiFont } from "./ui/ascii-font";
+export type { AsciiFontProps, AsciiFontName } from "./ui/ascii-font";

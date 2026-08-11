@@ -376,9 +376,10 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // `runtime/model/tokens.reactivity.test.tsx`, taking it to 949.
     // Plan P6 (inline wrappers and the Box expansion) task 3 adds `runtime/ui/inline.tsx` and
     // its own `inline.test.tsx`, taking it to 951.
+    // Task 6 adds `runtime/ui/ascii-font.tsx` and its own `ascii-font.test.tsx`, taking it to 953.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(951);
+    expect(files.length).toBe(953);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {
