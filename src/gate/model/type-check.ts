@@ -5,6 +5,7 @@ import * as errore from "errore";
 import { API } from "typescript/unstable/sync";
 import type { Diagnostic } from "typescript/unstable/sync";
 
+import { DESIGN_SYSTEM_MANIFEST_RELPATH } from "entities/design-system";
 import { isCodeFile } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
 
@@ -118,6 +119,16 @@ function norm(p: string): string {
  *
  * A page's own PROP types are unaffected by all of this: every `*Props` interface is declared
  * inside the ambient block and is checked for real.
+ *
+ * `resolveJsonModule: true` (Task 2, design-systems §4.3, §7) exists for exactly ONE consumer:
+ * `design/system/design-system.json`. It is what lets a project's `system/tokens.ts` write
+ * `import ds from "./design-system.json"` and derive its `Tokens` type from `(typeof
+ * ds)["themes"][...]["tokens"]`, so a project's own token NAMES become real types and a typo is an
+ * ordinary type error with no check of its own. PROBED (2026-08-11, real `tsc.exe`, this machine)
+ * against `module: "esnext"` + `moduleResolution: "bundler"`: `resolveJsonModule` alone raises no
+ * `TS5071`, and `import ds from "./design-system.json"` type-checks with no `TS1259`/`TS2497` even
+ * WITHOUT `esModuleInterop` — so the plan's first documented fallback is the one in effect here;
+ * `esModuleInterop` was not needed and is deliberately not added.
  */
 const SYNTHESIZED_COMPILER_OPTIONS = {
   strict: true,
@@ -130,6 +141,7 @@ const SYNTHESIZED_COMPILER_OPTIONS = {
   lib: ["esnext"],
   types: [],
   skipLibCheck: true,
+  resolveJsonModule: true,
 };
 
 /**
@@ -178,9 +190,9 @@ function collectDiagnostics(program: {
  */
 function toGateErrorTree(
   d: Diagnostic,
-  codeFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>,
+  programFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>,
 ): GateError {
-  const entry = d.fileName !== undefined ? codeFiles.get(norm(d.fileName)) : undefined;
+  const entry = d.fileName !== undefined ? programFiles.get(norm(d.fileName)) : undefined;
   if (entry === undefined || d.pos < 0)
     return { kind: "type", code: `TS${d.code}`, message: d.text };
   const loc = lineColOf(entry.source, d.pos);
@@ -201,7 +213,7 @@ function toGateErrorTree(
  */
 function mapTreeDiagnostics(
   diags: readonly Diagnostic[],
-  codeFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>,
+  programFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>,
 ): GateError[] {
   const seen = new Set<string>();
   const out: GateError[] = [];
@@ -209,7 +221,7 @@ function mapTreeDiagnostics(
     const key = `${d.code}|${d.fileName ?? ""}|${d.pos}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(toGateErrorTree(d, codeFiles));
+    out.push(toGateErrorTree(d, programFiles));
   }
   return out;
 }
@@ -281,8 +293,9 @@ function buildSyntheticTree(cwd: string, absPaths: readonly string[]): Map<strin
 /**
  * The whole-tree virtual FS (Task 2 difference #3): FIVE hooks, not the three the deleted
  * per-file program used. `readFile`/`fileExists`/`realpath` serve the tsconfig, the runtime
- * `.d.ts`, and every code file; `undefined` for anything else still means "read the real disk"
- * (difference #4), which is how the libs next to the exe are found.
+ * `.d.ts`, and every program file — every code file plus the one non-code exception, the
+ * design-system manifest (Task 2 §7); `undefined` for anything else still means "read the real
+ * disk" (difference #4), which is how the libs next to the exe are found.
  *
  * `directoryExists`/`getAccessibleEntries` are the two hooks the per-file program never
  * needed, because a program with one file has no sibling to resolve. MEASURED against the
@@ -303,7 +316,7 @@ function createTreeVirtualFs(params: {
   readonly tsconfig: string;
   readonly runtimeDtsPath: string;
   readonly runtimeDts: string;
-  readonly codeFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>;
+  readonly programFiles: ReadonlyMap<string, { readonly relPath: string; readonly source: string }>;
   readonly tree: ReadonlyMap<string, DirEntries>;
 }): {
   readFile(name: string): string | null | undefined;
@@ -312,22 +325,22 @@ function createTreeVirtualFs(params: {
   directoryExists(dir: string): boolean | undefined;
   getAccessibleEntries(dir: string): { files: string[]; directories: string[] } | undefined;
 } {
-  const { tsconfigPath, tsconfig, runtimeDtsPath, runtimeDts, codeFiles, tree } = params;
+  const { tsconfigPath, tsconfig, runtimeDtsPath, runtimeDts, programFiles, tree } = params;
   return {
     readFile(name) {
       const n = norm(name);
       if (n === tsconfigPath) return tsconfig;
       if (n === runtimeDtsPath) return runtimeDts;
-      return codeFiles.get(n)?.source;
+      return programFiles.get(n)?.source;
     },
     fileExists(name) {
       const n = norm(name);
-      if (n === tsconfigPath || n === runtimeDtsPath || codeFiles.has(n)) return true;
+      if (n === tsconfigPath || n === runtimeDtsPath || programFiles.has(n)) return true;
       return undefined;
     },
     realpath(p) {
       const n = norm(p);
-      if (n === tsconfigPath || n === runtimeDtsPath || codeFiles.has(n)) return n;
+      if (n === tsconfigPath || n === runtimeDtsPath || programFiles.has(n)) return n;
       return undefined;
     },
     directoryExists(dir) {
@@ -357,28 +370,28 @@ function runTreeTypeCheck(
   const tsconfigPath = `${cwd}/${TSCONFIG_NAME}`;
   const runtimeDtsPath = `${cwd}/${RUNTIME_DTS_NAME}`;
 
-  // Difference #1: only CODE files are fed to the compiler and served over the VFS — the
-  // SAME `isCodeFile` predicate the whole-tree scan and the closure walk key on, never a
-  // second reading of "is this code". A non-code file is skipped entirely: not in the
-  // synthesized tsconfig's `files`, not served by `readFile`/`fileExists`/`realpath`, and
-  // not part of the synthetic directory tree either.
-  const codeFiles = new Map<string, { relPath: string; source: string }>();
+  // Difference #1 (WIDENED, design-systems §7): only CODE files are fed to the compiler — with
+  // exactly ONE non-code exception, the design system's manifest. `resolveJsonModule` makes a
+  // project's own token NAMES real types (§4.3), and a token typo is then a type error with no
+  // check of its own; that only works if the compiler can actually read the JSON. Every OTHER
+  // non-code file stays excluded exactly as before: not in `files`, not served, not in the tree.
+  const programFiles = new Map<string, { relPath: string; source: string }>();
   for (const [relPath, source] of files) {
-    if (!isCodeFile(relPath)) continue;
-    codeFiles.set(norm(path.join(cwd, relPath)), { relPath, source });
+    if (!isCodeFile(relPath) && relPath !== DESIGN_SYSTEM_MANIFEST_RELPATH) continue;
+    programFiles.set(norm(path.join(cwd, relPath)), { relPath, source });
   }
 
-  // Difference #2: the synthesized tsconfig's `files` array is every code file's synthetic
+  // Difference #2: the synthesized tsconfig's `files` array is every program file's synthetic
   // absolute path plus the runtime declaration — compiler options are byte-identical to the
   // per-file program's via the shared `SYNTHESIZED_COMPILER_OPTIONS`.
-  const tsconfig = synthesizeTreeTsconfig([...codeFiles.keys(), runtimeDtsPath]);
-  const tree = buildSyntheticTree(cwd, [tsconfigPath, runtimeDtsPath, ...codeFiles.keys()]);
+  const tsconfig = synthesizeTreeTsconfig([...programFiles.keys(), runtimeDtsPath]);
+  const tree = buildSyntheticTree(cwd, [tsconfigPath, runtimeDtsPath, ...programFiles.keys()]);
   const virtualFs = createTreeVirtualFs({
     tsconfigPath,
     tsconfig,
     runtimeDtsPath,
     runtimeDts: config.runtimeDts,
-    codeFiles,
+    programFiles,
     tree,
   });
 
@@ -395,7 +408,7 @@ function runTreeTypeCheck(
         return new TypeCheckUnavailableError({
           cause: new Error("no project loaded from the synthesized tree tsconfig"),
         });
-      return mapTreeDiagnostics(collectDiagnostics(project.program), codeFiles);
+      return mapTreeDiagnostics(collectDiagnostics(project.program), programFiles);
     } finally {
       try {
         api.close();

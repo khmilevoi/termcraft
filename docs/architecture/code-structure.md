@@ -35,7 +35,7 @@ flowchart LR
 
     subgraph inner["Inner — knows the domain, imports no adapter"]
         core["core/ · Kernel<br/>Reatom state machines · ports/ it consumes"]
-        entities["entities/<br/>Page · Chat · Turn · Pin · DesignTree<br/>pure types · no ports"]
+        entities["entities/<br/>Page · Chat · Turn · Pin · DesignTree · DesignSystem<br/>pure types · no ports"]
     end
 
     ui["ui/ · OpenTUI shell<br/>(phase 7 complete)"]
@@ -353,6 +353,17 @@ final group's own heading spells out which is which).
   because `gate` and `host` both need them and the DAG forbids one importing the other —
   two independently derived answers to one question is how two enforcement points come
   to disagree
+- `src/entities/design-system/index.ts`, `src/entities/design-system/types.ts`,
+  `src/entities/design-system/model/` — the project-owned design-system manifest's own
+  vocabulary (P2 `manifest-and-gate`): the `DesignSystemManifestV1` shape, the core
+  token roles every theme must declare, the TREE-relative manifest path
+  (`system/design-system.json`), `decodeDesignSystemManifest` (schema plus the
+  cross-field rules a Zod shape alone cannot express — token-name parity across
+  themes, `defaultTheme` naming a declared theme, no duplicate component name), and
+  component-path resolution (`designSystemComponentRelPath`,
+  `findUnresolvedComponents`, `isInsideDesignSystem`). No I/O and no tree knowledge —
+  `gate/model/design-system.ts` is what composes this vocabulary with the tree the
+  Gate actually holds
 - `src/entities/chat/index.ts`, `src/entities/pin/index.ts` — the same shape for the
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the

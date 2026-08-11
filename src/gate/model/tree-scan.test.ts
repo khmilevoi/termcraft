@@ -31,6 +31,18 @@ describe("scanTreeImports (design §6, §8 step 4 — the whole-tree authoritati
     expect(errors[0]?.file).toBe("lib/theme.ts");
   });
 
+  test("importing the design-system manifest raises no UNSCANNED_IMPORT (design-systems §7)", () => {
+    const errors = scanTreeImports({
+      files: new Map([
+        ["system/tokens.ts", `import ds from "./design-system.json"\nexport default ds\n`],
+      ]),
+      // The JSON is IN the tree but its text is deliberately NOT in `files` — the exact shape
+      // that would raise UNSCANNED_IMPORT for a code file, and must not for a non-code one.
+      has: (relPath) => relPath === "system/tokens.ts" || relPath === "system/design-system.json",
+    });
+    expect(errors).toEqual([]);
+  });
+
   describe("task-11 review, Important 2 — a CODE resolution target absent from `files` can never launder an unscanned module", () => {
     test("a `has` that affirms a `.ts` path never present in `files` does not let a relative import resolve to it", () => {
       // The review's own reproduction, re-pinned against a `.ts` target — see the task-12

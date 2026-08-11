@@ -391,7 +391,12 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // four wrapper modules with a test beside each, and `renderable-tags.test.tsx`, taking it to 974.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(974);
+    // manifest-and-gate (P2) adds the `entities/design-system` module (`types.ts`, `index.ts`,
+    // `model/manifest.ts`, `model/components.ts` and their tests), `gate/model/design-system.ts`
+    // and its test, and `gate/model/exports-scan.ts` and its test — taking it to 985.
+    // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
+    // grows.
+    expect(files.length).toBe(985);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {
