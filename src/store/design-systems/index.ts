@@ -55,3 +55,11 @@ export {
   readSourcesConfig,
   writeSourcesConfig,
 } from "./model/sources-config";
+export type { CacheEntryRecordV1 } from "./model/cache-entry";
+export {
+  CACHE_ENTRY_SCHEMA_VERSION,
+  decodeCacheEntryRecord,
+  encodeCacheEntryRecord,
+  readCacheEntryRecord,
+  writeCacheEntryRecord,
+} from "./model/cache-entry";
