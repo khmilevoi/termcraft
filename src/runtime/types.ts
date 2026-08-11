@@ -120,3 +120,35 @@ export interface PageMeta {
    */
   readonly theme?: ThemeId;
 }
+
+/**
+ * One side of a box frame (spec §6.2). `Box.border` takes `true` for all four, `false` for none,
+ * or a list of exactly the sides to draw. termcraft declares this locally rather than re-exporting
+ * `@opentui/core`'s `BorderSides`, so an OpenTUI upgrade changes the adapter and not one saved
+ * page (§6).
+ */
+export type BorderSide = "top" | "right" | "bottom" | "left";
+
+/**
+ * A complete custom frame glyph set (spec §6.2). All eleven members are required: a partial set
+ * would leave a frame drawn half in one alphabet and half in another, which reads as a rendering
+ * bug rather than a choice. The four built-in tables `borderStyle` selects
+ * (`single`/`double`/`rounded`/`heavy`) each supply exactly these eleven.
+ */
+export interface BorderGlyphs {
+  readonly topLeft: string;
+  readonly topRight: string;
+  readonly bottomLeft: string;
+  readonly bottomRight: string;
+  /** The horizontal run along the top and bottom edges. */
+  readonly horizontal: string;
+  /** The vertical run along the left and right edges. */
+  readonly vertical: string;
+  /** T-junctions where an interior rule meets an edge. */
+  readonly topT: string;
+  readonly bottomT: string;
+  readonly leftT: string;
+  readonly rightT: string;
+  /** The four-way junction where two interior rules cross. */
+  readonly cross: string;
+}

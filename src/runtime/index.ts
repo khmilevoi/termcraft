@@ -87,3 +87,8 @@ export { Gauge } from "./ui/gauge";
 export type { GaugeProps } from "./ui/gauge";
 export { Sparkline } from "./ui/sparkline";
 export type { SparklineProps } from "./ui/sparkline";
+
+// §6.2 border and layout vocabulary (plan P6). A SEPARATE export line from the §4 one above on
+// purpose: P5/P7/P8/P9 append to this file from their own worktrees, and appended lines merge
+// where an edited line conflicts.
+export type { BorderGlyphs, BorderSide } from "./types";
