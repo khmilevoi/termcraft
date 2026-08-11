@@ -14,6 +14,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     for (const name of [
       "definePage",
       "themeTokens",
+      "useTokens",
       "defineTweaks",
       "isExport",
       "themeCapability",

@@ -205,6 +205,23 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly tokens: TokenMap;
   }) => void>;
   /**
+   * A page's reactive read of the active theme's token map (spec §4.6).
+   *
+   * REACTIVE BECAUSE THE CALLER IS. A page is a \`reatomComponent\` (§4.3), so this call is a
+   * TRACKED read of {@link themeTokensAtom} inside the component's render body: seeding a new
+   * theme re-renders the page. §4.5 turns the corollary into a Gate warning — read at module
+   * scope it captures one theme's values forever, which is exactly the shape a token scan can see.
+   *
+   * GENERIC so a project's own \`design/system/tokens.ts\` binds its manifest-derived \`Tokens\` type
+   * with NO CAST AT THE CALL SITE (§4.3's scaffold: \`useRuntimeTokens<Tokens>()\`). The single
+   * assertion that costs is here, once, and it is a last resort rather than a shortcut: the
+   * runtime cannot know a project's token names, and the type that does know them is derived from
+   * the project's own manifest through \`resolveJsonModule\` inside the Gate's one whole-tree
+   * program. The Gate is what makes the assertion honest — a \`Tokens\` naming a token the manifest
+   * does not declare is a fatal type error there, before any of this runs.
+   */
+  function useTokens<T = TokenMap>(): T;
+  /**
    * The active theme's tokens for a CATALOG COMPONENT to resolve its own defaults against
    * (\`Panel\`'s \`border\`, \`Text\`'s \`foreground\`, \`Gauge\`'s \`accent\`, …).
    *
@@ -707,7 +724,7 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   export { CURRENT_KIT_API_VERSION, definePage };
   export { atom, computed, action, wrap, withAsync, withAsyncData, withComputed, withAbort, withConnectHook, reatomComponent };
   export type { Atom, Action, Computed, AtomLike, Ext, ConnectionCleanup, ConnectionHookResult };
-  export { themeTokens, DEFAULT_THEME_ID };
+  export { DEFAULT_THEME_ID, themeTokens, useTokens };
   export { colorDepthAtom, defineTweaks, isExport, isExportAtom, hostModeAtom, interactionModeAtom, themeCapability, usePages, viewportSizeAtom };
   export type { PagesCapability, ThemeCapability };
   export { jsx, jsxs, jsxDEV, Fragment };
