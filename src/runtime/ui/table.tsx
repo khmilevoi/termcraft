@@ -59,14 +59,14 @@ export function Table(props: TableProps) {
   return (
     <box id={props.id} flexDirection="column">
       <box id={`${props.id}-header`} flexDirection="row" gap={1}>
-        <Text id={`${props.id}-header-marker`} color="foregroundMuted">
+        <Text id={`${props.id}-header-marker`} color={tokens.foregroundMuted}>
           {"  "}
         </Text>
         {props.columns.map((column) => (
           // keyed intrinsic wrapper — function components carry no `key` in this
           // repo's no-@types/react environment (runtime-api §3.3); the box takes it.
           <box key={column.id}>
-            <Text id={`${props.id}-header-${column.id}`} color="foregroundMuted" bold>
+            <Text id={`${props.id}-header-${column.id}`} color={tokens.foregroundMuted} bold>
               {fit(column.label, column.width, column.align)}
             </Text>
           </box>
@@ -82,14 +82,14 @@ export function Table(props: TableProps) {
             gap={1}
             backgroundColor={selected ? tokens.selection : undefined}
           >
-            <Text id={`${props.id}-${row.id}-marker`} color="accent">
+            <Text id={`${props.id}-${row.id}-marker`} color={tokens.accent}>
               {selected ? "▸ " : "  "}
             </Text>
             {props.columns.map((column, index) => (
               <box key={column.id}>
                 <Text
                   id={`${props.id}-${row.id}-${column.id}`}
-                  color={selected ? "selectionFg" : "foreground"}
+                  color={selected ? tokens.selectionFg : tokens.foreground}
                 >
                   {fit(row.cells[index] ?? "", column.width, column.align)}
                 </Text>

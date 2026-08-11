@@ -5,7 +5,7 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer, renderNodeOnce } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
-import { themeTokens } from "../model/tokens";
+import { activeTokens } from "../model/tokens";
 import { Column } from "./column";
 import { Separator } from "./separator";
 
@@ -26,7 +26,7 @@ describe("Separator rule (design-system §3.2)", () => {
     await handle.render();
     const frame = handle.capture();
     const band = lineRuns(frame, 0).find((run) => run.bg !== "default");
-    expect(band && extractRgb(band.bg)).toBe<string>(themeTokens("dark-default").line);
+    expect(band && extractRgb(band.bg)).toBe<string>(activeTokens().line);
     expect(band?.text.length).toBe(10);
     // Only one row thick — the next row carries no themed band.
     expect(lineRuns(frame, 1).find((run) => run.bg !== "default")).toBeUndefined();
@@ -38,14 +38,14 @@ describe("Separator rule (design-system §3.2)", () => {
     handle.mount(<Separator id="sep" direction="vertical" />);
     await handle.render();
     const band = lineRuns(handle.capture(), 0).find((run) => run.bg !== "default");
-    expect(band && extractRgb(band.bg)).toBe<string>(themeTokens("dark-default").line);
+    expect(band && extractRgb(band.bg)).toBe<string>(activeTokens().line);
     expect(band?.text.length).toBe(1);
   });
 
   test("a horizontal separator spans its container even when the parent centres its children", async () => {
     const frame = await renderNodeOnce(
       <Column id="col" align="center">
-        <Separator id="rule" color="success" />
+        <Separator id="rule" color={activeTokens().success} />
       </Column>,
       { w: 20, h: 3 },
     );

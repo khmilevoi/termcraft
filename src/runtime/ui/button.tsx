@@ -38,7 +38,7 @@ export function Button(props: ButtonProps) {
       padding={0}
       onMouseDown={handlePress}
     >
-      <Text id={`${props.id}-label`} color={disabled ? "foregroundFaint" : "foreground"}>
+      <Text id={`${props.id}-label`} color={disabled ? tokens.foregroundFaint : tokens.foreground}>
         {props.children}
       </Text>
     </box>

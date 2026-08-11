@@ -1,5 +1,5 @@
 import { activeTokens } from "../model/tokens";
-import type { ThemeTokens } from "../types";
+import type { Color } from "../types";
 
 /** Props for the `Panel` bordered container. `id` is the mandatory stable id (§3.2). */
 export interface PanelProps {
@@ -10,10 +10,10 @@ export interface PanelProps {
   readonly children?: unknown;
   /** Uniform inner padding inside the border. */
   readonly padding?: number;
-  /** A semantic token for the border; defaults to `border`. Design variants: `accent` (active/popup), `accentHi` (hover), `danger` (error), `line` (dimmed). */
-  readonly borderColor?: keyof ThemeTokens;
-  /** A semantic token for the title; defaults to `foreground`. Design variants: `accentHi` (popup/active), `foregroundMuted` (welded sub-panel). */
-  readonly titleColor?: keyof ThemeTokens;
+  /** The border hue; defaults to the theme's `border`. Design variants: `t.accent` (active/popup), `t.accentHi` (hover), `t.danger` (error), `t.line` (dimmed). */
+  readonly borderColor?: Color;
+  /** The title hue; defaults to the theme's `foreground`. Design variants: `t.accentHi` (popup/active), `t.foregroundMuted` (welded sub-panel). */
+  readonly titleColor?: Color;
 }
 
 /**
@@ -21,10 +21,10 @@ export interface PanelProps {
  * frame (`box()`'s own default, `design/termcraft-engine.js:47`) with an optional `title`
  * space-padded into the top border (`:52`'s `' '+title+' '`), or no caption at all when
  * `title` is absent or empty — matching the engine's own `if(o.title){…}` guard.
- * `borderColor`/`titleColor` accept semantic tokens so a caller renders the design's variants
- * (an active/popup panel uses an `accent` border + `accentHi` title; an error panel a
- * `danger` border; a welded sub-panel a `foregroundMuted` title). Colors resolve from
- * tokens; the mandatory `id` flows to the element for host geometry.
+ * `borderColor`/`titleColor` are `Color`s read off `useTokens()`: an active/popup panel
+ * uses border `t.accent` + title `t.accentHi`; an error panel uses border `t.danger`; a
+ * welded sub-panel uses title `t.foregroundMuted`. The mandatory `id` flows to the element
+ * for host geometry.
  */
 export function Panel(props: PanelProps) {
   const tokens = activeTokens();
@@ -35,7 +35,7 @@ export function Panel(props: PanelProps) {
       // design/termcraft-engine.js:47 — `box()`'s own default is ROUNDED (`const r =
       // o.rounded !== false`); square corners are the opt-out, and no design screen takes it.
       borderStyle="rounded"
-      borderColor={tokens[props.borderColor ?? "border"]}
+      borderColor={props.borderColor ?? tokens.border}
       // design/termcraft-engine.js:52 — the caption is drawn at `x+2` as `' '+title+' '`,
       // guarded by `if(o.title){…}`: a falsy title (absent OR `""`) draws NO caption at all.
       // `=== undefined` alone treated `title=""` as present and punched two bare spaces into
@@ -45,7 +45,7 @@ export function Panel(props: PanelProps) {
       // false`); OpenTUI's box exposes `titleColor`/`titleAlignment` and no attribute mask
       // for the caption, so weight cannot be reproduced here.
       title={props.title ? ` ${props.title} ` : undefined}
-      titleColor={tokens[props.titleColor ?? "foreground"]}
+      titleColor={props.titleColor ?? tokens.foreground}
       flexDirection="column"
       padding={props.padding}
     >

@@ -1,6 +1,6 @@
-import type { Size, ThemeId, ThemeTokens } from "../types";
+import type { Size, ThemeId, TokenMap } from "../types";
 import { action, atom, computed } from "./reatom";
-import { DEFAULT_THEME_ID, themeTokens } from "./tokens";
+import { themeIdAtom, themeTokensAtom } from "./tokens";
 
 /**
  * Declares a page's tweak controls (runtime-api §6). DORMANT in the MVP: like
@@ -37,19 +37,21 @@ export function isExport(): boolean {
   return isExportAtom();
 }
 
-/** The theme capability (§6): the active theme id and its resolved token palette. */
+/** The theme capability (§6): the active theme id and its resolved token map. */
 export interface ThemeCapability {
   readonly themeId: ThemeId;
-  readonly tokens: ThemeTokens;
+  readonly tokens: TokenMap;
 }
 
 /**
- * Resolve the current theme capability (§6). MVP returns the single `dark-default`
- * theme; the preview-override path (a theme atom the shell writes without rewriting
- * `meta.theme`) rides with the phase-7 theme capability wiring.
+ * Resolve the current theme capability (§6, spec §4.6). It reads the two HOST-INPUT atoms the
+ * mount seeds (`./tokens`'s `themeIdAtom`/`themeTokensAtom`), so it returns the PROJECT's real
+ * theme — the compiled `dark-default` it used to return survives only as those atoms' pre-mount
+ * default. Called from a `reatomComponent`, both reads are tracked, so a preview theme override
+ * re-renders the page without rewriting `meta.theme` (`runtime-api` §6).
  */
 export function themeCapability(): ThemeCapability {
-  return { themeId: DEFAULT_THEME_ID, tokens: themeTokens(DEFAULT_THEME_ID) };
+  return { themeId: themeIdAtom(), tokens: themeTokensAtom() };
 }
 
 /**

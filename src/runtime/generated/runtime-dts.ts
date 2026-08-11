@@ -49,15 +49,17 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   const isExportAtom: import("@reatom/core").Computed<boolean>;
   /** A page-readable helper for the export flag (reads {@link isExportAtom}). */
   function isExport(): boolean;
-  /** The theme capability (§6): the active theme id and its resolved token palette. */
+  /** The theme capability (§6): the active theme id and its resolved token map. */
   interface ThemeCapability {
       readonly themeId: ThemeId;
-      readonly tokens: ThemeTokens;
+      readonly tokens: TokenMap;
   }
   /**
-   * Resolve the current theme capability (§6). MVP returns the single \`dark-default\`
-   * theme; the preview-override path (a theme atom the shell writes without rewriting
-   * \`meta.theme\`) rides with the phase-7 theme capability wiring.
+   * Resolve the current theme capability (§6, spec §4.6). It reads the two HOST-INPUT atoms the
+   * mount seeds (\`./tokens\`'s \`themeIdAtom\`/\`themeTokensAtom\`), so it returns the PROJECT's real
+   * theme — the compiled \`dark-default\` it used to return survives only as those atoms' pre-mount
+   * default. Called from a \`reatomComponent\`, both reads are tracked, so a preview theme override
+   * re-renders the page without rewriting \`meta.theme\` (\`runtime-api\` §6).
    */
   function themeCapability(): ThemeCapability;
   /** The navigation capability (§6): \`usePages().goTo(slug)\`. */
@@ -133,23 +135,136 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   function withConnectHook<Target extends AtomLike>(cb: (target: Target) => ConnectionHookResult): Ext<Target>;
 
   // ── src/runtime/model/tokens
-  /** Resolve a theme id to its token palette (§5.4). Closed to the declared \`ThemeId\`. */
-  function themeTokens(id: ThemeId): ThemeTokens;
-  /** The default theme every MVP page renders against until a theme override lands. */
-  const DEFAULT_THEME_ID: ThemeId;
   /**
-   * The active theme's tokens for a component to render against. MVP resolves the
-   * single \`dark-default\` theme; this is the seam a theme context / preview-override
-   * atom (§6) replaces later, so components never hard-code hues — they call this.
+   * The one theme id the COMPILED SEED carries. Deliberately NOT {@link ThemeId}, which spec §4.6
+   * widened to \`string\` because a project's theme names live in its own manifest: a
+   * \`Record<ThemeId, …>\` would become an index signature and, under this repository's
+   * \`noUncheckedIndexedAccess: true\`, make {@link themeTokens} return \`TokenMap | undefined\` —
+   * breaking three call sites outside this module for no gain. The seed registry is a closed,
+   * one-member thing and says so in its own type.
    */
-  function activeTokens(): ThemeTokens;
+  type SeedThemeId = "dark-default";
+  /**
+   * The \`dark-default\` seed palette. These are the design system's REAL hues, taken 1:1 from
+   * \`design/termcraft-engine.js\`'s \`pal\` object (a warm amber-on-near-black terminal theme) — not
+   * a placeholder, and not invented here.
+   *
+   * WHAT IT IS NOW (spec §4.6, §9). It is no longer "the palette a page renders against": that is
+   * the project's own \`design/system/design-system.json\`, delivered through
+   * {@link themeTokensAtom}. Two jobs survive:
+   *   1. the SEED the project-create scaffold and the mechanical migration copy into a new
+   *      project's manifest (plan P4 imports it from this module by path);
+   *   2. {@link themeTokensAtom}'s pre-mount default — see that atom's own note.
+   */
+  const DARK_DEFAULT: TokenMap;
+  /** Resolve the SEED theme id to its palette. Closed to {@link SeedThemeId} — see its note. */
+  function themeTokens(id: SeedThemeId): TokenMap;
+  /** The seed theme's id — the scaffold's starting point, not a project's active theme. */
+  const DEFAULT_THEME_ID: SeedThemeId;
+  /**
+   * The active theme's id (spec §4.6). A HOST INPUT, exactly like \`hostModeAtom\` in
+   * \`./capabilities\`: the host child writes it once per mount from \`HostSessionSpec.theme\` through
+   * {@link seedThemeCapability}, and a page READS it (via \`themeCapability()\`) and must not write
+   * it.
+   */
+  const themeIdAtom: import("@reatom/core").Atom<string, [newState: string]>;
+  /**
+   * The active theme's token map (spec §4.6) — the single source every colour default in the
+   * component catalog resolves against. A HOST INPUT, written once per mount through
+   * {@link seedThemeCapability}; the values come from the project's
+   * \`design/system/design-system.json\`, which is inside \`treeRoot\` and covered by \`expectedFiles\`,
+   * so no protocol change carries them.
+   *
+   * WHY THE DEFAULT IS THE COMPILED SEED AND NOT AN EMPTY MAP. Every catalog default reads a core
+   * role off this atom, so an empty map would render a page with no colours at all — §4.1's own
+   * argument ("a half-specified page reads as a broken render rather than an authored one"). The
+   * mount seeds before the first render, so in a real child this default is never what a frame is
+   * drawn from; it is what makes a runtime unit test and an un-seeded process coherent.
+   */
+  const themeTokensAtom: import("@reatom/core").Atom<TokenMap, [newState: TokenMap]>;
+  /**
+   * THE SEAM the host wires (spec §4.6; plan P4). One named transition that moves BOTH theme
+   * atoms together, so a mount can never leave the id and the values describing different themes.
+   *
+   * It is an action rather than two \`atom.set\` calls at the call site because this is a grouped
+   * transition (Reatom RTM-S04), not an identity setter (RTM-S01) — it writes two atoms from one
+   * input and names the transition for tracing.
+   *
+   * P4 calls it from the host child's mount handler
+   * (\`src/host/session/model/host-state-machine.ts\`'s \`handleMount\`), BEFORE \`handle.mount(...)\`,
+   * importing it as \`runtime/model/tokens\` — the same deep-import shape
+   * \`src/entrypoint/model/create-shell.ts\` already uses for \`runtime/generated/runtime-dts\`. It is
+   * deliberately NOT on the \`@termcraft/runtime\` facade: an authored page must not be able to
+   * repaint its own theme.
+   *
+   * IT VALIDATES NOTHING. The manifest's \`#rrggbb\` form, its core-role completeness and its
+   * cross-theme parity are the Gate's checks (§7, plan P2), asserted once against the manifest
+   * before anything is mounted. A second, weaker check here would be a check that promises more
+   * than it can see.
+   */
+  const seedThemeCapability: import("@reatom/core").GAction<(input: {
+      readonly themeId: ThemeId;
+      readonly tokens: TokenMap;
+  }) => void>;
+  /**
+   * A page's reactive read of the active theme's token map (spec §4.6).
+   *
+   * REACTIVE BECAUSE THE CALLER IS. A page is a \`reatomComponent\` (§4.3), so this call is a
+   * TRACKED read of {@link themeTokensAtom} inside the component's render body: seeding a new
+   * theme re-renders the page. §4.5 turns the corollary into a Gate warning — read at module
+   * scope it captures one theme's values forever, which is exactly the shape a token scan can see.
+   *
+   * GENERIC so a project's own \`design/system/tokens.ts\` binds its manifest-derived \`Tokens\` type
+   * with NO CAST AT THE CALL SITE (§4.3's scaffold: \`useRuntimeTokens<Tokens>()\`). The single
+   * assertion that costs is here, once, and it is a last resort rather than a shortcut: the
+   * runtime cannot know a project's token names, and the type that does know them is derived from
+   * the project's own manifest through \`resolveJsonModule\` inside the Gate's one whole-tree
+   * program. The Gate is what makes the assertion honest — a \`Tokens\` naming a token the manifest
+   * does not declare is a fatal type error there, before any of this runs.
+   */
+  function useTokens<T = TokenMap>(): T;
+  /**
+   * The active theme's tokens for a CATALOG COMPONENT to resolve its own defaults against
+   * (\`Panel\`'s \`border\`, \`Text\`'s \`foreground\`, \`Gauge\`'s \`accent\`, …).
+   *
+   * STAGE-1 REACTIVITY, STATED RATHER THAN ASSUMED (spec §4.2 — no theme switcher ships in stage
+   * 1). The fourteen catalog components are plain function components, so this read is a
+   * current-value read, not a tracked one: a mid-session theme change would not re-render them on
+   * its own. That is correct by construction today, because {@link seedThemeCapability} runs
+   * before the first render of a mount and nothing writes the atom again. THE TRIGGER TO REVISIT:
+   * a shell-side theme switcher (§4.2's \`runtime-api\` §6 preview override). At that point the
+   * catalog components — not this function — become \`reatomComponent\`s, which is the change that
+   * makes their reads tracked.
+   *
+   * A PAGE's own read is already reactive and needs nothing here: a page is a \`reatomComponent\`
+   * (§4.3), so its \`useTokens()\` call is a tracked read of the same atom.
+   */
+  function activeTokens(): TokenMap;
 
   // ── src/runtime/types
   /**
-   * Palette theme id bound at page level via \`meta.theme\` (§5.4). MVP ships
-   * \`dark-default\` only; \`light-default\` arrives in v1.0.
+   * A theme id declared by the project's own design system (spec §4.6). It was a closed
+   * one-member union while a single \`dark-default\` palette was compiled into this binary; the
+   * truth now lives in the project's \`design/system/design-system.json\`, and the GATE — not this
+   * type — validates a concrete id against that manifest. Widening it here rather than enumerating
+   * project names is the whole point: a closed union in the binary would make every project's
+   * theme names part of the binary's identity.
    */
-  type ThemeId = "dark-default";
+  type ThemeId = string;
+  /**
+   * A concrete terminal colour: a lowercase \`#rrggbb\` string (spec §4.5).
+   *
+   * TEMPLATE-LITERAL RATHER THAN \`string\`, ON PURPOSE. A \`string\` alias would leave
+   * \`color="foregroundMuted"\` compiling, and §4.5 replaces two ways of naming a colour with one:
+   * the checked \`t.accent\` path. §9's migration depends on the old spelling being a fatal
+   * \`TS2322\` that the Gate's warning can attach an exact rewrite to.
+   *
+   * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: TypeScript cannot express "exactly six
+   * lowercase hex digits", so this type checks the \`#\` prefix and nothing else. The full
+   * \`#rrggbb\` form is enforced where the values ENTER the system — the design-system manifest's
+   * Gate schema (§7) — not at every prop site.
+   */
+  type Color = \`#\${string}\`;
   /** A terminal-cell size (columns × rows). */
   interface Size {
       readonly w: number;
@@ -158,7 +273,10 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   /**
    * The themed token palette a page renders against (runtime-api §5.4). Token NAMES
    * are the stable contract the design-system components bind to; the concrete hues
-   * belong to the resolved \`ThemeId\`. Every value is a lowercase \`#rrggbb\` string.
+   * belong to the resolved \`ThemeId\`. Every value is a {@link Color}. The NAMES are the
+   * mandatory core roles every project theme must declare (spec §4.1) — the component
+   * catalog's defaults bind to them; the VALUES are the project's, delivered through
+   * {@link TokenMap} at mount.
    *
    * The 17 roles map 1:1 onto the design system's real \`termcraft-engine.js\` palette
    * (a warm amber-on-near-black terminal theme). \`warning\` has no dedicated engine
@@ -167,39 +285,53 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    */
   interface ThemeTokens {
       /** Global terminal background (engine \`bg\`); also the knocked-out fg on solid amber chips. */
-      readonly background: string;
+      readonly background: Color;
       /** Elevated fill — status bar, lifted card/input bodies (engine \`statusBg\`). */
-      readonly surface: string;
+      readonly surface: Color;
       /** Primary body text (engine \`fg\`). */
-      readonly foreground: string;
+      readonly foreground: Color;
       /** Secondary/dim text — labels, metadata, sub-panel titles (engine \`dim\`). */
-      readonly foregroundMuted: string;
+      readonly foregroundMuted: Color;
       /** Faintest text — placeholders, disabled/ghost rows, hints, column headers (engine \`faint\`). */
-      readonly foregroundFaint: string;
+      readonly foregroundFaint: Color;
       /** Active structural frame — panel borders, pane dividers, gauge track (engine \`border\`). */
-      readonly border: string;
+      readonly border: Color;
       /** Subtle/inactive chrome — interior dividers, dimmed frames, quiet-chip bg (engine \`line\`). */
-      readonly line: string;
+      readonly line: Color;
       /** Primary accent — prompt/cursor, titles, active tab, ▸ marker, gauge fill (engine \`amber\`). */
-      readonly accent: string;
+      readonly accent: Color;
       /** Bright emphasis — popup/active titles, selected values, hover borders, warning emphasis (engine \`amberHi\`). */
-      readonly accentHi: string;
+      readonly accentHi: Color;
       /** Dimmed amber — generating-state borders, low-emphasis warning (engine \`amberDim\`). */
-      readonly accentDim: string;
+      readonly accentDim: Color;
       /** Selected-row background — the back-fill behind the current list/table/pin row (engine \`sel\`). */
-      readonly selection: string;
+      readonly selection: Color;
       /** Selected-row text — text/columns on the highlighted row (engine \`selFg\`). */
-      readonly selectionFg: string;
+      readonly selectionFg: Color;
       /** Success/live — ● live, ✓ resolved, sparkline bars (engine \`green\`). */
-      readonly success: string;
+      readonly success: Color;
       /** Warning/caution — ⚠ hints, ctx-threshold (engine \`amberHi\`; no dedicated warning hue). */
-      readonly warning: string;
+      readonly warning: Color;
       /** Error text/border — ✗ failures, invalid input, error modal (engine \`red\`). */
-      readonly danger: string;
+      readonly danger: Color;
       /** Error-band background — the strip behind a red error message (engine \`redDim\`). */
-      readonly dangerDim: string;
+      readonly dangerDim: Color;
       /** Status-bar background — bottom row + segment fills (engine \`statusBg\`). */
-      readonly statusBg: string;
+      readonly statusBg: Color;
+  }
+  /**
+   * The active theme's whole token map (spec §4.1): the mandatory core roles above, plus any
+   * number of token names the project declared. The index signature is what makes a
+   * project-declared name expressible at all.
+   *
+   * A page never indexes this type by a computed string — it reads a named field off its own
+   * manifest-derived \`Tokens\` type (§4.3), where every key is known, so
+   * \`noUncheckedIndexedAccess\` never widens a read to \`| undefined\`. The seventeen core roles
+   * stay declared PROPERTIES here for the same reason: the catalog's own defaults
+   * (\`activeTokens().border\`, \`.foreground\`, …) must be checked reads, not index accesses.
+   */
+  interface TokenMap extends ThemeTokens {
+      readonly [token: string]: Color;
   }
   /**
    * A page's static metadata (§5.1). Authored through \`definePage\`; the Gate
@@ -215,8 +347,17 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly title: string;
       /** Smallest export size and the status-bar warning threshold. */
       readonly minSize: Size;
-      /** Token palette (§5.4). */
-      readonly theme: ThemeId;
+      /**
+       * The declared theme this page pins to (spec §4.6). OPTIONAL: absent means the project
+       * manifest's \`defaultTheme\`, which is the ordinary case; present, it pins the page to one
+       * declared theme. The Gate checks the name against the project's manifest.
+       *
+       * KNOWN GAP until plan P4 lands: the Gate's own \`src/gate/model/page-contract.ts\` requires
+       * \`theme\` FIRST (\`MISSING_META_FIELD\`) — a themeless page never reaches the host. The host
+       * child's \`pageMetaSchema\` (\`src/host/session/model/source-mount.ts\`) requires it too, SECOND,
+       * with \`MALFORMED_PROTOCOL\`. P4 relaxes both; nothing in the repository omits \`theme\` today.
+       */
+      readonly theme?: ThemeId;
   }
 
   // ── src/runtime/ui/button
@@ -351,20 +492,20 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly children?: unknown;
       /** Uniform inner padding inside the border. */
       readonly padding?: number;
-      /** A semantic token for the border; defaults to \`border\`. Design variants: \`accent\` (active/popup), \`accentHi\` (hover), \`danger\` (error), \`line\` (dimmed). */
-      readonly borderColor?: keyof ThemeTokens;
-      /** A semantic token for the title; defaults to \`foreground\`. Design variants: \`accentHi\` (popup/active), \`foregroundMuted\` (welded sub-panel). */
-      readonly titleColor?: keyof ThemeTokens;
+      /** The border hue; defaults to the theme's \`border\`. Design variants: \`t.accent\` (active/popup), \`t.accentHi\` (hover), \`t.danger\` (error), \`t.line\` (dimmed). */
+      readonly borderColor?: Color;
+      /** The title hue; defaults to the theme's \`foreground\`. Design variants: \`t.accentHi\` (popup/active), \`t.foregroundMuted\` (welded sub-panel). */
+      readonly titleColor?: Color;
   }
   /**
    * A titled, bordered column container (design-system §3.2). Draws the design's rounded
    * frame (\`box()\`'s own default, \`design/termcraft-engine.js:47\`) with an optional \`title\`
    * space-padded into the top border (\`:52\`'s \`' '+title+' '\`), or no caption at all when
    * \`title\` is absent or empty — matching the engine's own \`if(o.title){…}\` guard.
-   * \`borderColor\`/\`titleColor\` accept semantic tokens so a caller renders the design's variants
-   * (an active/popup panel uses an \`accent\` border + \`accentHi\` title; an error panel a
-   * \`danger\` border; a welded sub-panel a \`foregroundMuted\` title). Colors resolve from
-   * tokens; the mandatory \`id\` flows to the element for host geometry.
+   * \`borderColor\`/\`titleColor\` are \`Color\`s read off \`useTokens()\`: an active/popup panel
+   * uses border \`t.accent\` + title \`t.accentHi\`; an error panel uses border \`t.danger\`; a
+   * welded sub-panel uses title \`t.foregroundMuted\`. The mandatory \`id\` flows to the element
+   * for host geometry.
    */
   function Panel(props: PanelProps): React.ReactNode;
 
@@ -387,8 +528,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * (runtime-api §3.2). It exposes the raw flexbox + border/background surface a
    * bespoke widget needs (a superset of the semantic \`Row\`/\`Column\`) WITHOUT letting
    * an authored page import an \`@opentui/*\` path or bind to its release. Colors are
-   * semantic theme-token names, never raw hues; the mandatory \`id\` flows through for
-   * host geometry and shell select/pin.
+   * \`Color\` values — a page reads them off its own \`useTokens()\` (spec §4.5); the mandatory
+   * \`id\` flows through for host geometry and shell select/pin.
    */
   interface BoxProps {
       /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
@@ -404,12 +545,12 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly width?: number;
       readonly height?: number;
       readonly border?: boolean;
-      /** A semantic token for the border hue (only meaningful with \`border\`). */
-      readonly borderColor?: keyof ThemeTokens;
-      /** A semantic token for the fill hue. */
-      readonly background?: keyof ThemeTokens;
+      /** The border hue (only meaningful with \`border\`). Read one off \`useTokens()\` (spec §4.5). */
+      readonly borderColor?: Color;
+      /** The fill hue. Read one off \`useTokens()\` (spec §4.5). */
+      readonly background?: Color;
   }
-  /** The low-level box escape hatch (§3.2). Renders one OpenTUI \`<box>\` from token-resolved props. */
+  /** The low-level box escape hatch (§3.2). Renders one OpenTUI \`<box>\` from \`Color\`-typed props. */
   function Box(props: BoxProps): React.ReactNode;
 
   // ── src/runtime/ui/row
@@ -442,16 +583,17 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly id: string;
       /** Orientation of the rule; defaults to \`horizontal\`. */
       readonly direction?: "horizontal" | "vertical";
-      /** A semantic token for the rule; defaults to \`line\` (the design's subtle-divider hue). */
-      readonly color?: keyof ThemeTokens;
+      /** The rule's hue; defaults to the theme's \`line\` (the design's subtle-divider hue). */
+      readonly color?: Color;
   }
   /**
    * A one-cell themed rule (design-system §3.2). A \`horizontal\` separator is a
    * full-width, single-row band; a \`vertical\` one is a full-height, single-column
    * band. It defaults to the theme's \`line\` hue — the design's subtle interior
    * divider (\`border\` is reserved for actual box frames drawn by Panel) — and takes
-   * an optional \`color\` token so a caller can pick \`border\` for an active-frame rule
-   * or \`accentHi\` for a focused one. The mandatory \`id\` flows to the element.
+   * an optional \`color\`, a \`Color\` a caller reads off \`useTokens()\`, so a caller can pick
+   * \`t.border\` for an active-frame rule or \`t.accentHi\` for a focused one. The mandatory
+   * \`id\` flows to the element.
    * (MVP simplification: the design draws glyph rules \`─\`/\`│\` with \`├┤┬┴\` weld tees;
    * this renders a color band — a known divergence pending the phase-7 UI pass.)
    */
@@ -479,8 +621,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly id: string;
       /** The series to plot; an empty series renders empty. */
       readonly values: readonly number[];
-      /** A semantic theme token name for the glyphs; defaults to \`success\` (the design's sparkline green). */
-      readonly color?: keyof ThemeTokens;
+      /** The glyph hue; defaults to the theme's \`success\` (the design's sparkline green). */
+      readonly color?: Color;
   }
   /**
    * A single-line block-glyph trend (design-system §3.2). Scales each value between
@@ -566,26 +708,27 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       /** Stable id selection and pins key on (§3.2). Mandatory on every catalog component. */
       readonly id: string;
       readonly children?: string | number;
-      /** A semantic theme token name; defaults to \`foreground\`. Pages never pass raw hues. */
-      readonly color?: keyof ThemeTokens;
+      /** The text hue; defaults to the theme's \`foreground\`. Read one off \`useTokens()\` (spec §4.5). */
+      readonly color?: Color;
       readonly bold?: boolean;
       readonly dim?: boolean;
   }
   /**
    * Themed inline text (design-system, runtime-api §3.2). Renders a single OpenTUI
-   * \`<text>\` with a token-resolved foreground and an attribute mask; the mandatory
+   * \`<text>\` with a \`Color\` foreground read off the theme and an attribute mask; the mandatory
    * \`id\` flows to the element so the host can answer geometry queries (checkHit/
-   * rectOf) and the shell can select/pin it. Colors are semantic token names, never
-   * raw hues, so a theme swap re-colors every page without editing sources.
+   * rectOf) and the shell can select/pin it. The hue is a \`Color\` the caller supplies
+   * — a page reads one off its own \`useTokens()\` (spec §4.5), so the project's design
+   * system owns the palette and the catalog owns only the default.
    */
   function Text(props: TextProps): React.ReactNode;
 
   // ── the facade's public surface (src/runtime/index.ts)
-  export type { PageMeta, Size, ThemeId, ThemeTokens };
+  export type { Color, PageMeta, Size, ThemeId, ThemeTokens, TokenMap };
   export { CURRENT_KIT_API_VERSION, definePage };
   export { atom, computed, action, wrap, withAsync, withAsyncData, withComputed, withAbort, withConnectHook, reatomComponent };
   export type { Atom, Action, Computed, AtomLike, Ext, ConnectionCleanup, ConnectionHookResult };
-  export { themeTokens, DEFAULT_THEME_ID };
+  export { DEFAULT_THEME_ID, themeTokens, useTokens };
   export { colorDepthAtom, defineTweaks, isExport, isExportAtom, hostModeAtom, interactionModeAtom, themeCapability, usePages, viewportSizeAtom };
   export type { PagesCapability, ThemeCapability };
   export { jsx, jsxs, jsxDEV, Fragment };

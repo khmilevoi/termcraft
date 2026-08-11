@@ -1405,7 +1405,7 @@ export const meta = definePage({
 })
 
 export default reatomComponent(() => (
-  <Panel id="root" title={TITLE}><Text id="label" color="accent">hi</Text></Panel>
+  <Panel id="root" title={TITLE}><Text id="label" color="#e6a23c">hi</Text></Panel>
 ), "${title}")
 `;
 }

@@ -6,7 +6,7 @@
 // primitive escape hatch land task-by-task in phase 1.
 
 // Page contract (§4)
-export type { PageMeta, Size, ThemeId, ThemeTokens } from "./types";
+export type { Color, PageMeta, Size, ThemeId, ThemeTokens, TokenMap } from "./types";
 export { CURRENT_KIT_API_VERSION, definePage } from "./model/define-page";
 
 // Reatom state, async/derivation, and the React binding (§3.2, §5)
@@ -32,8 +32,12 @@ export type {
   ConnectionHookResult,
 } from "./model/reatom";
 
-// Theme token registry (§5.4)
-export { themeTokens, DEFAULT_THEME_ID } from "./model/tokens";
+// Theme tokens (§4.6). `useTokens()` is the page-facing reactive read of the ACTIVE theme's map;
+// `themeTokens`/`DEFAULT_THEME_ID` are the compiled SEED the project-create scaffold copies —
+// they are not what a page renders against any more. `seedThemeCapability`, `themeIdAtom` and
+// `themeTokensAtom` stay OFF this facade on purpose: an authored page must not repaint its own
+// theme (see their notes in ./model/tokens).
+export { DEFAULT_THEME_ID, themeTokens, useTokens } from "./model/tokens";
 
 // Runtime capabilities (§6): dormant tweaks + host-scoped mode/export + theme +
 // navigation (M16) + viewport/terminal-color (M17)

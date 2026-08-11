@@ -1,3 +1,4 @@
+import { activeTokens } from "../model/tokens";
 import { Text } from "./text";
 
 /** One tab: a stable `id` and its display `label`. */
@@ -32,6 +33,7 @@ export interface TabsProps {
  * interactive path and stays inert here. Colors + marker match the design engine.
  */
 export function Tabs(props: TabsProps) {
+  const tokens = activeTokens();
   return (
     <box id={props.id} flexDirection="row" gap={1}>
       {props.tabs.map((tab) => {
@@ -43,7 +45,7 @@ export function Tabs(props: TabsProps) {
           <box key={tab.id} id={`${props.id}-tab-${tab.id}`}>
             <Text
               id={`${props.id}-tab-${tab.id}-label`}
-              color={active ? "accent" : "foregroundMuted"}
+              color={active ? tokens.accent : tokens.foregroundMuted}
               bold={active}
             >
               {active ? `▸ ${tab.label}` : tab.label}

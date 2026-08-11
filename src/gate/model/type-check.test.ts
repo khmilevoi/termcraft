@@ -174,7 +174,7 @@ const load = atom(0.5, "fixture.load")
 
 export default reatomComponent(() => (
   <Panel id="root" title="Fixture">
-    <Text id="label" color="accent">load</Text>
+    <Text id="label" color="#e6a23c">load</Text>
     <Gauge id="load" value={load()} label="50%" />
   </Panel>
 ), "Fixture")
@@ -211,6 +211,22 @@ describe("the generated @termcraft/runtime declaration, through the real type ch
     TIMEOUT_MS,
   );
 
+  withTsc(
+    "a token NAME in a colour prop is now a fatal type diagnostic (spec §4.5, §9)",
+    async () => {
+      // The migration's whole premise: `color="accent"` used to be the ONLY spelling and is now
+      // a TS2322 against `Color`. This fixture is what keeps that a checked fact rather than a
+      // claim in a spec — if `Color` ever degraded to `string`, this is the test that notices.
+      const broken = FIXTURE_PAGE.replace('color="#e6a23c"', 'color="accent"');
+      expect(broken).not.toBe(FIXTURE_PAGE);
+
+      const errors = await treeChecker({ files: new Map([["pages/fixture.tsx", broken]]) });
+      expect(errors.some((e) => e.code === "TS2322")).toBe(true);
+      expect(errors.some((e) => e.file === "pages/fixture.tsx")).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
   const SHARED = `export const TITLE = "Shared"
 export const WIDTH: number = 80
 `;
@@ -222,7 +238,7 @@ export const meta = definePage({
 })
 
 export default reatomComponent(() => (
-  <Panel id="root" title={TITLE}><Text id="label" color="accent">hi</Text></Panel>
+  <Panel id="root" title={TITLE}><Text id="label" color="#e6a23c">hi</Text></Panel>
 ), "Home")
 `;
 
@@ -294,7 +310,7 @@ const itemsAtom = atom<readonly Item[]>([], "atoms.items")
 
 export default reatomComponent(() => (
   <Panel id="root" title="Atoms">
-    <Text id="names" color="accent">{itemsAtom().map((i) => i.name).join(",")}</Text>
+    <Text id="names" color="#e6a23c">{itemsAtom().map((i) => i.name).join(",")}</Text>
   </Panel>
 ), "Atoms")
 `;
@@ -354,7 +370,7 @@ export default reatomComponent(() => {
   const rows = laps.map((lapMs, i) => \`\${i}:\${lapMs}\`)
   return (
     <Panel id="root" title="Alarms">
-      <Text id="summary" color="accent">{\`\${enabled.length} \${rows.join(",")}\`}</Text>
+      <Text id="summary" color="#e6a23c">{\`\${enabled.length} \${rows.join(",")}\`}</Text>
     </Panel>
   )
 }, "Alarms")
@@ -382,7 +398,7 @@ const itemsAtom = atom<readonly Item[]>([], "ranked.items")
 
 export default reatomComponent(() => (
   <Panel id="root" title="Ranked">
-    <Text id="count" color="accent">{[...itemsAtom()].sort((a, b) => a.rank - b.rank).length}</Text>
+    <Text id="count" color="#e6a23c">{[...itemsAtom()].sort((a, b) => a.rank - b.rank).length}</Text>
   </Panel>
 ), "Ranked")
 `;

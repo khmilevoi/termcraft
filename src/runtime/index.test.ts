@@ -14,6 +14,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     for (const name of [
       "definePage",
       "themeTokens",
+      "useTokens",
       "defineTweaks",
       "isExport",
       "themeCapability",
@@ -86,5 +87,27 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     expect(source).not.toMatch(/from\s+["']@reatom/);
     expect(source).not.toMatch(/from\s+["']@opentui/);
     expect(source).not.toMatch(/from\s+["']react["'/]/);
+  });
+
+  test("the facade publishes the page-facing colour model and withholds the host seam", () => {
+    // The scaffold's `design/system/tokens.ts` imports exactly these (spec §4.3).
+    expect(typeof runtime.useTokens).toBe("function");
+    const surface = Object.keys(runtime);
+    // The host's seeding seam and the raw theme atoms are deliberately NOT on the facade: an
+    // authored page must not be able to repaint its own theme (see ./model/tokens' notes).
+    for (const withheld of ["seedThemeCapability", "themeIdAtom", "themeTokensAtom"]) {
+      expect(surface).not.toContain(withheld);
+    }
+  });
+
+  test("the generated prompt declaration carries the colour model, not the closed theme union", () => {
+    const dts = readFileSync(
+      new URL("./generated/runtime.generated.d.ts", import.meta.url),
+      "utf8",
+    );
+    expect(dts).toContain("type Color =");
+    expect(dts).toContain("function useTokens");
+    // The retired closed union. Its survival here would mean the emit did not pick the change up.
+    expect(dts).not.toContain('type ThemeId = "dark-default"');
   });
 });
