@@ -307,15 +307,28 @@ describe("Box layout surface (spec §6.2)", () => {
   });
 
   test("overflow hidden clips a child that exceeds the box", async () => {
+    // A child TEXT does not discriminate here: `clip`'s default `direction` is `column`, so the
+    // horizontal axis is the CROSS axis, and with no `alignItems` Yoga's `stretch` default
+    // stretches the child `Text` to exactly the parent's 4 columns before it ever paints — it can
+    // never produce ten consecutive characters regardless of whether `overflow` is wired at all.
+    // Give the child an EXPLICIT width instead, so Yoga assigns it `flexShrink: 0` and it really
+    // overflows the parent's box, then assert on painted cells (the accent-background run's text
+    // length on the clipped row), not on a substring of the joined frame text.
     const handle = await createHeadlessRenderer({ w: 10, h: 3 });
     open = handle;
     handle.mount(
       <Box id="clip" width={4} height={1} overflow="hidden">
-        <Text id="clip-body">abcdefghij</Text>
+        <Box id="wide" width={10} height={1} background={activeTokens().accent} />
       </Box>,
     );
     await handle.render();
-    expect(frameText(handle.capture())).not.toContain("abcdefghij");
+    const frame = handle.capture();
+    const painted = frame.rows[0]?.filter((run) => run.bg !== "default") ?? [];
+    const paintedWidth = painted.reduce((total, run) => total + run.text.length, 0);
+    // DERIVED FROM THE CAPTURED FRAME, not assumed: `clip` is 4 columns wide with `overflow:
+    // "hidden"` installing a scissor rect at that width, so the 10-column-wide `wide` child paints
+    // exactly 4 cells on its row — observed by running this test and reading `paintedWidth`.
+    expect(paintedWidth).toBe(4);
   });
 
   test("export mode renders the identical frame (spec §6.3)", async () => {

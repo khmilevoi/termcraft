@@ -81,7 +81,12 @@ export interface BoxProps {
   readonly left?: Dimension;
   /** Paint order among overlapping siblings; higher paints later. */
   readonly zIndex?: number;
-  /** What happens to content larger than the box. */
+  /**
+   * What happens to content larger than the box. `scroll` currently clips exactly like `hidden`
+   * on `Box`: `Renderable` installs a scissor rect for any value other than `visible` but gives
+   * `Box` neither a scroll offset nor any affordance to move it — a scrollable container is
+   * `ScrollBox`'s job (plan P7), not this one.
+   */
   readonly overflow?: "visible" | "hidden" | "scroll";
   /**
    * The frame: `true` for all four sides, `false`/omitted for none, or exactly the sides to

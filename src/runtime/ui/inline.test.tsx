@@ -69,6 +69,40 @@ describe("Span inline text (spec §6.1)", () => {
     expect(rejected).toBeDefined();
   });
 
+  test("with no explicit color, a Span inherits the enclosing Text's colour", async () => {
+    // OpenTUI merges text-node styles down the chain (mergeStyles, `fg: this._fg ?? parentStyle.fg`
+    // in @opentui/core's TextNodeRenderable) — a `Span` that supplies no `fg` of its own picks up
+    // whatever the enclosing `Text` painted. Against the pre-fix `fg={props.color ?? activeTokens()
+    // .foreground}` code this would FAIL: the wrapper always supplied a non-empty `fg`
+    // (`activeTokens().foreground`), which unconditionally overrode the red `Text` and painted the
+    // run in `foreground` instead.
+    const handle = await createHeadlessRenderer({ w: 16, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line" color={activeTokens().danger}>
+        <Span id="inherits">x</Span>
+      </Text>,
+    );
+    await handle.render();
+    const styled = allRuns(handle.capture()).find((run) => run.text.includes("x"));
+    expect(styled && extractRgb(styled.fg)).toBe<string>(activeTokens().danger);
+  });
+
+  test("an explicit color on the Span still wins over the enclosing Text's colour", async () => {
+    const handle = await createHeadlessRenderer({ w: 16, h: 1 });
+    open = handle;
+    handle.mount(
+      <Text id="line" color={activeTokens().danger}>
+        <Span id="overrides" color={activeTokens().accent}>
+          x
+        </Span>
+      </Text>,
+    );
+    await handle.render();
+    const styled = allRuns(handle.capture()).find((run) => run.text.includes("x"));
+    expect(styled && extractRgb(styled.fg)).toBe<string>(activeTokens().accent);
+  });
+
   test("sibling spans compose into one line", async () => {
     const handle = await createHeadlessRenderer({ w: 16, h: 1 });
     open = handle;
@@ -183,6 +217,18 @@ describe("Bold / Italic / Underline inline wrappers (spec §6.1)", () => {
     expect(rejected).toBeDefined();
   });
 
+  test("Italic's color is a Color, and a token NAME does not compile (spec §4.5)", () => {
+    // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().accent`.
+    const rejected = <Italic id="rejected-italic" color="accent" />;
+    expect(rejected).toBeDefined();
+  });
+
+  test("Underline's color is a Color, and a token NAME does not compile (spec §4.5)", () => {
+    // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().accent`.
+    const rejected = <Underline id="rejected-underline" color="accent" />;
+    expect(rejected).toBeDefined();
+  });
+
   test("export mode renders the identical frame (spec §6.3)", async () => {
     const tree = (
       <Text id="line">
@@ -233,6 +279,14 @@ describe("Link inline wrapper (spec §6.1)", () => {
   test("href is required — omitting it does not compile", () => {
     // @ts-expect-error — a link with no target is not a link.
     const rejected = <Link id="rejected-link">docs</Link>;
+    expect(rejected).toBeDefined();
+  });
+
+  test("color is a Color, and a token NAME does not compile (spec §4.5)", () => {
+    // `href` is present and valid here so the @ts-expect-error below is satisfied by the colour
+    // prop alone, not by the (unrelated) missing-href error the previous test checks.
+    // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().accent`.
+    const rejected = <Link id="rejected-link-2" href="https://example.invalid" color="accent" />;
     expect(rejected).toBeDefined();
   });
 

@@ -456,11 +456,19 @@ declare module "@termcraft/runtime" {
    */
   /** Props for the inline `Span`. `id` is the mandatory stable id (§3.2). */
   interface SpanProps {
-      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
       readonly id: string;
       /** Literal text, or further inline wrappers. */
       readonly children?: unknown;
-      /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing `Text`'s colour (which itself defaults to
+       * the theme's `foreground`) — OpenTUI merges text-node styles down the chain, so a `Span`
+       * inside a red `Text` is red. Read one off `useTokens()` (spec §4.5).
+       */
       readonly color?: Color;
   }
   /**
@@ -471,11 +479,19 @@ declare module "@termcraft/runtime" {
   function Span(props: SpanProps): React.ReactNode;
   /** Props for the inline `Bold`. `id` is the mandatory stable id (§3.2). */
   interface BoldProps {
-      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
       readonly id: string;
       /** Literal text, or further inline wrappers. */
       readonly children?: unknown;
-      /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing `Text`'s colour (which itself defaults to
+       * the theme's `foreground`) — OpenTUI merges text-node styles down the chain, so a `Span`
+       * inside a red `Text` is red. Read one off `useTokens()` (spec §4.5).
+       */
       readonly color?: Color;
   }
   /**
@@ -486,11 +502,19 @@ declare module "@termcraft/runtime" {
   function Bold(props: BoldProps): React.ReactNode;
   /** Props for the inline `Italic`. `id` is the mandatory stable id (§3.2). */
   interface ItalicProps {
-      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
       readonly id: string;
       /** Literal text, or further inline wrappers. */
       readonly children?: unknown;
-      /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing `Text`'s colour (which itself defaults to
+       * the theme's `foreground`) — OpenTUI merges text-node styles down the chain, so a `Span`
+       * inside a red `Text` is red. Read one off `useTokens()` (spec §4.5).
+       */
       readonly color?: Color;
   }
   /**
@@ -501,11 +525,19 @@ declare module "@termcraft/runtime" {
   function Italic(props: ItalicProps): React.ReactNode;
   /** Props for the inline `Underline`. `id` is the mandatory stable id (§3.2). */
   interface UnderlineProps {
-      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
       readonly id: string;
       /** Literal text, or further inline wrappers. */
       readonly children?: unknown;
-      /** The run's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      /**
+       * The run's hue. Omitted, it INHERITS the enclosing `Text`'s colour (which itself defaults to
+       * the theme's `foreground`) — OpenTUI merges text-node styles down the chain, so a `Span`
+       * inside a red `Text` is red. Read one off `useTokens()` (spec §4.5).
+       */
       readonly color?: Color;
   }
   /**
@@ -515,13 +547,21 @@ declare module "@termcraft/runtime" {
   function Underline(props: UnderlineProps): React.ReactNode;
   /** Props for the inline `Link`. `id` is the mandatory stable id (§3.2). */
   interface LinkProps {
-      /** Stable id the shell keys on. Mandatory on every catalog component — see the module note. */
+      /**
+       * Stable id the shell keys on. Mandatory on every catalog component — see the module note: an
+       * inline id is stable and part of the export vocabulary, but it is NOT addressable by the
+       * host's geometry queries.
+       */
       readonly id: string;
       /** The link target, emitted as a terminal hyperlink. Required: a link with no target is text. */
       readonly href: string;
       /** The label; literal text, or further inline wrappers. */
       readonly children?: unknown;
-      /** The label's hue; defaults to the theme's `foreground`. Read one off `useTokens()` (spec §4.5). */
+      /**
+       * The label's hue. Omitted, it INHERITS the enclosing `Text`'s colour (which itself defaults
+       * to the theme's `foreground`) — OpenTUI merges text-node styles down the chain, so a `Link`
+       * inside a red `Text` is red. Read one off `useTokens()` (spec §4.5).
+       */
       readonly color?: Color;
   }
   /**
@@ -529,8 +569,8 @@ declare module "@termcraft/runtime" {
    * inline text; `href` becomes the run's hyperlink target in terminals that support it.
    *
    * DESIGN GAP, RECORDED RATHER THAN GUESSED (CLAUDE.md): the design system defines no distinct
-   * link hue, so this defaults to `foreground` like every other inline run instead of inventing
-   * one — pass `color={t.accent}` for the conventional highlighted link.
+   * link hue, so an omitted `color` inherits the enclosing `Text`'s hue like every other inline
+   * run instead of inventing one — pass `color={t.accent}` for the conventional highlighted link.
    *
    * DIVERGENCE: a hyperlink TARGET is not observable in a captured frame. `StyledRun`
    * (`src/host/protocol/types.ts:77-83`) carries text, colours and attributes and has no link
@@ -544,7 +584,8 @@ declare module "@termcraft/runtime" {
        * Stable id the shell keys on. Mandatory, with no exception carved for this element: `id` is
        * the ENTIRE prop surface the `br` intrinsic has (`LineBreakProps = Pick<SpanProps, "id">`,
        * `@opentui/react/src/types/components.d.ts:37`), and spec §6 states the rule without
-       * exception. See the module note for what an inline id can and cannot do.
+       * exception — see the module note: an inline id is stable and part of the export vocabulary,
+       * but it is NOT addressable by the host's geometry queries.
        */
       readonly id: string;
   }
@@ -699,7 +740,12 @@ declare module "@termcraft/runtime" {
       readonly left?: Dimension;
       /** Paint order among overlapping siblings; higher paints later. */
       readonly zIndex?: number;
-      /** What happens to content larger than the box. */
+      /**
+       * What happens to content larger than the box. `scroll` currently clips exactly like `hidden`
+       * on `Box`: `Renderable` installs a scissor rect for any value other than `visible` but gives
+       * `Box` neither a scroll offset nor any affordance to move it — a scrollable container is
+       * `ScrollBox`'s job (plan P7), not this one.
+       */
       readonly overflow?: "visible" | "hidden" | "scroll";
       /**
        * The frame: `true` for all four sides, `false`/omitted for none, or exactly the sides to
