@@ -8,6 +8,14 @@ export const DESIGN_SYSTEM_DIRNAME = "system";
 /** The manifest's TREE-relative path (design-systems §3.2). */
 export const DESIGN_SYSTEM_MANIFEST_RELPATH = `${DESIGN_SYSTEM_DIRNAME}/design-system.json`;
 
+/**
+ * The typed accessor's TREE-relative path (design-systems §4.3). Written by the project-create
+ * scaffold and by the mechanical migration, and imported by every page that reads a token. Named
+ * here rather than at each writer so the Gate's closure roots (P4 D9), the scaffold, and the
+ * migration cannot disagree about where it lives.
+ */
+export const DESIGN_SYSTEM_TOKENS_RELPATH = `${DESIGN_SYSTEM_DIRNAME}/tokens.ts`;
+
 /** The only shipped manifest schema version (design-systems §3.2). */
 export const DESIGN_SYSTEM_SCHEMA_VERSION = 1;
 
