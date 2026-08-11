@@ -103,6 +103,9 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "themeTokensAtom",
       "activeSyntaxStyle",
       "syntaxStyleAtom",
+      "buildSyntaxStyle",
+      "syntaxScopeStyles",
+      "SyntaxStyleUnavailableError",
     ]) {
       expect(surface).not.toContain(withheld);
     }

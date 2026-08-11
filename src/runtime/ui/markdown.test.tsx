@@ -61,12 +61,26 @@ describe("Markdown component (design-system §6.1)", () => {
   });
 
   test("A SILENTLY FAILED WORKER MUST FAIL THIS TEST, not degrade quietly", async () => {
+    // MUST filter empty/whitespace runs before collecting hues (review finding, 2026-08-11,
+    // mirrors the same fix in `code.test.tsx`): the headless renderer's UNWRITTEN filler cells
+    // carry `fg = #ffffff`, distinct from the theme's own `foreground` (#d7d0c2). With `h: 12`
+    // against a short document, the captured frame has filler rows below the content, so an
+    // unfiltered `hues.size > 1` was satisfied by `{foreground, #ffffff filler}` alone — true on
+    // a COMPLETELY UNHIGHLIGHTED frame.
     const handle = await createHeadlessRenderer({ w: 40, h: 12 });
     open = handle;
     handle.mount(<Markdown id="doc" content={DOCUMENT} />);
     await handle.settle();
-    const hues = new Set(allRuns(handle.capture()).map((run) => extractRgb(run.fg)));
+    const hues = new Set(
+      allRuns(handle.capture())
+        .filter((run) => run.text.trim().length > 0)
+        .map((run) => extractRgb(run.fg)),
+    );
     expect(hues.size).toBeGreaterThan(1);
+    // The load-bearing assertion: a flat, unhighlighted frame of non-empty runs is exactly ONE
+    // hue (`foreground`), so this alone fails on a silently-failed worker even if the size check
+    // above were ever satisfied by accident.
+    expect([...hues]).toContain(activeTokens().accent);
   });
 
   test("the render follows the ACTIVE theme, not the compiled seed", async () => {

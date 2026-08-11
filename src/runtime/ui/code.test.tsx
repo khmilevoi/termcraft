@@ -69,12 +69,28 @@ describe("Code component (design-system §6.1)", () => {
   test("A SILENTLY FAILED WORKER MUST FAIL THIS TEST, not degrade quietly", async () => {
     // The whole point of §6.3's rule: unhighlighted output is indistinguishable from correct
     // plain text unless a test asserts that a hue OTHER than the base foreground is present.
+    //
+    // MUST filter empty/whitespace runs before collecting hues (review finding, 2026-08-11): the
+    // headless renderer's UNWRITTEN filler cells carry `fg = #ffffff`, distinct from the theme's
+    // own `foreground` (#d7d0c2). With `h: 6` against a 3-line snippet, the captured frame has
+    // filler rows below the content, so an unfiltered `hues.size > 1` was satisfied by
+    // `{foreground, #ffffff filler}` alone — true on a COMPLETELY UNHIGHLIGHTED frame. The guard
+    // must assert a hue the highlighter itself produces, not merely "more than one colour
+    // anywhere in the buffer".
     const handle = await createHeadlessRenderer({ w: 40, h: 6 });
     open = handle;
     handle.mount(<Code id="snippet" content={TS_SOURCE} language="typescript" />);
     await handle.settle();
-    const hues = new Set(allRuns(handle.capture()).map((run) => extractRgb(run.fg)));
+    const hues = new Set(
+      allRuns(handle.capture())
+        .filter((run) => run.text.trim().length > 0)
+        .map((run) => extractRgb(run.fg)),
+    );
     expect(hues.size).toBeGreaterThan(1);
+    // The load-bearing assertion: a flat, unhighlighted frame of non-empty runs is exactly ONE
+    // hue (`foreground`), so this alone fails on a silently-failed worker even if the size check
+    // above were ever satisfied by accident.
+    expect([...hues]).toContain(activeTokens().accent);
   });
 
   test("an unsupported language renders plain in the theme's foreground", async () => {
@@ -158,22 +174,41 @@ describe("Code never reaches the network (design-system §6.1)", () => {
     // is a source-text assertion in the same style as index.test.ts's private-identity test,
     // because the fetch would happen in @opentui/core's WORKER, where a main-thread spy on
     // `fetch` proves nothing.
+    //
+    // TWO roots, not one (review finding, 2026-08-11): a registration call could physically sit
+    // either in the wrapper layer (`src/runtime`) or in the renderer/settle plumbing that
+    // actually drives `CodeRenderable` (`src/host/render`); scanning only the former would leave
+    // the latter's guarantee unpinned even though it happens to hold today.
     // `import.meta.dir` + node:path, never `new URL(...).pathname` — the latter yields
     // `/C:/…` on Windows and no file opens.
-    const root = path.resolve(import.meta.dir, "..");
+    const roots = [
+      path.resolve(import.meta.dir, ".."),
+      path.resolve(import.meta.dir, "../../host/render"),
+    ];
     const offenders: string[] = [];
-    for await (const relative of new Bun.Glob("**/*.{ts,tsx}").scan({ cwd: root })) {
-      // Skip test files: this very file's assertion literally names both banned calls in its own
-      // source (the two `.includes(...)` string arguments right below, plus this comment), so an
-      // unfiltered glob over `src/runtime` matches itself every run. The rule is about runtime
-      // SOURCE never registering a parser, not about a check-for-the-name's-absence naming the
-      // name it checks for.
-      if (relative.endsWith(".test.ts") || relative.endsWith(".test.tsx")) continue;
-      const source = await Bun.file(path.join(root, relative)).text();
-      if (source.includes("addFiletypeParser") || source.includes("addDefaultParsers")) {
-        offenders.push(relative);
+    const visited: string[] = [];
+    for (const root of roots) {
+      for await (const relative of new Bun.Glob("**/*.{ts,tsx}").scan({ cwd: root })) {
+        // Skip test files: this very file's assertion literally names both banned calls in its
+        // own source (the two `.includes(...)` string arguments right below, plus this comment),
+        // so an unfiltered glob over `src/runtime` matches itself every run. The rule is about
+        // runtime SOURCE never registering a parser, not about a check-for-the-name's-absence
+        // naming the name it checks for.
+        if (relative.endsWith(".test.ts") || relative.endsWith(".test.tsx")) continue;
+        const absolute = path.join(root, relative);
+        visited.push(absolute);
+        const source = await Bun.file(absolute).text();
+        if (source.includes("addFiletypeParser") || source.includes("addDefaultParsers")) {
+          offenders.push(absolute);
+        }
       }
     }
     expect(offenders).toEqual([]);
+    // A scan that silently visits nothing (a broken `Bun.Glob`/`cwd`) would pass VACUOUSLY —
+    // green while checking nothing (review finding, 2026-08-11). Pin that real files were
+    // actually read: an arbitrary-but-generous floor, plus the one file this test exists to
+    // guard explicitly named among what was visited.
+    expect(visited.length).toBeGreaterThan(20);
+    expect(visited).toContain(path.resolve(import.meta.dir, "code.tsx"));
   });
 });
