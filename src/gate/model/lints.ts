@@ -226,6 +226,32 @@ export function lintUnpointedElements(source: string): GateWarning[] {
 }
 
 /**
+ * Every SK kind that can only appear as the FIRST token of a new statement (a declaration
+ * keyword, or a control-flow keyword that starts its own statement). Used only to close
+ * {@link lintModuleScopeTokens}'s `=>` latch — see that function's doc for why a keyword, and not
+ * a call shape, is the signal.
+ */
+const STATEMENT_KEYWORD_KINDS: ReadonlySet<number> = new Set<number>([
+  SK.ConstKeyword,
+  SK.LetKeyword,
+  SK.VarKeyword,
+  SK.FunctionKeyword,
+  SK.ClassKeyword,
+  SK.ExportKeyword,
+  SK.ImportKeyword,
+  SK.ReturnKeyword,
+  SK.IfKeyword,
+  SK.ForKeyword,
+  SK.WhileKeyword,
+  SK.DoKeyword,
+  SK.SwitchKeyword,
+  SK.TryKeyword,
+  SK.ThrowKeyword,
+  SK.BreakKeyword,
+  SK.ContinueKeyword,
+]);
+
+/**
  * The `module-scope-tokens` warning (design-systems §4.5, §7). `useTokens()` read at module scope
  * captures one theme's values forever, so a preview theme override renders nothing new — the page
  * is a `reatomComponent` and only a read INSIDE its body is a tracked read.
@@ -236,21 +262,29 @@ export function lintUnpointedElements(source: string): GateWarning[] {
  *  - BRACE DEPTH 0. Every function body, class body and block opens a brace; a call at depth 0 is
  *    not inside one.
  *  - NO `=>` SINCE THE LAST STATEMENT BOUNDARY. An arrow function with an EXPRESSION body opens no
- *    brace, so depth alone would fire on `const read = () => useTokens()`. That is not a corner
- *    case invented for the rule: the §4.3 scaffold termcraft itself generates is
- *    `export const useTokens = () => useRuntimeTokens<Tokens>()`, and a lint that warned on the
- *    file the tool writes would be worse than no lint. The latch resets at `;`, `{` and `}` — the
- *    tokens a BRACED statement boundary always produces.
- *  - AN ASI-TERMINATED ARROW BODY RESETS THE LATCH TOO, the moment its own `useTokens()` call
- *    closes. `;`/`{`/`}` cover a braced or semicolon-terminated boundary, but the scanner sees no
- *    token at all for a boundary drawn only by automatic semicolon insertion (a bare newline is
- *    trivia, skipped before `tokenize` ever returns it) — so
- *    `const read = () => useTokens()\nconst t = useTokens()\n` would otherwise leave the SECOND,
- *    genuinely module-scope call silently latched off by the FIRST arrow forever. A matched,
- *    non-dotted `useTokens ( )` call is itself a complete primary expression — nothing in the
- *    source can still be "inside" an un-braced arrow body once that call's own parens have closed
- *    — so evaluating the shape is exactly the checkpoint that closes the latch, whether or not
- *    THIS call gets a warning.
+ *    brace, so depth alone would fire on the lazy-arrow-helper pattern —
+ *    `const read = () => useTokens()` — which is a legitimate way to defer a token read (e.g. to
+ *    call from inside a component body later), not a module-scope read itself. Firing on the
+ *    helper's OWN definition line, before it is ever called, is exactly the over-report the latch
+ *    exists to prevent.
+ *  - THE LATCH RESETS AT `;`, `{`, `}`, AND AT ANY STATEMENT-START KEYWORD TOKEN
+ *    ({@link STATEMENT_KEYWORD_KINDS} — `const`, `let`, `function`, `return`, `if`, …). `;`/`{`/`}`
+ *    cover a braced or semicolon-terminated boundary, but the scanner sees no token at all for a
+ *    boundary drawn only by automatic semicolon insertion (a bare newline is trivia, skipped
+ *    before `tokenize` ever returns it) — so `const read = () => useTokens()\nconst t =
+ *    useTokens()\n` needs a second signal, or the first arrow silently disables the rule for the
+ *    rest of the file. A statement-start keyword is exactly that signal: nothing else can
+ *    legally open the token stream's next statement, since JS/TS statements always begin with
+ *    either such a keyword or an expression, and there is no way to tell "a new expression
+ *    statement started" apart from "the arrow's own expression is still running" without a
+ *    parser. EARLIER DRAFT, REJECTED: resetting on the arrow's OWN `useTokens()` call closing —
+ *    that made `const f = () => useTokens() + useTokens()`, `const pair = () => [useTokens().fg,
+ *    useTokens().bg]`, and similar multi-read helpers warn on their SECOND read, which is still
+ *    inside the same un-braced expression and still legitimately deferred. A keyword never
+ *    appears mid-expression, so it cannot repeat that false positive; the cost is the latch
+ *    staying on (under-reporting, never over-reporting — the direction this file's own D10
+ *    principle requires) for the rare arrow body that legitimately reaches a fresh statement
+ *    through some construct this list does not name.
  *
  * The call shape matched is exactly `useTokens ( )` — an Identifier not preceded by `.` (a member
  * named `useTokens` on some object is not the runtime hook), followed by an EMPTY argument list
@@ -282,6 +316,10 @@ export function lintModuleScopeTokens(
       sawArrow = false;
       continue;
     }
+    if (STATEMENT_KEYWORD_KINDS.has(t.kind)) {
+      sawArrow = false;
+      continue;
+    }
     if (t.kind === SK.EqualsGreaterThanToken) {
       sawArrow = true;
       continue;
@@ -290,12 +328,7 @@ export function lintModuleScopeTokens(
     if (toks[i - 1]?.kind === SK.DotToken) continue;
     if (toks[i + 1]?.kind !== SK.OpenParenToken) continue;
     if (toks[i + 2]?.kind !== SK.CloseParenToken) continue;
-    // A matched call closes the latch (see the ASI paragraph above) BEFORE the suppression check,
-    // so this same call is judged against the latch's state as of the `=>` that opened it — not
-    // against the reset it itself triggers for whatever comes after.
-    const suppressed = depth > 0 || sawArrow;
-    sawArrow = false;
-    if (suppressed) continue;
+    if (depth > 0 || sawArrow) continue;
     warnings.push({
       kind: "module-scope-tokens",
       message:

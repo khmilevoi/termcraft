@@ -458,11 +458,16 @@ describe("the token-based lints — a stream that does not cover the source is a
     expect(() => lintUnlistedNavigation(UNREADABLE, "jsx", ["home" as PageSlug])).toThrow();
   });
 
+  test("lintModuleScopeTokens lets the throw PASS rather than returning []", () => {
+    expect(() => lintModuleScopeTokens(UNREADABLE, "jsx")).toThrow();
+  });
+
   test("…and every one of them still runs on an ordinary source — not a blanket refusal", () => {
     expect(scanned(lintDeterminism(COVERED, "jsx"))).toEqual([]);
     expect(scanned(lintSilencingAny(COVERED, "jsx"))).toEqual([]);
     expect(scanned(lintDroppedIds(COVERED, "jsx", []))).toEqual([]);
     expect(scanned(lintUnlistedNavigation(COVERED, "jsx", []))).toEqual([]);
+    expect(scanned(lintModuleScopeTokens(COVERED, "jsx"))).toEqual([]);
   });
 });
 
@@ -496,8 +501,13 @@ describe("lintModuleScopeTokens (design-systems §4.5, §7)", () => {
     ).toEqual([]);
   });
 
-  test("the §4.3 SCAFFOLD is clean — an arrow with an expression body opens no brace", () => {
-    // Without the `=>` guard, the lint would fire on the very file termcraft generates.
+  test("the §4.3 scaffold stays clean — a regression pin, not a guard pin", () => {
+    // NOT actually exercising the `=>` guard (review finding 3): the scaffold's `useTokens` is a
+    // declaration binding (`useTokens = …`, followed by `=` not `(`) and the call inside it is a
+    // DIFFERENT identifier (`useRuntimeTokens`), so the shape check alone already rejects both —
+    // this passes with or without the `=>` guard. Kept anyway as a regression pin: if a future
+    // change to the shape check ever made it match `useTokens = (...)`-style bindings, this would
+    // catch it turning the tool's own generated file non-clean.
     expect(
       kinds(
         `import { useTokens as useRuntimeTokens, type Color } from "@termcraft/runtime"\n` +
@@ -514,7 +524,9 @@ describe("lintModuleScopeTokens (design-systems §4.5, §7)", () => {
 
   test("a second module-scope call after a braced function still warns", () => {
     // The `=>` latch must reset at a statement boundary, or one arrow anywhere would disable the
-    // lint for the rest of the file.
+    // lint for the rest of the file. This source has no braces and no semicolons — the boundary
+    // between the two statements is drawn only by automatic semicolon insertion, which the token
+    // stream carries no token for, so the latch must reset on the second line's `const` keyword.
     expect(kinds(`const read = () => useTokens()\nconst t = useTokens()\n`)).toEqual([
       "module-scope-tokens",
     ]);
@@ -530,5 +542,27 @@ describe("lintModuleScopeTokens (design-systems §4.5, §7)", () => {
 
   test("a member access is not the runtime hook", () => {
     expect(kinds(`const t = kit.useTokens()\n`)).toEqual([]);
+  });
+
+  describe("a lazy arrow helper reading useTokens() more than once is clean (review finding 1)", () => {
+    // A reset on the CALL closing (an earlier draft of this lint) made every one of these warn on
+    // their second read — still inside the same un-braced arrow expression, still a legitimate
+    // deferred read, and an over-report D10 forbids. The fix resets the latch on a statement-start
+    // keyword token instead, which cannot appear mid-expression.
+    test("two reads combined by an operator", () => {
+      expect(kinds(`const f = () => useTokens() + useTokens()\n`)).toEqual([]);
+    });
+
+    test("two reads inside an array literal", () => {
+      expect(kinds(`const pair = () => [useTokens().fg, useTokens().bg]\n`)).toEqual([]);
+    });
+
+    test("two reads joined by nullish coalescing, after export/const before the arrow", () => {
+      expect(kinds(`export const c = () => useTokens().bg ?? useTokens().fg\n`)).toEqual([]);
+    });
+
+    test("two reads on either side of a conditional expression", () => {
+      expect(kinds(`const g = () => (cond ? useTokens() : useTokens())\n`)).toEqual([]);
+    });
   });
 });
