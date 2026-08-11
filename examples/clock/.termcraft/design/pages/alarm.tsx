@@ -6,6 +6,7 @@ import {
   wrap,
   Column,
   Row,
+  Box,
   Text,
   Button,
   Input,
@@ -132,13 +133,17 @@ export default reatomComponent(function Page() {
           {`Будильники (${alarms.length}):`}
         </Text>
         {alarms.map((a) => (
-          <Row id={`alarm-row-${a.id}`} gap={1} align="center" justify="between">
-            <Text id={`alarm-time-${a.id}`} bold color={a.enabled ? "accent" : "foregroundFaint"}>
-              {`${pad2(a.hour)}:${pad2(a.minute)}`}
-            </Text>
-            <Text id={`alarm-label-${a.id}`} color={a.enabled ? "foreground" : "foregroundFaint"}>
-              {a.label}
-            </Text>
+          <Row id={`alarm-row-${a.id}`} gap={1} align="center">
+            <Box id={`alarm-time-box-${a.id}`} width={5} justify="start">
+              <Text id={`alarm-time-${a.id}`} bold color={a.enabled ? "accent" : "foregroundFaint"}>
+                {`${pad2(a.hour)}:${pad2(a.minute)}`}
+              </Text>
+            </Box>
+            <Box id={`alarm-label-box-${a.id}`} grow={1} justify="start">
+              <Text id={`alarm-label-${a.id}`} color={a.enabled ? "foreground" : "foregroundFaint"}>
+                {a.label}
+              </Text>
+            </Box>
             <Row id={`alarm-actions-${a.id}`} gap={1}>
               <Button id={`alarm-toggle-${a.id}`} onPress={wrap(() => toggleAlarm(a.id))}>
                 {a.enabled ? "Выкл" : "Вкл"}

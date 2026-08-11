@@ -158,10 +158,7 @@ export default reatomComponent(function Page() {
       </Row>
 
       <Text id="digital-time" bold color={accentToken}>
-        {fullTime(now)}
-      </Text>
-      <Text id="date-line" dim color="foregroundMuted">
-        {`${weekday(now)}, ${fullDate(now)}`}
+        {`${fullTime(now)} / ${weekday(now)}, ${fullDate(now)}`}
       </Text>
 
       <Separator id="sep-header" color={accentToken} />

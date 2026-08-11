@@ -1,0 +1,7 @@
+{"kind":"pins","formatVersion":1,"projectId":"019fa002-5f5b-7000-92e3-9931eebd6c52","pageSlug":"timer"}
+{"kind":"pin:created","recordId":"019ff058-49d9-7001-81b9-fd87555c55b0","pinId":"019ff058-49d9-7000-94e4-1a83d9818a64","element":"sep-footer","fx":0.34615384615384615,"fy":0,"text":"убери это","ts":"2026-08-11T10:22:25.753Z"}
+{"kind":"pin:created","recordId":"019ff059-77bf-7001-8a69-98820f5de493","pinId":"019ff059-77bf-7000-b03b-1b59d7d2d2f3","element":"progress-gauge-empty","fx":0.7666666666666667,"fy":0,"text":"замени на кольцо с временем внутри и прогрессом по длинне окружности","ts":"2026-08-11T10:23:43.039Z"}
+{"kind":"pin:created","recordId":"019ff05b-5294-7001-8566-37c5393e4704","pinId":"019ff05b-5294-7000-82f7-71af162bd63e","element":"preset-row","fx":0.8043478260869565,"fy":0.3333333333333333,"text":"добавь возможность ввода кастомной длительности таймера","ts":"2026-08-11T10:25:44.596Z"}
+{"kind":"pin:status","recordId":"019ff05f-b717-7001-9a99-3f5a2da922f3","pinId":"019ff058-49d9-7000-94e4-1a83d9818a64","status":"resolved","turnId":"019ff05b-82b0-7000-8c3e-aafe33b5331d","ts":"2026-08-11T10:30:32.471Z"}
+{"kind":"pin:status","recordId":"019ff05f-b717-7002-a934-8cacb798fdfc","pinId":"019ff059-77bf-7000-b03b-1b59d7d2d2f3","status":"resolved","turnId":"019ff05b-82b0-7000-8c3e-aafe33b5331d","ts":"2026-08-11T10:30:32.471Z"}
+{"kind":"pin:status","recordId":"019ff05f-b717-7003-9d1d-c35be49bff13","pinId":"019ff05b-5294-7000-82f7-71af162bd63e","status":"resolved","turnId":"019ff05b-82b0-7000-8c3e-aafe33b5331d","ts":"2026-08-11T10:30:32.471Z"}
