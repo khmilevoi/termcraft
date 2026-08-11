@@ -27,15 +27,17 @@ declare module "@termcraft/runtime" {
   const isExportAtom: import("@reatom/core").Computed<boolean>;
   /** A page-readable helper for the export flag (reads {@link isExportAtom}). */
   function isExport(): boolean;
-  /** The theme capability (§6): the active theme id and its resolved token palette. */
+  /** The theme capability (§6): the active theme id and its resolved token map. */
   interface ThemeCapability {
       readonly themeId: ThemeId;
-      readonly tokens: ThemeTokens;
+      readonly tokens: TokenMap;
   }
   /**
-   * Resolve the current theme capability (§6). MVP returns the single `dark-default`
-   * theme; the preview-override path (a theme atom the shell writes without rewriting
-   * `meta.theme`) rides with the phase-7 theme capability wiring.
+   * Resolve the current theme capability (§6, spec §4.6). It reads the two HOST-INPUT atoms the
+   * mount seeds (`./tokens`'s `themeIdAtom`/`themeTokensAtom`), so it returns the PROJECT's real
+   * theme — the compiled `dark-default` it used to return survives only as those atoms' pre-mount
+   * default. Called from a `reatomComponent`, both reads are tracked, so a preview theme override
+   * re-renders the page without rewriting `meta.theme` (`runtime-api` §6).
    */
   function themeCapability(): ThemeCapability;
   /** The navigation capability (§6): `usePages().goTo(slug)`. */

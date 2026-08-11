@@ -10,9 +10,12 @@ import {
   usePages,
   viewportSizeAtom,
 } from "./capabilities";
-import { themeTokens } from "./tokens";
+import { DARK_DEFAULT, DEFAULT_THEME_ID, seedThemeCapability } from "./tokens";
 
-afterEach(() => hostModeAtom.set("preview"));
+afterEach(() => {
+  hostModeAtom.set("preview");
+  seedThemeCapability({ themeId: DEFAULT_THEME_ID, tokens: DARK_DEFAULT });
+});
 
 describe("runtime capabilities (§6)", () => {
   test("defineTweaks records the declaration unchanged (dormant MVP)", () => {
@@ -28,10 +31,19 @@ describe("runtime capabilities (§6)", () => {
     expect(isExportAtom()).toBe(true);
   });
 
-  test("themeCapability resolves the active theme id + tokens", () => {
-    const cap = themeCapability();
-    expect(cap.themeId).toBe("dark-default");
-    expect(cap.tokens).toBe(themeTokens("dark-default"));
+  test("themeCapability resolves the ACTIVE theme id + tokens, not a compiled default", () => {
+    const seeded = themeCapability();
+    expect(seeded.themeId).toBe(DEFAULT_THEME_ID);
+    expect(seeded.tokens).toBe(DARK_DEFAULT);
+
+    seedThemeCapability({
+      themeId: "midnight",
+      tokens: { ...DARK_DEFAULT, accent: "#4cc9f0", brandBlue: "#4cc9f0" },
+    });
+    const active = themeCapability();
+    expect(active.themeId).toBe("midnight");
+    expect(active.tokens.accent).toBe("#4cc9f0");
+    expect(active.tokens.brandBlue).toBe("#4cc9f0");
   });
 });
 
