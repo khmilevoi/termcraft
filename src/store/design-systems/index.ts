@@ -63,3 +63,5 @@ export {
   readCacheEntryRecord,
   writeCacheEntryRecord,
 } from "./model/cache-entry";
+export type { DesignSystemSummary, TokenSwatch } from "./types";
+export { readDesignSystemSummary } from "./model/summary";

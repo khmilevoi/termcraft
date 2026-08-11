@@ -69,3 +69,24 @@ export interface PackageAdmission {
   /** The post-read check, against the bytes that actually arrived. */
   observeBytes(input: { readonly relPath: string; readonly bytesRead: number }): Error | null;
 }
+
+/** One token of a theme, in declaration order — the store-side twin of `DesignSystemTokenSwatchV1`. */
+export interface TokenSwatch {
+  readonly name: string;
+  readonly value: string;
+}
+
+/**
+ * What a picker needs about a candidate that is not installed and has never been through the
+ * Gate (design §8.1). The store-side twin of `core/ports`' `DesignSystemSummaryV1`,
+ * field-for-field identical.
+ */
+export interface DesignSystemSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly version: string;
+  readonly kitApiVersion: number;
+  readonly defaultTheme: string;
+  readonly defaultThemeTokens: readonly TokenSwatch[];
+  readonly componentNames: readonly string[];
+}
