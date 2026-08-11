@@ -810,3 +810,60 @@ export default function P() { return null }
     expect((result.cause as DynamicCodeDeniedError).entryPoint).toBe("AsyncFunction");
   });
 });
+
+describe("meta.theme is optional (design-systems §4.6)", () => {
+  test("a page with no `theme` loads, and its validated meta omits theme", async () => {
+    const PAGE_NO_THEME = `import { definePage } from "@termcraft/runtime"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "T",
+  minSize: { w: 10, h: 2 },
+})
+
+export default function P() {
+  return null
+}
+`;
+    const root = await writeTree({ "pages/no-theme.tsx": PAGE_NO_THEME });
+    registerRuntimeResolver();
+
+    const loaded = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/no-theme.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/no-theme.tsx"]),
+    });
+    expect(loaded).not.toBeInstanceOf(Error);
+    if (loaded instanceof Error) return;
+    expect(loaded.meta.theme).toBeUndefined();
+    expect(loaded.meta.title).toBe("T");
+  });
+
+  test("a page whose `theme` is an empty string is still MALFORMED_PROTOCOL", async () => {
+    // Optional means absent-or-valid. `theme: ""` names no theme and must not pass.
+    const PAGE_EMPTY_THEME = `import { definePage } from "@termcraft/runtime"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "T",
+  minSize: { w: 10, h: 2 },
+  theme: "",
+})
+
+export default function P() {
+  return null
+}
+`;
+    const root = await writeTree({ "pages/empty-theme.tsx": PAGE_EMPTY_THEME });
+    registerRuntimeResolver();
+
+    const loaded = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/empty-theme.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/empty-theme.tsx"]),
+    });
+    expect(loaded).toBeInstanceOf(Error);
+    if (!(loaded instanceof Error)) return;
+    expect((loaded as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+  });
+});

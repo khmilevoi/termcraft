@@ -17,7 +17,12 @@ export interface ValidatedPageMeta {
   readonly kitApiVersion: number;
   readonly title: string;
   readonly minSize: Size;
-  readonly theme: string;
+  /**
+   * OPTIONAL (design-systems §4.6). The child never resolves it: the ACTIVE theme travels in
+   * `MountRequestBody.theme`, which `core` already resolved against the project's manifest. This
+   * field is the page's own DECLARATION, echoed back in `ReadyBody.meta` unchanged.
+   */
+  readonly theme?: string;
 }
 
 /** A page module loaded and validated by `loadPage`, ready to mount. */

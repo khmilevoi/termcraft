@@ -541,7 +541,10 @@ const pageSizeSchema = z.object({
 const pageMetaSchema = z.object({
   kitApiVersion: z.number().int().positive(),
   title: z.string().min(1).max(TITLE_MAX),
-  theme: z.string().min(1).max(THEME_MAX),
+  // OPTIONAL (design-systems §4.6): absent means the project manifest's `defaultTheme`, which
+  // `core` has already resolved into `MountRequestBody.theme` by the time this runs. `.min(1)`
+  // survives — an empty string names no theme and is corruption, not an absence.
+  theme: z.string().min(1).max(THEME_MAX).optional(),
   minSize: pageSizeSchema,
 });
 
