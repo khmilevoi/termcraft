@@ -94,8 +94,15 @@ const STATEMENT_START_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
  *   (a destructuring pattern, or a shape this scan does not expect there);
  * - `<` is UNREADABLE: a token walk cannot tell a generic argument list from the less-than
  *   operator (`a < b, c > d` is a valid comparison, so angle brackets cannot be balanced by
- *   counting) — `exhaustive: false`, stop, rather than reading into what might be a phantom
- *   argument list;
+ *   counting) — but WHETHER that unreadability could have hidden a declarator IS decidable (fix
+ *   round 5, task review Critical finding): {@link scanPastAngleBracket} reads ahead to the
+ *   statement's own boundary and only sets `exhaustive: false` if a depth-0 comma — the one thing
+ *   a `<` could actually have hidden a separator behind — turned up before it. Failing the WHOLE
+ *   FILE open on every `<` (round 4's answer) made `exhaustive: false` the default outcome for a
+ *   `.tsx` component's dominant idiom, `export const Button = () => <box .../>`, whose JSX markup
+ *   tokenizes as a bare `<` plus ordinary tokens (no distinct JSX token kind exists — see
+ *   {@link scanPastAngleBracket}'s doc comment) — silencing the missing-binding fatal on exactly
+ *   the modules it exists to police;
  * - a member of {@link STATEMENT_START_KEYWORDS} (`DECLARATION_STARTS`, `export`, `import`) ends
  *   the list ONLY when {@link isStatementPosition} proves it sits where a new statement may
  *   legally begin — otherwise it is consumed as ONE token, exactly like any other piece of the
@@ -120,11 +127,13 @@ const STATEMENT_START_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
  *
  * `exhaustive` therefore goes `false` on exactly these triggers: a destructuring declarator
  * target (`export const { … } = …` / `export const [ … ] = …`, first declarator or a later one);
- * a star re-export (`export * from "…"`); a `<` encountered at the walk's own top level; an
- * unmatched/truncated bracket run, template literal, or closer; or a declaration/declarator whose
- * OWN binding name is a contextual keyword (`export const type = 1`) rather than a plain
- * Identifier — this scan can prove such a name exists but, per `Tok`'s own shape, cannot read what
- * it is (see the `first?.kind !== SK.Identifier` branch below).
+ * a star re-export (`export * from "…"`); a `<` at the walk's own top level whose statement, read
+ * ahead to its own boundary, turns out to contain a depth-0 comma (or an unbalanced/unterminated
+ * bracket or template along the way — see {@link scanPastAngleBracket}); an unmatched/truncated
+ * bracket run, template literal, or closer; or a declaration/declarator whose OWN binding name is
+ * a contextual keyword (`export const type = 1`) rather than a plain Identifier — this scan can
+ * prove such a name exists but, per `Tok`'s own shape, cannot read what it is (see the
+ * `first?.kind !== SK.Identifier` branch below).
  *
  * SUPPORTED FORMS, each contributing zero or more names to `names`:
  * - `export const|let|var <name>[ = …][, <name>[ = …] …]` — every top-level declarator name in
@@ -148,10 +157,11 @@ export interface NamedExportScanV1 {
   readonly names: ReadonlySet<string>;
   /**
    * False when a form this scanner cannot read exhaustively was seen: a destructuring export
-   * target (`export const { a } = x` / `export const [a] = x`), an `export * from`, a `<`
-   * encountered at a declarator's own top level (indistinguishable from the less-than operator —
-   * see {@link scanNamedExports}'s doc comment), an unmatched/truncated bracket run, template
-   * literal, or closer, or a binding name this scan proved exists but could not read (a
+   * target (`export const { a } = x` / `export const [a] = x`), an `export * from`, a `<` at a
+   * declarator's own top level whose statement provably contains a depth-0 comma after it (see
+   * {@link scanNamedExports}'s doc comment and {@link scanPastAngleBracket} — a `<` with NO comma
+   * after it, e.g. JSX markup, leaves `exhaustive` unchanged), an unmatched/truncated bracket run,
+   * template literal, or closer, or a binding name this scan proved exists but could not read (a
    * contextual keyword, e.g. `export const type = 1`). A caller must then NOT report a missing
    * name as a fatal.
    */
@@ -286,11 +296,16 @@ export function scanNamedExports(
       if (kind === SK.LessThanToken) {
         // Generic type arguments and the less-than operator are not distinguishable by a token
         // walk (`a < b, c > d` is a valid comparison expression, so angle brackets cannot be
-        // balanced by counting). Reading past this could mistake a generic argument's own comma
-        // for a declarator separator and invent a phantom name from what follows it — the
-        // measured Critical-A shape (`new Map<string, T>()`). Stop before that can happen.
-        exhaustive = false;
-        break;
+        // balanced by counting) — see {@link scanPastAngleBracket}'s doc comment. Rather than
+        // failing the WHOLE FILE open the instant any `<` is seen (round 4's answer, which made
+        // `exhaustive: false` the default outcome for the dominant JSX-arrow component idiom —
+        // fix round 5, task review Critical finding), scan ahead to the current statement's own
+        // boundary and only fail open if a depth-0 comma — the one thing a `<` could actually
+        // have hidden a declarator behind — turned up before it.
+        const scan = scanPastAngleBracket(toks, k, source);
+        if (scan.hadComma) exhaustive = false;
+        k = scan.boundary;
+        continue;
       }
 
       if (kind === SK.CommaToken) {
@@ -367,6 +382,86 @@ function isStatementPosition(toks: readonly Tok[], idx: number, source: string):
   const prev = toks[idx - 1]!;
   if (prev.kind === SK.SemicolonToken || prev.kind === SK.CloseBraceToken) return true;
   return /\n/.test(source.slice(prev.pos, toks[idx]!.pos));
+}
+
+/**
+ * Scans forward from a `<` reached at the declarator walk's own top level to find where the
+ * CURRENT statement actually ends, and whether a depth-0 comma appeared anywhere between the `<`
+ * and that boundary (fix round 5, task review Critical finding).
+ *
+ * WHY THIS EXISTS. Round 4's `<` rule set `exhaustive = false` for the WHOLE FILE the instant a
+ * `<` was seen, on the sound reasoning that a comma between generic type arguments cannot be told
+ * apart from a declarator separator (`a < b, c > d` is a valid comparison, so `<`/`>` cannot be
+ * balanced by counting). That reasoning is correct, but its BLAST RADIUS was wrong: a design-
+ * system component module is a `.tsx` file whose dominant idiom is
+ * `export const Button = () => <box .../>`, and `<box .../>` is JSX markup — confirmed by
+ * tokenizing it: the scanner emits no distinct JSX token kind at all (`./scanner.ts`'s
+ * `scanCodeToken` never produces one), so a JSX element surfaces as a bare `LessThanToken`
+ * followed by ordinary `Identifier`/`StringLiteral`/`GreaterThanToken`/`SlashToken` tokens, no
+ * different from `Map<string, T>`'s. Round 4 could not tell these apart and failed BOTH open for
+ * the whole file — silencing `DESIGN_SYSTEM_COMPONENT_EXPORT_MISSING` on exactly the modules it
+ * exists to police, the same "present, tested, green, and inert on real input" failure mode this
+ * codebase already designs against elsewhere.
+ *
+ * THE NARROWER QUESTION THIS FUNCTION ANSWERS. Whether a `<` opens a real generic argument list is
+ * undecidable by a token walk — that has not changed. But whether that undecidability could have
+ * hidden anything IS decidable: nothing after a `<` can defeat this scan unless a depth-0 comma
+ * sits somewhere between it and the statement's own end, because that comma is the ONLY token
+ * shape that could have been a missed declarator separator. `<box id="b" />` has no comma at all;
+ * `<box a={1} b={2} />`'s only commas (if any) would sit inside a JSX attribute expression's own
+ * brackets, not bare; `Map<string, T>` always does, right there at depth 0. So: scan to the
+ * boundary, watch for a depth-0 comma along the way (bracket runs skipped whole via
+ * {@link skipBalanced}, template literals whole via {@link skipTemplateLiteral} — exactly like the
+ * main walk, so `xs.map((i, k) => i)`'s own comma, sitting inside real parentheses, never counts),
+ * and only fail open when one turns up.
+ *
+ * `boundary` is deliberately the SAME index {@link isStatementPosition} (or a depth-0 `;`, or
+ * end of stream) would independently produce — this function does not itself decide "the list
+ * ends here"; it only locates where the caller's OWN ordinary per-kind dispatch will make that
+ * decision, so `exhaustive = false` vs. unchanged is the only new judgment call, not a second copy
+ * of the boundary logic. An unmatched closer, an orphaned template continuation, or an unbalanced/
+ * unterminated bracket run or template encountered along the way is a shape this function cannot
+ * prove anything about either — treated exactly like finding a comma (fail open), since a
+ * truncated source could just as easily have hidden a declarator as an unread comma could.
+ */
+function scanPastAngleBracket(
+  toks: readonly Tok[],
+  ltIdx: number,
+  source: string,
+): { boundary: number; hadComma: boolean } {
+  let k = ltIdx + 1;
+  let hadComma = false;
+  while (k < toks.length) {
+    const kind = toks[k]!.kind;
+
+    if (kind === SK.SemicolonToken) return { boundary: k, hadComma };
+
+    if (STATEMENT_START_KEYWORDS.has(kind) && isStatementPosition(toks, k, source)) {
+      return { boundary: k, hadComma };
+    }
+
+    if (kind === SK.TemplateHead) {
+      const after = skipTemplateLiteral(toks, k);
+      if (after === null) return { boundary: toks.length, hadComma: true };
+      k = after;
+      continue;
+    }
+
+    if (isOpener(kind)) {
+      const after = skipBalanced(toks, k);
+      if (after === null) return { boundary: toks.length, hadComma: true };
+      k = after;
+      continue;
+    }
+
+    if (isCloser(kind) || kind === SK.TemplateMiddle || kind === SK.TemplateTail) {
+      return { boundary: k, hadComma: true };
+    }
+
+    if (kind === SK.CommaToken) hadComma = true;
+    k += 1;
+  }
+  return { boundary: toks.length, hadComma };
 }
 
 /** `{`/`(`/`[` — every opener the depth counter tracks. */

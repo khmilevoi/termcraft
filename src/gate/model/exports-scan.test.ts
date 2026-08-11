@@ -459,3 +459,122 @@ describe("scanNamedExports — position-proven declarator boundaries (fix round 
     });
   });
 });
+
+// Fix round 5 (task review Critical finding): round 4's `<` rule set `exhaustive: false` for the
+// WHOLE FILE the instant any `<` was seen — sound in isolation (a `<`/`>` pair genuinely cannot
+// be balanced by counting, since `a < b, c > d` is a valid comparison), but its blast radius was
+// wrong. A design-system component module is a `.tsx` file whose dominant idiom is an arrow
+// function returning JSX (`export const Button = () => <box .../>`), and JSX markup tokenizes as
+// a bare `LessThanToken` plus ordinary tokens — there is no distinct JSX token kind at the
+// scanner level (confirmed by tokenizing `<box id="b" />` directly: it lexes as
+// `LessThanToken, Identifier, Identifier, EqualsToken, StringLiteral, GreaterThanToken`, no
+// different in kind from `Map<string, T>`'s). So round 4 reported `exhaustive: false` for
+// essentially every real component module, silencing `DESIGN_SYSTEM_COMPONENT_EXPORT_MISSING` on
+// exactly the files it exists to police — a check that is present, tested, green, and inert on
+// real input.
+//
+// The fix (`scanPastAngleBracket`) narrows the blast radius from "the whole file" to "only when a
+// name could actually have been missed": scan ahead from the `<` to the current statement's own
+// boundary, and only fail open if a depth-0 comma — the one thing a `<` could have hidden a
+// declarator separator behind — turned up before it. See `scanPastAngleBracket`'s doc comment.
+describe("scanNamedExports — a `<` costs only what it must (fix round 5)", () => {
+  describe("JSX component modules stay exhaustive", () => {
+    test("a single arrow component", () => {
+      const result = names('export const Button = () => <box id="b" />', "jsx");
+      expect(result.names.has("Button")).toBe(true);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    test("two arrow components in one file", () => {
+      const result = names(
+        'export const Button = () => <box id="b" />\nexport const Panel = () => <box id="p" />',
+        "jsx",
+      );
+      expect([...result.names].sort()).toEqual(["Button", "Panel"]);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    test("nested JSX children", () => {
+      const result = names('export const Button = () => <box id="b"><text>hi</text></box>', "jsx");
+      expect(result.names.has("Button")).toBe(true);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    test("JSX attribute expressions ({1}, {2}) do not trip the rule", () => {
+      const result = names("export const Button = () => <box a={1} b={2} />", "jsx");
+      expect(result.names.has("Button")).toBe(true);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    test("JSX with a .map callback containing a comma (the comma sits inside real parens)", () => {
+      const result = names("export const Button = () => <box>{xs.map((i, k) => i)}</box>", "jsx");
+      expect(result.names.has("Button")).toBe(true);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    // Deliberately still `exhaustive: false`: a real generic-argument comma (`new Map<string,
+    // T>()`) sits alongside the JSX component in the SAME file, so the whole file fails open —
+    // this is Critical A's fix still doing its job, not a regression of this round's fix.
+    test("a JSX component alongside a new Map<string, T>() export is deliberately still exhaustive: false", () => {
+      const result = names(
+        'export const Button = () => <box id="b" />\nexport const registry = new Map<string, number>()',
+        "jsx",
+      );
+      expect([...result.names].sort()).toEqual(["Button", "registry"]);
+      expect(result.exhaustive).toBe(false);
+    });
+  });
+
+  describe("Critical A shapes stay exhaustive: false (regression guard)", () => {
+    test.each([
+      "export const registry = new Map<string, ComponentSpec>();",
+      "export const cache: Record<string, Comp> = {}",
+      "export const p: Promise<Result<A, B>> = q",
+      "export const v = pick<A, B>(x), w = 2",
+      "export const a = x as Map<Foo, Bar>, b = 2",
+      "export const f = <T, U>(a: T, b: U) => a",
+    ])("%s still reports exhaustive: false", (source) => {
+      expect(names(source).exhaustive).toBe(false);
+    });
+  });
+
+  describe("adversarial pass on the new `<` handling (fix round 5)", () => {
+    test("JSX generics <Foo<T> /> do not invent a phantom name and stay exhaustive", () => {
+      const result = names("export const Foo = () => <Foo<T> />", "jsx");
+      expect(result.names.has("Foo")).toBe(true);
+      expect(result.names.has("T")).toBe(false);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    test("a comparison chain (1 < 2 < 3) with a real trailing comma fails open", () => {
+      const result = names("export const a = 1 < 2 < 3, b = 4");
+      expect(result.names.has("a")).toBe(true);
+      expect(result.exhaustive).toBe(false);
+    });
+
+    test("a `<` inside a template interpolation never reaches the `<` rule at all", () => {
+      const result = names("export const a = `${x < 1}`, b = 2");
+      expect([...result.names].sort()).toEqual(["a", "b"]);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    test("a `<` inside a skipped function body never reaches the `<` rule at all", () => {
+      const result = names("export const a = function () { return x < 1 }, b = 2");
+      expect([...result.names].sort()).toEqual(["a", "b"]);
+      expect(result.exhaustive).toBe(true);
+    });
+
+    test("a `<` in a MIDDLE declarator with a real comma after it fails open but keeps prior names", () => {
+      const result = names("export const a = 1, b = x < 1, c = 2");
+      expect([...result.names].sort()).toEqual(["a", "b"]);
+      expect(result.names.has("c")).toBe(false);
+      expect(result.exhaustive).toBe(false);
+    });
+
+    test("a `<` in the LAST declarator, with nothing after it, stays exhaustive", () => {
+      const result = names("export const a = 1, b = x < 1");
+      expect([...result.names].sort()).toEqual(["a", "b"]);
+      expect(result.exhaustive).toBe(true);
+    });
+  });
+});
