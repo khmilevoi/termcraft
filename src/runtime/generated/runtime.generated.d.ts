@@ -470,10 +470,10 @@ declare module "@termcraft/runtime" {
       readonly children?: unknown;
       /** Uniform inner padding inside the border. */
       readonly padding?: number;
-      /** A semantic token for the border; defaults to `border`. Design variants: `accent` (active/popup), `accentHi` (hover), `danger` (error), `line` (dimmed). */
-      readonly borderColor?: keyof ThemeTokens;
-      /** A semantic token for the title; defaults to `foreground`. Design variants: `accentHi` (popup/active), `foregroundMuted` (welded sub-panel). */
-      readonly titleColor?: keyof ThemeTokens;
+      /** The border hue; defaults to the theme's `border`. Design variants: `t.accent` (active/popup), `t.accentHi` (hover), `t.danger` (error), `t.line` (dimmed). */
+      readonly borderColor?: Color;
+      /** The title hue; defaults to the theme's `foreground`. Design variants: `t.accentHi` (popup/active), `t.foregroundMuted` (welded sub-panel). */
+      readonly titleColor?: Color;
   }
   /**
    * A titled, bordered column container (design-system §3.2). Draws the design's rounded
@@ -506,8 +506,8 @@ declare module "@termcraft/runtime" {
    * (runtime-api §3.2). It exposes the raw flexbox + border/background surface a
    * bespoke widget needs (a superset of the semantic `Row`/`Column`) WITHOUT letting
    * an authored page import an `@opentui/*` path or bind to its release. Colors are
-   * semantic theme-token names, never raw hues; the mandatory `id` flows through for
-   * host geometry and shell select/pin.
+   * `Color` values — a page reads them off its own `useTokens()` (spec §4.5); the mandatory
+   * `id` flows through for host geometry and shell select/pin.
    */
   interface BoxProps {
       /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
@@ -523,10 +523,10 @@ declare module "@termcraft/runtime" {
       readonly width?: number;
       readonly height?: number;
       readonly border?: boolean;
-      /** A semantic token for the border hue (only meaningful with `border`). */
-      readonly borderColor?: keyof ThemeTokens;
-      /** A semantic token for the fill hue. */
-      readonly background?: keyof ThemeTokens;
+      /** The border hue (only meaningful with `border`). Read one off `useTokens()` (spec §4.5). */
+      readonly borderColor?: Color;
+      /** The fill hue. Read one off `useTokens()` (spec §4.5). */
+      readonly background?: Color;
   }
   /** The low-level box escape hatch (§3.2). Renders one OpenTUI `<box>` from token-resolved props. */
   function Box(props: BoxProps): React.ReactNode;
@@ -561,8 +561,8 @@ declare module "@termcraft/runtime" {
       readonly id: string;
       /** Orientation of the rule; defaults to `horizontal`. */
       readonly direction?: "horizontal" | "vertical";
-      /** A semantic token for the rule; defaults to `line` (the design's subtle-divider hue). */
-      readonly color?: keyof ThemeTokens;
+      /** The rule's hue; defaults to the theme's `line` (the design's subtle-divider hue). */
+      readonly color?: Color;
   }
   /**
    * A one-cell themed rule (design-system §3.2). A `horizontal` separator is a

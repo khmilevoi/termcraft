@@ -5,7 +5,7 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
-import { themeTokens } from "../model/tokens";
+import { activeTokens } from "../model/tokens";
 import { Box } from "./primitive";
 import { Text } from "./text";
 
@@ -22,7 +22,7 @@ describe("Box low-level primitive (§3.2 escape hatch)", () => {
     const handle = await createHeadlessRenderer({ w: 10, h: 2 });
     open = handle;
     handle.mount(
-      <Box id="panel" background="surface" padding={0}>
+      <Box id="panel" background={activeTokens().surface} padding={0}>
         <Text id="panel-body">body</Text>
       </Box>,
     );
@@ -31,14 +31,14 @@ describe("Box low-level primitive (§3.2 escape hatch)", () => {
     const body = allRuns(frame).find((run) => run.text.includes("body"));
     expect(body?.text).toContain("body");
     const filled = allRuns(frame).find((run) => run.bg !== "default");
-    expect(filled && extractRgb(filled.bg)).toBe<string>(themeTokens("dark-default").surface);
+    expect(filled && extractRgb(filled.bg)).toBe<string>(activeTokens().surface);
   });
 
   test("a bordered box paints the token border hue", async () => {
     const handle = await createHeadlessRenderer({ w: 8, h: 3 });
     open = handle;
     handle.mount(
-      <Box id="bordered" border borderColor="accent">
+      <Box id="bordered" border borderColor={activeTokens().accent}>
         <Text id="bordered-x">x</Text>
       </Box>,
     );
@@ -48,9 +48,15 @@ describe("Box low-level primitive (§3.2 escape hatch)", () => {
         typeof run.fg === "object" &&
         run.fg !== null &&
         "rgb" in run.fg &&
-        run.fg.rgb === themeTokens("dark-default").accent &&
+        run.fg.rgb === activeTokens().accent &&
         run.text.trim() !== "x",
     );
     expect(border).toBeDefined();
+  });
+
+  test("a token NAME is no longer a colour (spec §4.5)", () => {
+    // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().surface`.
+    const rejected = <Box id="rejected" background="surface" />;
+    expect(rejected).toBeDefined();
   });
 });

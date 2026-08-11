@@ -1,5 +1,4 @@
-import { activeTokens } from "../model/tokens";
-import type { ThemeTokens } from "../types";
+import type { Color } from "../types";
 
 const ALIGN = {
   start: "flex-start",
@@ -20,8 +19,8 @@ const JUSTIFY = {
  * (runtime-api §3.2). It exposes the raw flexbox + border/background surface a
  * bespoke widget needs (a superset of the semantic `Row`/`Column`) WITHOUT letting
  * an authored page import an `@opentui/*` path or bind to its release. Colors are
- * semantic theme-token names, never raw hues; the mandatory `id` flows through for
- * host geometry and shell select/pin.
+ * `Color` values — a page reads them off its own `useTokens()` (spec §4.5); the mandatory
+ * `id` flows through for host geometry and shell select/pin.
  */
 export interface BoxProps {
   /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
@@ -37,15 +36,14 @@ export interface BoxProps {
   readonly width?: number;
   readonly height?: number;
   readonly border?: boolean;
-  /** A semantic token for the border hue (only meaningful with `border`). */
-  readonly borderColor?: keyof ThemeTokens;
-  /** A semantic token for the fill hue. */
-  readonly background?: keyof ThemeTokens;
+  /** The border hue (only meaningful with `border`). Read one off `useTokens()` (spec §4.5). */
+  readonly borderColor?: Color;
+  /** The fill hue. Read one off `useTokens()` (spec §4.5). */
+  readonly background?: Color;
 }
 
 /** The low-level box escape hatch (§3.2). Renders one OpenTUI `<box>` from token-resolved props. */
 export function Box(props: BoxProps) {
-  const tokens = activeTokens();
   return (
     <box
       id={props.id}
@@ -58,8 +56,8 @@ export function Box(props: BoxProps) {
       width={props.width}
       height={props.height}
       border={props.border}
-      borderColor={props.borderColor !== undefined ? tokens[props.borderColor] : undefined}
-      backgroundColor={props.background !== undefined ? tokens[props.background] : undefined}
+      borderColor={props.borderColor}
+      backgroundColor={props.background}
     >
       {props.children}
     </box>
