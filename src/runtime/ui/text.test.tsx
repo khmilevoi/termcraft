@@ -5,7 +5,7 @@ import { extractRgb } from "host/render/model/color";
 import { createHeadlessRenderer } from "host/render/model/renderer";
 import type { RenderHandle } from "host/render/types";
 
-import { themeTokens } from "../model/tokens";
+import { activeTokens } from "../model/tokens";
 import { Text } from "./text";
 
 let open: RenderHandle | null = null;
@@ -30,17 +30,32 @@ describe("Text component (design-system §3.2)", () => {
     expect(lineText(handle.capture(), 0)).toContain("hello");
   });
 
-  test("a semantic color token resolves to the theme's hue on the styled run", async () => {
+  test("an explicit Color renders as that hue on the styled run", async () => {
     const handle = await createHeadlessRenderer({ w: 8, h: 1 });
     open = handle;
     handle.mount(
-      <Text id="danger" color="danger">
+      <Text id="danger" color={activeTokens().danger}>
         x
       </Text>,
     );
     await handle.render();
     const styled = lineRuns(handle.capture(), 0).find((run) => run.text.includes("x"));
-    expect(styled && extractRgb(styled.fg)).toBe<string>(themeTokens("dark-default").danger);
+    expect(styled && extractRgb(styled.fg)).toBe<string>(activeTokens().danger);
+  });
+
+  test("a token NAME is no longer a colour (spec §4.5)", () => {
+    // @ts-expect-error — `Color` is `#rrggbb`; the checked path is `useTokens().danger`.
+    const rejected = <Text id="rejected" color="danger" />;
+    expect(rejected).toBeDefined();
+  });
+
+  test("with no color it falls back to the active theme's foreground", async () => {
+    const handle = await createHeadlessRenderer({ w: 8, h: 1 });
+    open = handle;
+    handle.mount(<Text id="plain">y</Text>);
+    await handle.render();
+    const styled = lineRuns(handle.capture(), 0).find((run) => run.text.includes("y"));
+    expect(styled && extractRgb(styled.fg)).toBe<string>(activeTokens().foreground);
   });
 
   test("bold + dim set the protocol attribute mask (BOLD=1, DIM=2)", async () => {

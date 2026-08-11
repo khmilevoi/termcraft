@@ -44,12 +44,12 @@ export function List(props: ListProps) {
             flexDirection="row"
             backgroundColor={selected ? tokens.selection : undefined}
           >
-            <Text id={`${props.id}-${item.id}-marker`} color="accent">
+            <Text id={`${props.id}-${item.id}-marker`} color={tokens.accent}>
               {selected ? "▸ " : "  "}
             </Text>
             <Text
               id={`${props.id}-${item.id}`}
-              color={selected ? "selectionFg" : "foreground"}
+              color={selected ? tokens.selectionFg : tokens.foreground}
               bold={selected}
             >
               {item.label}

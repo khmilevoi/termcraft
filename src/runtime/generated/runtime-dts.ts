@@ -620,8 +620,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       readonly id: string;
       /** The series to plot; an empty series renders empty. */
       readonly values: readonly number[];
-      /** A semantic theme token name for the glyphs; defaults to \`success\` (the design's sparkline green). */
-      readonly color?: keyof ThemeTokens;
+      /** The glyph hue; defaults to the theme's \`success\` (the design's sparkline green). */
+      readonly color?: Color;
   }
   /**
    * A single-line block-glyph trend (design-system §3.2). Scales each value between
@@ -707,8 +707,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
       /** Stable id selection and pins key on (§3.2). Mandatory on every catalog component. */
       readonly id: string;
       readonly children?: string | number;
-      /** A semantic theme token name; defaults to \`foreground\`. Pages never pass raw hues. */
-      readonly color?: keyof ThemeTokens;
+      /** The text hue; defaults to the theme's \`foreground\`. Read one off \`useTokens()\` (spec §4.5). */
+      readonly color?: Color;
       readonly bold?: boolean;
       readonly dim?: boolean;
   }
@@ -716,8 +716,9 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * Themed inline text (design-system, runtime-api §3.2). Renders a single OpenTUI
    * \`<text>\` with a token-resolved foreground and an attribute mask; the mandatory
    * \`id\` flows to the element so the host can answer geometry queries (checkHit/
-   * rectOf) and the shell can select/pin it. Colors are semantic token names, never
-   * raw hues, so a theme swap re-colors every page without editing sources.
+   * rectOf) and the shell can select/pin it. The hue is a \`Color\` the caller supplies
+   * — a page reads one off its own \`useTokens()\` (spec §4.5), so the project's design
+   * system owns the palette and the catalog owns only the default.
    */
   function Text(props: TextProps): React.ReactNode;
 

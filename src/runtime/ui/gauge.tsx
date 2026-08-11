@@ -1,3 +1,4 @@
+import { activeTokens } from "../model/tokens";
 import { Text } from "./text";
 
 /** Props for the themed `Gauge` component. `id` is the mandatory stable id (§3.2). */
@@ -33,23 +34,24 @@ function clamp01(value: number): number {
  * as one contiguous bar. Colors + glyphs match the design engine's gauge.
  */
 export function Gauge(props: GaugeProps) {
+  const tokens = activeTokens();
   const width = props.width ?? DEFAULT_WIDTH;
   const filled = Math.round(clamp01(props.value) * width);
   const empty = width - filled;
   return (
     <box id={props.id} flexDirection="row">
       {filled > 0 ? (
-        <Text id={`${props.id}-filled`} color="accent">
+        <Text id={`${props.id}-filled`} color={tokens.accent}>
           {FILLED_GLYPH.repeat(filled)}
         </Text>
       ) : null}
       {empty > 0 ? (
-        <Text id={`${props.id}-empty`} color="border">
+        <Text id={`${props.id}-empty`} color={tokens.border}>
           {EMPTY_GLYPH.repeat(empty)}
         </Text>
       ) : null}
       {props.label !== undefined ? (
-        <Text id={`${props.id}-label`} color="foregroundMuted">
+        <Text id={`${props.id}-label`} color={tokens.foregroundMuted}>
           {` ${props.label}`}
         </Text>
       ) : null}
