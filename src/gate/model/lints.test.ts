@@ -622,4 +622,67 @@ describe("lintTokenNameColors (design-systems §4.5, §7, §9)", () => {
     const [warning] = only(`<Text\n  id="t"\n  color="accent"\n/>`);
     expect(warning?.line).toBe(3);
   });
+
+  describe("the message is bounded plain text (review round 1, Finding 1)", () => {
+    // MEASURED: an attribute value carrying a raw ESC byte used to produce a warning whose
+    // `message` contained that same control byte, before `boundedPlainText` (`./type-check`,
+    // reused rather than duplicated) was threaded through the interpolated attribute value. Built
+    // via `String.fromCharCode` rather than an escape embedded in the template literal, so the
+    // ESC byte exists only at RUNTIME and this source file itself stays plain ASCII.
+    test("a control character (ESC) in the attribute value never reaches the message", () => {
+      const esc = String.fromCharCode(27);
+      const [warning] = only(`<box id="b" color="${esc}[31mred" />`);
+      expect(warning?.message).toBeDefined();
+      // eslint-disable-next-line no-control-regex -- the assertion IS that no control byte survives
+      expect(/[\x00-\x1f\x7f-\x9f]/.test(warning?.message ?? "")).toBe(false);
+      expect(warning?.message).toContain("[31mred");
+    });
+
+    test("an attribute value past the 200-char cap is truncated, not carried verbatim", () => {
+      const long = "a".repeat(250);
+      const [warning] = only(`<box id="b" color="${long}" />`);
+      expect(warning?.message).toBeDefined();
+      // The full 250-char run appears nowhere — `boundedPlainText` caps it at 200 before either
+      // interpolation, so the untruncated value cannot survive into the message even once.
+      expect(warning?.message).not.toContain(long);
+      expect(warning?.message).toContain("...");
+    });
+  });
+
+  describe("gated to JSX attribute position, never a bare identifier (review round 1, Finding 3)", () => {
+    // D10 specs this lint as firing on a JSX attribute; the type checker never rejects any of
+    // these four shapes, so warning on them would be advice ("rewrite it as `color={t.accent}`")
+    // that makes no sense outside JSX, and it would contradict the doc's own "does not duplicate
+    // that verdict" claim — verified false positives from the review, now pinned clean.
+    test("a plain variable declaration is not a JSX attribute", () => {
+      expect(only(`const color = "accent";\n`)).toEqual([]);
+    });
+
+    test("a property assignment is not a JSX attribute", () => {
+      expect(only(`theme.color = "accent";\n`)).toEqual([]);
+    });
+
+    test("a `let` binding is not a JSX attribute", () => {
+      expect(only(`let background = "surface"\n`)).toEqual([]);
+    });
+
+    test("a default parameter value is not a JSX attribute", () => {
+      expect(only(`function f(color = "accent") {}\n`)).toEqual([]);
+    });
+
+    test("a relational comparison right after an identifier is not a JSX open — `a < b` stays clean", () => {
+      expect(only(`const x = a < b;\nconst color = "accent";\n`)).toEqual([]);
+    });
+
+    test("a CLOSING tag's `</Foo>` never opens the latch on its own", () => {
+      // The `/` right after `<` fails the "next token is an Identifier" check that OPENS the
+      // latch — no separate slash guard needed. Regression pin for that mechanism specifically.
+      expect(only(`<Text id="t">hi</Text>`)).toEqual([]);
+    });
+
+    test("a dotted (member-expression) tag name still opens the latch", () => {
+      const [warning] = only(`<Kit.Text id="t" color="accent">hi</Kit.Text>`);
+      expect(warning?.kind).toBe("token-name-as-color");
+    });
+  });
 });

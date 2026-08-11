@@ -1,9 +1,10 @@
 import type { PageSlug } from "entities/page";
 
 import type { GateWarning } from "../types";
-import { readHyphenatedName, scanJsx } from "./jsx";
+import { opensJsxPunctuation, readHyphenatedName, scanJsx } from "./jsx";
 import { SK, lineColOf, tokenize } from "./lexer";
-import type { SourceStreamTruncatedError, SourceSyntax, Tok } from "./lexer";
+import type { SourceStreamTruncatedError, SourceSyntax, SyntaxKind, Tok } from "./lexer";
+import { boundedPlainText } from "./type-check";
 
 /** Global identifiers whose call breaks the deterministic render (§6.3 warning lints). */
 const TIMER_IDENTIFIERS = new Set<string>([
@@ -353,16 +354,36 @@ function isColorAttribute(name: string): boolean {
 }
 
 /**
- * The `token-name-as-color` warning (design-systems §4.5, §9). `keyof ThemeTokens` became `Color`
- * — a `#rrggbb` string — so `color="foregroundMuted"` is now a fatal `TS2322`. This lint does not
- * duplicate that verdict; it attaches the exact rewrite to it, because §9's migration window is
- * deliberately red and "each diagnostic carries its exact rewrite" is what makes that window
- * legible rather than broken.
+ * The `token-name-as-color` warning (design-systems §4.5, §9, D10). `keyof ThemeTokens` became
+ * `Color` — a `#rrggbb` string — so `color="foregroundMuted"` is now a fatal `TS2322`. This lint
+ * does not duplicate that verdict; it attaches the exact rewrite to it, because §9's migration
+ * window is deliberately red and "each diagnostic carries its exact rewrite" is what makes that
+ * window legible rather than broken.
  *
  * WHAT IT CAN SEE, AND NOTHING MORE (`lintDeterminism`'s own recorded principle): a name that
  * merges to a catalog colour prop, followed by `=` and a STRING LITERAL that does not start with
- * `#`. Three deliberate narrowings:
+ * `#`, INSIDE A JSX OPENING TAG. Four deliberate narrowings:
  *
+ *  - D10 SPECS THIS AS A **JSX ATTRIBUTE**, so the scan is gated to JSX opening-tag position (task
+ *    9 review round 1, Finding 3 — a defect fix, not part of the original brief). Without this
+ *    gate, `isColorAttribute`'s bare name match fires on any `color`/`background`/`*Color`
+ *    IDENTIFIER anywhere in the file — `const color = "accent"`, `theme.color = "accent"`,
+ *    `function f(color = "accent") {}` — none of which the type checker rejects, so the doc's own
+ *    "this lint does not duplicate that verdict" claim would be false for them, and the rewrite
+ *    advice ("wrap it as `color={t.accent}`") is nonsense outside JSX. THE LATCH, a minimal
+ *    approximation and NOT scope analysis (nor served from `./jsx`'s `JsxElement`, which records
+ *    no attribute list — see this function's header for why that reader is the wrong tool here):
+ *    a `<` token that {@link opensJsxPunctuation} judges is JSX punctuation (not a relational
+ *    operator — the exact same call `./jsx`'s real reader and `./lexer`'s `tokenize` both use to
+ *    settle the identical ambiguity) AND whose next token is an `Identifier` (a tag name, plain or
+ *    the first segment of a dotted member-expression tag like `Kit.Text`) OPENS the latch; a bare
+ *    `>` closes it. A CLOSING tag (`</Foo>`) never opens it: the token after its `<` is `/`
+ *    (`SlashToken`), not an `Identifier`, so the "next token" check alone excludes it — no separate
+ *    slash check needed. KNOWN LIMITATION, stated rather than hidden: the latch is a single
+ *    boolean, not a stack, so a JSX element nested inside an attribute's `{}` expression
+ *    (`<Panel icon={<Icon color="x" />} />`) closes the OUTER latch at the inner element's own
+ *    `/>`, silently exempting whatever of the outer tag's own attributes follow it. Scope analysis
+ *    would fix this properly; a token scan cannot, and D10 forbids growing this lint into one.
  *  - `=` ONLY, never `:`. `extractDeclaredIds` accepts both because an `id` is equally an id in a
  *    JSX attribute and in an object literal. A `{ color: "accent" }` in an object literal may be a
  *    props bag or may be any other object with a `color` field, and this lint has no way to tell —
@@ -377,6 +398,16 @@ function isColorAttribute(name: string): boolean {
  * `{ name, next }`, no `pos` field of its own, so `toks[nameRead.next - 1]` (the name's last
  * merged token) is the real position to use, matching `extractDeclaredIds`'s own index-only walk
  * rather than inventing a field that reader does not have.
+ *
+ * THE ATTRIBUTE VALUE IS SANITIZED BEFORE IT REACHES THE MESSAGE (task 9 review round 1,
+ * Finding 1). `value.value` is the scanner's COOKED string-literal text lifted straight from
+ * source — unbounded in length and able to carry raw control bytes, including ESC — so writing it
+ * into `GateWarning.message` unsanitized would violate the plan's "diagnostics are bounded plain
+ * text, never terminal control sequences" constraint the same way an unsanitized compiler panic
+ * would. `boundedPlainText` (`./type-check`) is the ALREADY-WRITTEN sanitizer for exactly this
+ * shape of hazard; reused here rather than duplicated. The attribute NAME needs no sanitizing of
+ * its own — it is built entirely from `Identifier`/`MinusToken` tokens, and neither can lex a
+ * control byte — so only the value is passed through it.
  */
 export function lintTokenNameColors(
   source: string,
@@ -385,9 +416,27 @@ export function lintTokenNameColors(
   const toks = tokenize(source, syntax);
   if (toks instanceof Error) return toks;
   const warnings: GateWarning[] = [];
+  let previous: SyntaxKind = SK.EndOfFile;
+  let inOpenTag = false;
 
   for (let i = 0; i < toks.length; i += 1) {
-    if (toks[i]!.kind !== SK.Identifier) continue;
+    const t = toks[i]!;
+
+    if (t.kind === SK.GreaterThanToken) {
+      inOpenTag = false;
+      previous = t.kind;
+      continue;
+    }
+    if (t.kind === SK.LessThanToken) {
+      inOpenTag = opensJsxPunctuation(t.kind, previous) && toks[i + 1]?.kind === SK.Identifier;
+      previous = t.kind;
+      continue;
+    }
+    if (t.kind !== SK.Identifier) {
+      previous = t.kind;
+      continue;
+    }
+
     // Kind already checked Identifier, so this is never null — the same assertion
     // `extractDeclaredIds` makes for the same reason.
     const nameRead = readHyphenatedName(toks, i)!;
@@ -395,16 +444,19 @@ export function lintTokenNameColors(
     const nameEnd = toks[nameRead.next - 1]!;
     const sep = toks[nameRead.next];
     const value = toks[nameRead.next + 1];
+    previous = nameEnd.kind; // the last raw token the merge actually consumed
     i = nameRead.next - 1; // the loop's own `i += 1` lands exactly on `nameRead.next`
+    if (!inOpenTag) continue;
     if (!isColorAttribute(name)) continue;
     if (sep === undefined || sep.kind !== SK.EqualsToken) continue;
     if (value === undefined || value.kind !== SK.StringLiteral) continue;
     if (value.value.startsWith("#")) continue;
+    const safeValue = boundedPlainText(value.value);
     warnings.push({
       kind: "token-name-as-color",
       message:
-        `\`${name}="${value.value}"\` is a token NAME, but colour props now take a concrete ` +
-        `\`#rrggbb\` value — rewrite it as \`${name}={t.${value.value}}\` and add ` +
+        `\`${name}="${safeValue}"\` is a token NAME, but colour props now take a concrete ` +
+        `\`#rrggbb\` value — rewrite it as \`${name}={t.${safeValue}}\` and add ` +
         `\`const t = useTokens()\` at the top of the component (import \`useTokens\` from your ` +
         `design system's \`system/tokens\` module).`,
       ...lineColOf(source, nameEnd.pos),
