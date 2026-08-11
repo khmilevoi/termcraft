@@ -106,3 +106,7 @@ mandatory `id`.
   `{ text, color?, background?, bold?, italic?, underline? }` runs). Optional `borders` (off),
   `borderColor`, `textColor`, `background`, `columnGap` (1), `wrap` (`"word"`), `cellPadding`,
   `width`/`height`. Row selection belongs to `Table`, not here.
+- `FrameBuffer` — a raw cell buffer for bespoke graphics; the last escape hatch. Required: `id`,
+  `width`, `height`, and `draw(surface)`, which paints through `clear`, `setCell`, `drawText` and
+  `fillRect`. It renders nothing until `draw` paints into it, and writes outside the buffer are
+  dropped.

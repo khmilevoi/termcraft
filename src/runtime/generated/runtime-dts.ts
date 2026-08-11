@@ -355,6 +355,60 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    */
   function Column(props: ColumnProps): React.ReactNode;
 
+  // ── src/runtime/ui/frame-buffer
+  /**
+   * The cell surface a \`FrameBuffer\`'s \`draw\` callback paints into (spec §6.1's "raw drawing …
+   * the last escape hatch"). Every colour is a \`Color\` value read off \`useTokens()\`; the
+   * underlying \`OptimizedBuffer\` is never handed out, so a page cannot reach the renderer.
+   * Coordinates are buffer-local, origin top-left; a write outside the buffer is DROPPED.
+   */
+  interface FrameBufferSurface {
+      /** The buffer's width in cells — the \`width\` prop. */
+      readonly width: number;
+      /** The buffer's height in cells — the \`height\` prop. */
+      readonly height: number;
+      /** Fill the whole buffer with one hue. */
+      clear(color: Color): void;
+      /** Paint one cell. */
+      setCell(x: number, y: number, glyph: string, color: Color, background?: Color): void;
+      /** Paint a run of text starting at \`x\`,\`y\`. */
+      drawText(text: string, x: number, y: number, color: Color, background?: Color): void;
+      /** Fill a rectangle with one hue. */
+      fillRect(x: number, y: number, width: number, height: number, color: Color): void;
+  }
+  /** Props for the low-level \`FrameBuffer\`. \`id\` is the mandatory stable id (§3.2). */
+  interface FrameBufferProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      /** Buffer width in cells. REQUIRED by the underlying renderable (spec §6.1's spike). */
+      readonly width: number;
+      /** Buffer height in cells. REQUIRED by the underlying renderable (spec §6.1's spike). */
+      readonly height: number;
+      /**
+       * Paints the buffer. REQUIRED: the renderable renders NOTHING until it is drawn into (spec
+       * §6.1's spike), so an optional \`draw\` would make the blank render the default.
+       */
+      readonly draw: (surface: FrameBufferSurface) => void;
+  }
+  /**
+   * A raw cell buffer for bespoke graphics — spec §6.1's "last escape hatch". Renders the OpenTUI
+   * \`FrameBufferRenderable\`, a renderable with no intrinsic tag, registered by
+   * {@link registerRenderableTags}.
+   *
+   * HOW \`draw\` REACHES THE BUFFER, and why a \`ref\` is used INTERNALLY. The renderable exposes its
+   * buffer only as an instance field and renders nothing until something paints into it (spec
+   * §6.1's spike), so an instance handle is the only path. §6 forbids PASSING \`ref\` through to an
+   * authored page, which this does not do: the callback ref below is termcraft's own, the page sees
+   * only {@link FrameBufferSurface}, and the renderable never escapes. Because the inline callback's
+   * identity changes on every render, React re-invokes it on every re-render, so a theme change
+   * repaints the buffer.
+   *
+   * DETERMINISM (spec §6.3): the whole rendered state is a pure function of \`draw\`, \`width\` and
+   * \`height\`, with no internal offset, focus or selection — so the export frame equals the preview
+   * frame for the same props, which is what \`./frame-buffer.test.tsx\` asserts.
+   */
+  function FrameBuffer(props: FrameBufferProps): React.ReactNode;
+
   // ── src/runtime/ui/gauge
   /** Props for the themed \`Gauge\` component. \`id\` is the mandatory stable id (§3.2). */
   interface GaugeProps {
@@ -889,6 +943,8 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
   export type { ScrollBarProps };
   export { TextTable };
   export type { TextTableProps, TextTableCell, TextTableSpan };
+  export { FrameBuffer };
+  export type { FrameBufferProps, FrameBufferSurface };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {

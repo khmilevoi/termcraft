@@ -93,3 +93,5 @@ export { ScrollBar } from "./ui/scroll-bar";
 export type { ScrollBarProps } from "./ui/scroll-bar";
 export { TextTable } from "./ui/text-table";
 export type { TextTableProps, TextTableCell, TextTableSpan } from "./ui/text-table";
+export { FrameBuffer } from "./ui/frame-buffer";
+export type { FrameBufferProps, FrameBufferSurface } from "./ui/frame-buffer";
