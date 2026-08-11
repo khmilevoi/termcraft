@@ -142,16 +142,85 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * one-member thing and says so in its own type.
    */
   type SeedThemeId = "dark-default";
-  /** Resolve a theme id to its token palette (§5.4). Closed to the declared \`ThemeId\`. */
-  function themeTokens(id: SeedThemeId): ThemeTokens;
-  /** The default theme every MVP page renders against until a theme override lands. */
+  /**
+   * The \`dark-default\` seed palette. These are the design system's REAL hues, taken 1:1 from
+   * \`design/termcraft-engine.js\`'s \`pal\` object (a warm amber-on-near-black terminal theme) — not
+   * a placeholder, and not invented here.
+   *
+   * WHAT IT IS NOW (spec §4.6, §9). It is no longer "the palette a page renders against": that is
+   * the project's own \`design/system/design-system.json\`, delivered through
+   * {@link themeTokensAtom}. Two jobs survive:
+   *   1. the SEED the project-create scaffold and the mechanical migration copy into a new
+   *      project's manifest (plan P4 imports it from this module by path);
+   *   2. {@link themeTokensAtom}'s pre-mount default — see that atom's own note.
+   */
+  const DARK_DEFAULT: TokenMap;
+  /** Resolve the SEED theme id to its palette. Closed to {@link SeedThemeId} — see its note. */
+  function themeTokens(id: SeedThemeId): TokenMap;
+  /** The seed theme's id — the scaffold's starting point, not a project's active theme. */
   const DEFAULT_THEME_ID: SeedThemeId;
   /**
-   * The active theme's tokens for a component to render against. MVP resolves the
-   * single \`dark-default\` theme; this is the seam a theme context / preview-override
-   * atom (§6) replaces later, so components never hard-code hues — they call this.
+   * The active theme's id (spec §4.6). A HOST INPUT, exactly like \`hostModeAtom\` in
+   * \`./capabilities\`: the host child writes it once per mount from \`HostSessionSpec.theme\` through
+   * {@link seedThemeCapability}, and a page READS it (via \`themeCapability()\`) and must not write
+   * it.
    */
-  function activeTokens(): ThemeTokens;
+  const themeIdAtom: import("@reatom/core").Atom<string, [newState: string]>;
+  /**
+   * The active theme's token map (spec §4.6) — the single source every colour default in the
+   * component catalog resolves against. A HOST INPUT, written once per mount through
+   * {@link seedThemeCapability}; the values come from the project's
+   * \`design/system/design-system.json\`, which is inside \`treeRoot\` and covered by \`expectedFiles\`,
+   * so no protocol change carries them.
+   *
+   * WHY THE DEFAULT IS THE COMPILED SEED AND NOT AN EMPTY MAP. Every catalog default reads a core
+   * role off this atom, so an empty map would render a page with no colours at all — §4.1's own
+   * argument ("a half-specified page reads as a broken render rather than an authored one"). The
+   * mount seeds before the first render, so in a real child this default is never what a frame is
+   * drawn from; it is what makes a runtime unit test and an un-seeded process coherent.
+   */
+  const themeTokensAtom: import("@reatom/core").Atom<TokenMap, [newState: TokenMap]>;
+  /**
+   * THE SEAM the host wires (spec §4.6; plan P4). One named transition that moves BOTH theme
+   * atoms together, so a mount can never leave the id and the values describing different themes.
+   *
+   * It is an action rather than two \`atom.set\` calls at the call site because this is a grouped
+   * transition (Reatom RTM-S04), not an identity setter (RTM-S01) — it writes two atoms from one
+   * input and names the transition for tracing.
+   *
+   * P4 calls it from the host child's mount handler
+   * (\`src/host/session/model/host-state-machine.ts\`'s \`handleMount\`), BEFORE \`handle.mount(...)\`,
+   * importing it as \`runtime/model/tokens\` — the same deep-import shape
+   * \`src/entrypoint/model/create-shell.ts\` already uses for \`runtime/generated/runtime-dts\`. It is
+   * deliberately NOT on the \`@termcraft/runtime\` facade: an authored page must not be able to
+   * repaint its own theme.
+   *
+   * IT VALIDATES NOTHING. The manifest's \`#rrggbb\` form, its core-role completeness and its
+   * cross-theme parity are the Gate's checks (§7, plan P2), asserted once against the manifest
+   * before anything is mounted. A second, weaker check here would be a check that promises more
+   * than it can see.
+   */
+  const seedThemeCapability: import("@reatom/core").GAction<(input: {
+      readonly themeId: ThemeId;
+      readonly tokens: TokenMap;
+  }) => void>;
+  /**
+   * The active theme's tokens for a CATALOG COMPONENT to resolve its own defaults against
+   * (\`Panel\`'s \`border\`, \`Text\`'s \`foreground\`, \`Gauge\`'s \`accent\`, …).
+   *
+   * STAGE-1 REACTIVITY, STATED RATHER THAN ASSUMED (spec §4.2 — no theme switcher ships in stage
+   * 1). The fourteen catalog components are plain function components, so this read is a
+   * current-value read, not a tracked one: a mid-session theme change would not re-render them on
+   * its own. That is correct by construction today, because {@link seedThemeCapability} runs
+   * before the first render of a mount and nothing writes the atom again. THE TRIGGER TO REVISIT:
+   * a shell-side theme switcher (§4.2's \`runtime-api\` §6 preview override). At that point the
+   * catalog components — not this function — become \`reatomComponent\`s, which is the change that
+   * makes their reads tracked.
+   *
+   * A PAGE's own read is already reactive and needs nothing here: a page is a \`reatomComponent\`
+   * (§4.3), so its \`useTokens()\` call is a tracked read of the same atom.
+   */
+  function activeTokens(): TokenMap;
 
   // ── src/runtime/types
   /**
