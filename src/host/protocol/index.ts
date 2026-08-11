@@ -21,6 +21,7 @@ export {
 export {
   EMBEDDED_RUNTIME_DECLARATION,
   SUPPORTED_KIT_API_VERSIONS,
+  THEME_CAPABILITY_ID,
 } from "./model/embedded-declaration";
 export {
   decodeClientHello,

@@ -19,4 +19,18 @@ describe("EMBEDDED_RUNTIME_DECLARATION", () => {
       EMBEDDED_RUNTIME_DECLARATION.currentKitApiVersion,
     );
   });
+
+  test("the theme capability id is FIXED, and names no project's theme (design-systems §4.6)", () => {
+    expect(EMBEDDED_RUNTIME_DECLARATION.publicCapabilityIds).toEqual([
+      "theme:project-design-system",
+    ]);
+  });
+
+  test("no capability id embeds the compiled seed theme's name", () => {
+    // The handshake is a BINARY-integrity check between the Gate and the host (runtime-api §7.2). A
+    // project's theme names are not part of the binary's identity, and putting them there would make
+    // every project mismatch every other one.
+    for (const id of EMBEDDED_RUNTIME_DECLARATION.publicCapabilityIds)
+      expect(id).not.toContain("dark-default");
+  });
 });

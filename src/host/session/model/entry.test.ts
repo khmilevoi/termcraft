@@ -6,6 +6,7 @@ import {
   type ClientHelloV1,
   PROTOCOL_HARD_LIMITS,
   type RuntimeDeclarationBundleV1,
+  THEME_CAPABILITY_ID,
   decodeHostHello,
   encodeClientHello,
 } from "../../protocol";
@@ -96,7 +97,7 @@ const RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
   currentKitApiVersion: 1,
   supportedKitApiVersions: [1],
-  publicCapabilityIds: ["theme:dark-default"],
+  publicCapabilityIds: [THEME_CAPABILITY_ID],
 };
 const SESSION_ID = "01920000-0000-7000-8000-000000000000";
 const NONCE = "0123456789abcdef0123456789abcdef";

@@ -17,6 +17,7 @@ import {
   ProtocolError,
   type PublicLimits,
   type RuntimeDeclarationBundleV1,
+  THEME_CAPABILITY_ID,
   encodeClientHello,
   encodeControlEnvelope,
 } from "../../protocol";
@@ -33,7 +34,7 @@ const RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
   currentKitApiVersion: 1,
   supportedKitApiVersions: [1],
-  publicCapabilityIds: ["theme:dark-default"],
+  publicCapabilityIds: [THEME_CAPABILITY_ID],
 };
 
 const SESSION_ID = "01920000-0000-7000-8000-000000000000";
