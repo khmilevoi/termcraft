@@ -583,6 +583,13 @@ declare module "@termcraft/runtime" {
       readonly addedBackground?: Color;
       /** The band behind a removed line. Defaults to the theme's `background` — i.e. NO band. */
       readonly removedBackground?: Color;
+      /**
+       * The language whose grammar highlights the patch body — `typescript`, `javascript`,
+       * `markdown`, `zig`. Omit it for the plain, unhighlighted render (the default). Only the
+       * grammars `@opentui/core` embeds are available; any other value renders plain rather than
+       * failing.
+       */
+      readonly language?: string;
   }
   /**
    * A themed unified/split diff view (design-system §6.1, the "Documents and code" group). Takes
@@ -621,6 +628,20 @@ declare module "@termcraft/runtime" {
    *
    * Selection colours are passed from the theme but are not props: selection is host-driven chrome,
    * not page styling. The syntax-highlighting client is never exposed (spec §6).
+   *
+   * SYNTAX HIGHLIGHTING IS OPTIONAL, ASYNCHRONOUS, AND BUILT FROM THE THEME — NEVER A PROP. Setting
+   * `language` highlights the patch body through the same tree-sitter grammar `Code` uses; the
+   * `SyntaxStyle` itself is built from the active theme's tokens, not accepted from the caller (it
+   * is a renderer object, and spec §6 keeps OpenTUI identities out of authored source). Highlighting
+   * runs in a worker, so the first painted frame is always plain; the export path settles
+   * (`RenderHandle.settle()`, `host/render/model/settle.ts`) before snapshotting, the same mechanism
+   * `Code`/`Markdown` rely on — the walk it does over the mounted tree finds `Diff`'s two internal
+   * code renderables exactly as it finds a bare `Code`, even though `DiffRenderable` exposes no
+   * highlight-completion signal of its own. FAILURE DEGRADES TO PLAIN TEXT, AS A VALUE: if the
+   * native render library cannot allocate a syntax style at all, `activeSyntaxStyle()` returns an
+   * error (logged once, through `infrastructure/debug-log`) and the whole `Diff` — signs, gutters,
+   * everything — renders as themed plain text, the same all-or-nothing degradation `Code` and
+   * `Markdown` use.
    */
   function Diff(props: DiffProps): React.ReactNode;
 

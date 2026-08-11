@@ -1,5 +1,7 @@
+import { activeSyntaxStyle } from "../model/syntax-style";
 import { activeTokens } from "../model/tokens";
 import type { Color } from "../types";
+import { Text } from "./text";
 
 /** Props for the themed `Diff` view. `id` is the mandatory stable id (§3.2). */
 export interface DiffProps {
@@ -35,6 +37,13 @@ export interface DiffProps {
   readonly addedBackground?: Color;
   /** The band behind a removed line. Defaults to the theme's `background` — i.e. NO band. */
   readonly removedBackground?: Color;
+  /**
+   * The language whose grammar highlights the patch body — `typescript`, `javascript`,
+   * `markdown`, `zig`. Omit it for the plain, unhighlighted render (the default). Only the
+   * grammars `@opentui/core` embeds are available; any other value renders plain rather than
+   * failing.
+   */
+  readonly language?: string;
 }
 
 /**
@@ -74,9 +83,26 @@ export interface DiffProps {
  *
  * Selection colours are passed from the theme but are not props: selection is host-driven chrome,
  * not page styling. The syntax-highlighting client is never exposed (spec §6).
+ *
+ * SYNTAX HIGHLIGHTING IS OPTIONAL, ASYNCHRONOUS, AND BUILT FROM THE THEME — NEVER A PROP. Setting
+ * `language` highlights the patch body through the same tree-sitter grammar `Code` uses; the
+ * `SyntaxStyle` itself is built from the active theme's tokens, not accepted from the caller (it
+ * is a renderer object, and spec §6 keeps OpenTUI identities out of authored source). Highlighting
+ * runs in a worker, so the first painted frame is always plain; the export path settles
+ * (`RenderHandle.settle()`, `host/render/model/settle.ts`) before snapshotting, the same mechanism
+ * `Code`/`Markdown` rely on — the walk it does over the mounted tree finds `Diff`'s two internal
+ * code renderables exactly as it finds a bare `Code`, even though `DiffRenderable` exposes no
+ * highlight-completion signal of its own. FAILURE DEGRADES TO PLAIN TEXT, AS A VALUE: if the
+ * native render library cannot allocate a syntax style at all, `activeSyntaxStyle()` returns an
+ * error (logged once, through `infrastructure/debug-log`) and the whole `Diff` — signs, gutters,
+ * everything — renders as themed plain text, the same all-or-nothing degradation `Code` and
+ * `Markdown` use.
  */
 export function Diff(props: DiffProps) {
   const tokens = activeTokens();
+  const syntaxStyle = activeSyntaxStyle();
+  if (syntaxStyle instanceof Error) return <Text id={props.id}>{props.patch}</Text>;
+
   // EVERY colour is passed. A prop left undefined is not "inherit" — `@opentui/core` substitutes
   // a hard-coded hue of its own (#888888 gutter, #22c55e/#ef4444 signs, #1a4d1a/#4d1a1a bands),
   // which would put an off-palette colour into an authored page. Tests beside this file assert
@@ -89,6 +115,11 @@ export function Diff(props: DiffProps) {
       view={props.view ?? "unified"}
       showLineNumbers={props.showLineNumbers ?? true}
       wrapMode={props.wrap}
+      // With no `language` there is nothing to highlight, so the style is not passed either —
+      // `DiffRenderable` falls back to `SyntaxStyle.create()` (zero registered styles) on its own
+      // (plan D2), which is the same plain outcome as before this prop existed.
+      filetype={props.language}
+      syntaxStyle={props.language === undefined ? undefined : syntaxStyle}
       fg={props.color ?? tokens.foreground}
       lineNumberFg={props.lineNumberColor ?? tokens.foregroundFaint}
       lineNumberBg={background}
