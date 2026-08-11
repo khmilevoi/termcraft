@@ -172,8 +172,12 @@ export function decodeDesignSystemManifest(
     }
   }
 
-  // §7 — `defaultTheme` must name a declared theme.
-  if (manifest.themes[manifest.defaultTheme] === undefined)
+  // §7 — `defaultTheme` must name a declared theme. `Object.hasOwn`, not a bracket-access
+  // undefined check: `manifest.themes` is a plain object built off a `z.record`, so it still
+  // carries `Object.prototype` — `manifest.themes["constructor"]` is the inherited constructor
+  // function, never `undefined`, which would let `defaultTheme: "constructor"` through this check
+  // (fix round 1, Important 2).
+  if (!Object.hasOwn(manifest.themes, manifest.defaultTheme))
     return invalid(
       "DEFAULT_THEME_UNDECLARED",
       `defaultTheme "${manifest.defaultTheme}" is not one of the declared themes (${Object.keys(manifest.themes).sort().join(", ")})`,

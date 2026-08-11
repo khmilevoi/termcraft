@@ -1738,12 +1738,29 @@ export default reatomComponent(() => null)
   });
 
   test("an unresolvable component entry is fatal, unattributed, and suppresses dead-module", async () => {
-    const files = withSystem();
+    const files = withSystem({
+      // Also breaks Button's OWN closure, alongside deleting PageShell below (fix round 1, Minor
+      // 6): `DESIGN_SYSTEM_COMPONENT_UNRESOLVED` comes from `componentError`, which never touches
+      // `resolveTreeClosures`'s `walkErrors` map at all, so asserting `blockedPages` is undefined
+      // on IT alone never exercised the `walkErrors` empty-slug-set OMISSION fix — only
+      // `DESIGN_SYSTEM_COMPONENT_UNWALKABLE` (raised through `walkErrors`) does.
+      "system/components/Button.tsx": `import { gone } from "./missing"\nexport const Button = gone\n`,
+      // A file no page and no component reaches — WOULD read as `dead-module` if the suppression
+      // below did not fire, so that assertion is not vacuous (fix round 1, Minor 6: measured, the
+      // assertion passed even with the suppression removed before this file was added).
+      "lib/orphan.ts": `export const x = 1\n`,
+    });
     files.delete("system/components/PageShell.tsx");
     const result = await run(files);
-    const fatal = result.errors.find((e) => e.code === "DESIGN_SYSTEM_COMPONENT_UNRESOLVED");
-    expect(fatal).toBeDefined();
-    expect(fatal?.blockedPages).toBeUndefined(); // D6
+
+    const unresolved = result.errors.find((e) => e.code === "DESIGN_SYSTEM_COMPONENT_UNRESOLVED");
+    expect(unresolved).toBeDefined();
+    expect(unresolved?.blockedPages).toBeUndefined(); // D6
+
+    const unwalkable = result.errors.find((e) => e.code === "DESIGN_SYSTEM_COMPONENT_UNWALKABLE");
+    expect(unwalkable).toBeDefined();
+    expect(unwalkable?.blockedPages).toBeUndefined(); // D6, via the `walkErrors` empty-slug omission
+
     expect(result.warnings.filter((w) => w.kind === "dead-module")).toEqual([]);
   });
 

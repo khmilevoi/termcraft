@@ -320,6 +320,20 @@ export default reatomComponent(() => null)
     expect(errors[0]?.message).toContain("dark"); // names what IS declared
   });
 
+  test("a page naming an inherited Object.prototype key is still UNDECLARED_PAGE_THEME (fix round 1, Important 2)", () => {
+    // `manifest.themes` is a plain object off a `z.record`, so it carries `Object.prototype` —
+    // `"constructor" in manifest.themes` is TRUE even though no theme named "constructor" is
+    // declared, which would silently wave the page through instead of flagging it.
+    const errors = checkPageThemes({
+      manifest,
+      pages: [{ slug: "home" as PageSlug, entry: "pages/home.tsx" }],
+      files: new Map([["pages/home.tsx", page("constructor")]]),
+    });
+    expect(errors.length).toBe(1);
+    expect(errors[0]?.code).toBe("UNDECLARED_PAGE_THEME");
+    expect(errors[0]?.message).toContain("constructor");
+  });
+
   test("a page whose contract does not parse yields no theme diagnostic (D7)", () => {
     expect(
       checkPageThemes({

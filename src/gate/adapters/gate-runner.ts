@@ -611,12 +611,18 @@ function filesReportedUnder(
  * `components[]`, resolved as TREE-relative module paths by `gate/model/design-system.ts`'s
  * `checkDesignSystemSlice`. Each root is walked with the SAME `resolveClosure`/`readClosureEdges`
  * machinery a page uses, over the SAME shared `edgeMap` — the loop below runs AFTER the page loop
- * above, so by the time it starts `edgeMap` is already warm for every shared module and nothing is
- * re-tokenized. A root this pass could not prove complete (a rejected specifier, a missing source,
- * an unreadable edge list) contributes NOTHING to `systemReachable` — never a partial file list —
- * and sets `anyClosureBlocked`, for the identical honesty reason a blocked page closure does: a
- * design system this pass could not fully verify must not silently make `findDeadModules` report
- * on a partial picture of the tree.
+ * above so a module already visited by some page has its `edgeMap` entry (its resolved target-file
+ * SET, see {@link readClosureEdges}'s own doc for exactly what `edgeMap.has(relPath)` guards)
+ * reused rather than rebuilt. THIS DOES NOT MEAN THE SHARED FILE'S TEXT GOES UNREAD A SECOND TIME
+ * — `readClosureEdges` calls `scanModuleEdges` (the tokenizer) UNCONDITIONALLY on every walk that
+ * reaches a relPath, `edgeMap`'s guard sits strictly after that call, and this was already true
+ * between two pages sharing a module before this task; sharing `edgeMap` here is the same
+ * specifier-resolution reuse the page loop already got, never a tokenization cache (fix round 1,
+ * Important 1 — an earlier draft of this comment claimed otherwise). A root this pass could not
+ * prove complete (a rejected specifier, a missing source, an unreadable edge list) contributes
+ * NOTHING to `systemReachable` — never a partial file list — and sets `anyClosureBlocked`, for the
+ * identical honesty reason a blocked page closure does: a design system this pass could not fully
+ * verify must not silently make `findDeadModules` report on a partial picture of the tree.
  */
 export function resolveTreeClosures(input: {
   readonly pages: readonly PageEntryV1[];

@@ -219,6 +219,18 @@ describe("decodeDesignSystemManifest", () => {
     expect(result.code).toBe("DEFAULT_THEME_UNDECLARED");
   });
 
+  test("defaultTheme naming an inherited Object.prototype key is still DEFAULT_THEME_UNDECLARED (fix round 1, Important 2)", () => {
+    // `manifest.themes` is a plain object off a `z.record`, so it carries `Object.prototype` —
+    // a bracket-access `=== undefined` check would read `themes.constructor` as the INHERITED
+    // constructor function, never `undefined`, and wave this straight through.
+    const o = validManifestObject() as any;
+    o.defaultTheme = "constructor";
+    const result = decode(o);
+    expect(result).toBeInstanceOf(DesignSystemManifestInvalidError);
+    if (!(result instanceof DesignSystemManifestInvalidError)) return;
+    expect(result.code).toBe("DEFAULT_THEME_UNDECLARED");
+  });
+
   test("two components sharing a name is DUPLICATE_COMPONENT", () => {
     const o = validManifestObject() as any;
     o.components[1].name = "Button";

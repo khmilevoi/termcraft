@@ -355,15 +355,17 @@ export function scanSystemContainment(input: DesignSystemScanInput): readonly Ga
  * across 128 files in 453 ms (`core/turns/model/validation.ts`'s own `files` doc), so a handful of
  * entry re-scans is noise next to that. The call is wrapped in `errore.try` exactly the way
  * `extractPageMeta` wraps the identical `checkPageContract` call
- * (`gate/adapters/gate-runner.ts:1111-1114`): an unreadable source (thrown past
+ * (`gate/adapters/gate-runner.ts:1225-1228`): an unreadable source (thrown past
  * `checkPageContract`'s own return type, or a returned `SourceStreamTruncatedError`) yields no
  * theme diagnostic here, because that page already carries its own contract fatal from the
  * per-page stage.
  *
- * `meta.theme` stays REQUIRED in this plan (decision D5), but this check is written to be correct
- * either way: it fires ONLY when a page's parsed `meta` carries a NON-EMPTY `theme` string that
- * names no declared theme. An absent or empty theme simply skips the check, so the day another
- * plan makes `PageMeta.theme` optional, this function needs no edit.
+ * `meta.theme` stays REQUIRED in this plan (decision D5). This check's SEMANTICS are already
+ * correct for an absent theme either way: it fires ONLY when a page's parsed `meta` carries a
+ * NON-EMPTY `theme` string that names no declared theme, so an absent or empty theme simply skips
+ * it. That does not mean the day another plan makes `PageMeta.theme` optional this function needs
+ * no edit at all — under `strict: true`, `theme.length` on a possibly-`undefined` field would stop
+ * compiling — only that no BEHAVIOR change would be needed, just the type-narrowing to reach it.
  */
 export function checkPageThemes(input: {
   readonly manifest: DesignSystemManifestV1;
@@ -382,13 +384,25 @@ export function checkPageThemes(input: {
       catch: (cause) => new PageThemeContractUnreadableError({ file: page.entry, cause }),
     });
     // Both error arms — the THROWN case wrapped above, and the RETURNED `SourceStreamTruncatedError`
-    // — collapse to one skip: the page's own contract stage already reports this file's fatal.
-    if (contract instanceof Error) continue;
+    // — collapse to one skip: the page's own contract stage already reports this file's fatal, so
+    // no SECOND diagnostic is manufactured here (decision D7). errore rule 21 still requires a
+    // trace for a swallowed error, matching `checkDesignSystemSlice`'s and
+    // `scanSystemContainment`'s identical boundaries just above in this file.
+    if (contract instanceof Error) {
+      log.warn(
+        `gate/model/design-system: could not verify "${page.entry}"'s meta.theme — ${contract.message} — the page's own contract stage already carries this file's own fatal, so no theme diagnostic is manufactured for it`,
+      );
+      continue;
+    }
     if (contract.meta === null) continue;
 
     const theme = contract.meta.theme;
     if (theme.length === 0) continue;
-    if (theme in input.manifest.themes) continue;
+    // `Object.hasOwn`, not `in`: `manifest.themes` is a plain object built off a `z.record`, so
+    // it still carries `Object.prototype` — `"constructor" in themes` is TRUE even when no theme
+    // named "constructor" is declared, which would silently wave through a page pinned to an
+    // inherited key instead of reporting `UNDECLARED_PAGE_THEME` (fix round 1, Important 2).
+    if (Object.hasOwn(input.manifest.themes, theme)) continue;
 
     errors.push({
       kind: "manifest",
