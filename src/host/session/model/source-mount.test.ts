@@ -864,6 +864,6 @@ export default function P() {
     });
     expect(loaded).toBeInstanceOf(Error);
     if (!(loaded instanceof Error)) return;
-    expect((loaded as ProtocolError).code).toBe("MALFORMED_PROTOCOL");
+    expect(loaded.code).toBe("MALFORMED_PROTOCOL");
   });
 });
