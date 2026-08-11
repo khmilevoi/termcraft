@@ -8,6 +8,7 @@ import {
   readCanonicalTreeIndex,
   readPageEntrySource,
   readPageOrder,
+  resolveActiveThemeId,
 } from "core/project";
 import type { FailureDtoV1, PageDescriptorV1 } from "core/protocol";
 import { DESIGN_DIRNAME } from "entities/design-tree";
@@ -287,7 +288,10 @@ export async function buildPageDescriptors(
         sourceHash: source.sourceHash,
         title: meta.title,
         minSize: meta.minSize,
-        theme: meta.theme,
+        // The descriptor reports the page's ACTIVE theme, resolved the same way the mount spec
+        // resolves it, off the same index — so the tab strip and the preview can never name two
+        // different themes for one page.
+        theme: resolveActiveThemeId({ metaTheme: meta.theme, designSystem: index.designSystem }),
         kitApiVersion: meta.kitApiVersion,
       });
       continue;

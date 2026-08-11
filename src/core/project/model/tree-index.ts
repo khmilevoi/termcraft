@@ -2,6 +2,8 @@ import { wrap } from "@reatom/core";
 
 import type { DesignTreeReader, GateErrorV1, GateRunner, GateWarningV1 } from "core/ports";
 import type { FailureDtoV1 } from "core/protocol";
+import { DESIGN_SYSTEM_MANIFEST_RELPATH, decodeDesignSystemManifest } from "entities/design-system";
+import type { DesignSystemManifestV1 } from "entities/design-system";
 import {
   computeClosureHash,
   computeTreeRevision,
@@ -10,6 +12,7 @@ import {
 } from "entities/design-tree";
 import type { DesignTreeInventoryV1, PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
+import { log } from "infrastructure/debug-log";
 
 import { readPageOrder } from "./descriptors";
 
@@ -57,6 +60,18 @@ export interface CanonicalTreeIndexV1 {
   readonly pages: readonly PageEntryV1[];
   /** Every tree file's text, tree-relative — the map `runTree` was given. */
   readonly files: ReadonlyMap<string, string>;
+  /**
+   * The project's own design system, decoded from `system/design-system.json` (design-systems
+   * §3.2). `null` means the tree carries none — the transitional state every project is in until
+   * the mechanical migration runs (§9) — OR that the file is present and did not decode.
+   *
+   * THOSE TWO ARE DELIBERATELY THE SAME VALUE HERE, and that is not laundering: the Gate is what
+   * reports an invalid manifest (§7's fatals, over the same `files` map), and it does so on the
+   * candidate, before a commit. Refusing this read instead would make a project whose manifest the
+   * agent broke unopenable AND unrepairable, because the repair is itself a turn. See plan P4's
+   * decision D7.
+   */
+  readonly designSystem: DesignSystemManifestV1 | null;
   /**
    * `null` when this page's closure was not proved complete: "cannot compute", never
    * "unchanged". TWO different facts reach it, and both are honest misses — the pass returned no
@@ -121,6 +136,25 @@ async function readTreeSources(
 }
 
 /**
+ * `system/design-system.json`, decoded — or `null`, for either honest reason (see
+ * {@link CanonicalTreeIndexV1.designSystem}). Logs a present-but-invalid manifest rather than
+ * swallowing it: the Gate reports it to the user, and this line is what makes it visible in a debug
+ * log when someone asks why a preview rendered against the seed palette.
+ */
+function decodeDesignSystemFrom(files: ReadonlyMap<string, string>): DesignSystemManifestV1 | null {
+  const text = files.get(DESIGN_SYSTEM_MANIFEST_RELPATH);
+  if (text === undefined) return null;
+  const decoded = decodeDesignSystemManifest(text);
+  if (decoded instanceof Error) {
+    log.warn(
+      `core/project/tree-index: ${DESIGN_SYSTEM_MANIFEST_RELPATH} did not decode (${decoded.message}) — the Gate reports this as a fatal; treating the project as having no design system for theme resolution`,
+    );
+    return null;
+  }
+  return decoded;
+}
+
+/**
  * Read the canonical tree once and produce everything a non-turn caller needs from it: the
  * sorted inventory, its revision, the manifest's page list, every file's text, the whole-tree
  * pass's diagnostics, and a per-slug `closureHash`.
@@ -153,6 +187,8 @@ export async function readCanonicalTreeIndex(deps: {
   const files = await readTreeSources(deps.designReader, inventory);
   if ("code" in files) return files;
 
+  const designSystem = decodeDesignSystemFrom(files);
+
   const pass = await wrap(deps.gateRunner.runTree({ files, treePaths, pages }));
 
   const sha256Of = inventorySha256(inventory);
@@ -168,6 +204,7 @@ export async function readCanonicalTreeIndex(deps: {
     treeRevision: computeTreeRevision(inventory),
     pages,
     files,
+    designSystem,
     closureHashOf: (slug) => hashBySlug.get(slug) ?? null,
     errors: pass.errors,
     warnings: pass.warnings,

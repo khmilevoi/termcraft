@@ -43,6 +43,9 @@ export {
 export type { CanonicalTreeIndexV1 } from "./model/tree-index";
 export { readCanonicalTreeIndex } from "./model/tree-index";
 
+// --- P4 D4: a page's active theme, resolved once off the canonical tree index --------------
+export { resolveActiveThemeId } from "./model/active-theme";
+
 // --- KCC §8.2 page mutations -----------------------------------------------------------------
 export type {
   ConfirmPageRemoveDeps,

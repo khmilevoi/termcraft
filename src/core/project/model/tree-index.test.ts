@@ -3,10 +3,21 @@ import { describe, expect, test } from "bun:test";
 import { context, wrap } from "@reatom/core";
 
 import type { DesignTreeReader } from "core/ports";
-import { createFakeDesignStoreForPages, createFakeGateRunner } from "core/ports/fakes";
-import type { FakeGateRunner } from "core/ports/fakes";
+import {
+  createFakeDesignStore,
+  createFakeDesignStoreForPages,
+  createFakeGateRunner,
+} from "core/ports/fakes";
+import type { DesignTreeFileSeedV1, FakeGateRunner } from "core/ports/fakes";
 import type { Sha256Hex } from "core/protocol";
-import { computeSourceHash } from "entities/design-tree";
+import { createSeedManifest, renderDesignSystemManifest } from "entities/design-system";
+import {
+  PAGES_MANIFEST_RELPATH,
+  PAGES_MANIFEST_SCHEMA_VERSION,
+  computeSourceHash,
+  decodePagesManifest,
+  encodePagesManifest,
+} from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 
 import { readCanonicalTreeIndex } from "./tree-index";
@@ -82,6 +93,41 @@ function withListing(
     readTreeFile: (relPath) => reader.readTreeFile(relPath),
     readManifest: () => reader.readManifest(),
     listTree: async () => listing,
+  };
+}
+
+/** An empty, otherwise-valid `pages.json` — the design-system tests below aren't about page identity. */
+const PAGES_JSON = encodePagesManifest({
+  schemaVersion: PAGES_MANIFEST_SCHEMA_VERSION,
+  pages: [],
+  requestedActivePage: null,
+});
+
+/**
+ * A minimal `{ designReader, gateRunner }` pair for the design-system tests below: every entry in
+ * `files` becomes a real tree file (`listTree()` names it, `readTreeFile()` serves it), and
+ * `pages.json`'s bytes decode into the fake's manifest — the same two-map split
+ * `createFakeDesignStore` itself uses, just built from raw text instead of `FakeDesignPageV1`
+ * seeds, since these tests are about `system/design-system.json`, not page identity.
+ */
+function depsWithTree(files: Readonly<Record<string, string>>): {
+  readonly designReader: DesignTreeReader;
+  readonly gateRunner: FakeGateRunner;
+} {
+  const manifestText = files[PAGES_MANIFEST_RELPATH];
+  if (manifestText === undefined) throw new Error("depsWithTree fixture bug: no pages.json given");
+  const manifest = decodePagesManifest(manifestText);
+  if (manifest instanceof Error) throw manifest;
+
+  const fileMap = new Map<string, DesignTreeFileSeedV1>(
+    Object.entries(files).map(([relPath, text]) => [
+      relPath,
+      { bytes: new TextEncoder().encode(text) },
+    ]),
+  );
+  return {
+    designReader: createFakeDesignStore({ manifest, files: fileMap }),
+    gateRunner: createFakeGateRunner(),
   };
 }
 
@@ -219,6 +265,49 @@ describe("readCanonicalTreeIndex", () => {
       if (!("code" in result)) throw new Error("expected a refusal for a duplicated relPath");
       expect(result.safeMessage).toContain(SHARED);
       expect(result.details.relPath).toBe(SHARED);
+    });
+  });
+});
+
+describe("readCanonicalTreeIndex — the design system (design-systems §4.6)", () => {
+  test("decodes system/design-system.json when the tree carries one", async () => {
+    await context.start(async () => {
+      const index = await wrap(
+        readCanonicalTreeIndex(
+          depsWithTree({
+            "pages.json": PAGES_JSON,
+            "system/design-system.json": renderDesignSystemManifest(
+              createSeedManifest({ kitApiVersion: 1 }),
+            ),
+          }),
+        ),
+      );
+      if ("code" in index) throw new Error(`expected an index, got ${index.safeMessage}`);
+      expect(index.designSystem?.id).toBe("default");
+      expect(index.designSystem?.defaultTheme).toBe("dark-default");
+    });
+  });
+
+  test("a tree with no design system reports null, with no failure", async () => {
+    await context.start(async () => {
+      const index = await wrap(readCanonicalTreeIndex(depsWithTree({ "pages.json": PAGES_JSON })));
+      if ("code" in index) throw new Error(`expected an index, got ${index.safeMessage}`);
+      expect(index.designSystem).toBeNull();
+    });
+  });
+
+  test("an UNDECODABLE manifest reports null rather than refusing the read (P4 D7)", async () => {
+    // An agent turn that writes a malformed manifest must stay able to repair it on the NEXT turn;
+    // refusing here would make the project unopenable and unfixable. The Gate is the enforcement
+    // point, and it does not need this decode to succeed first.
+    await context.start(async () => {
+      const index = await wrap(
+        readCanonicalTreeIndex(
+          depsWithTree({ "pages.json": PAGES_JSON, "system/design-system.json": "{ not json" }),
+        ),
+      );
+      if ("code" in index) throw new Error(`expected an index, got ${index.safeMessage}`);
+      expect(index.designSystem).toBeNull();
     });
   });
 });
