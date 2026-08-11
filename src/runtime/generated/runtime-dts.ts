@@ -146,7 +146,11 @@ export const RUNTIME_DTS = `declare module "@termcraft/runtime" {
    * the project's own \`design/system/design-system.json\`, delivered through
    * {@link themeTokensAtom}. Two jobs survive:
    *   1. the SEED the project-create scaffold and the mechanical migration copy into a new
-   *      project's manifest;
+   *      project's manifest. P4 does NOT import it from here: the two writers of that seed live in
+   *      \`store\` (project create, and the mechanical migration), and \`store\` importing \`runtime\`
+   *      would be a new module edge — so the seed values are declared in
+   *      \`entities/design-system/model/seed.ts\` and pinned to THIS constant by an exact
+   *      \`toEqual\` test (\`seed.test.ts\`). See plan P4's decision D3.
    *   2. {@link themeTokensAtom}'s pre-mount default — see that atom's own note.
    */
   const DARK_DEFAULT: TokenMap;
