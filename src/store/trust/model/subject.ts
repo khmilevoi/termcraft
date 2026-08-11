@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import type { Sha256Hex, TrustSubjectInput } from "../types";
+import type { Sha256Hex, SourceTrustSubjectInput, TrustSubjectInput } from "../types";
 
 /**
  * The literal ASCII domain-separation prefix of the encoding (storage-identity §8). It is
@@ -62,6 +62,41 @@ export function encodeTrustSubjectV1(input: TrustSubjectInput): Uint8Array {
 /** The trust key: lowercase-hex SHA-256 of the complete encoded byte string (§8). */
 export function trustSubjectKey(input: TrustSubjectInput): Sha256Hex {
   return crypto.createHash("sha256").update(encodeTrustSubjectV1(input)).digest("hex");
+}
+
+/**
+ * The source subject's OWN domain-separation prefix (project-design-systems §8.4). The
+ * subject-kind discriminator lives HERE, in the prefix, and not as a new first field of the
+ * project tuple — prepending a field would change every project subject's digest and silently
+ * revoke every recorded grant on every user's machine. Two prefixes also make a cross-kind
+ * collision impossible by construction rather than by field discipline.
+ */
+export const TRUST_SUBJECT_SOURCE_V1_PREFIX = "termcraft-trust-subject-source-v1";
+
+/**
+ * The ordered field list of `TrustSubjectSourceV1`: adapter family, source id, canonical
+ * location, the `absent`/`present` tag, and — only when `present` — the location's
+ * filesystem-identity string. Same length-prefixed NFC-UTF8 field format as the project
+ * encoding, so an empty identity string is a length-0 field and can never forge `absent`.
+ */
+function sourceSubjectFields(input: SourceTrustSubjectInput): string[] {
+  const head = [input.sourceKind, input.sourceId, input.canonicalLocation];
+  if (input.locationFilesystemIdentity === null) return [...head, GIT_ABSENT];
+  return [...head, GIT_PRESENT, input.locationFilesystemIdentity];
+}
+
+/** The byte-exact `TrustSubjectSourceV1` digest input. Pure and total, like its project sibling. */
+export function encodeSourceTrustSubjectV1(input: SourceTrustSubjectInput): Uint8Array {
+  const prefix = Buffer.concat([
+    Buffer.from(TRUST_SUBJECT_SOURCE_V1_PREFIX, "utf8"),
+    Buffer.from([0x00]),
+  ]);
+  return Buffer.concat([prefix, ...sourceSubjectFields(input).map(encodeField)]);
+}
+
+/** The source trust key: lowercase-hex SHA-256 of the complete encoded byte string. */
+export function sourceTrustSubjectKey(input: SourceTrustSubjectInput): Sha256Hex {
+  return crypto.createHash("sha256").update(encodeSourceTrustSubjectV1(input)).digest("hex");
 }
 
 // ---- canonical path forms (storage-identity §8) --------------------------------

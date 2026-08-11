@@ -17,19 +17,25 @@ export type {
   AbsPath,
   GitIdentity,
   Sha256Hex,
+  SourceTrustSubject,
+  SourceTrustSubjectInput,
   TrustError,
   TrustFsDeps,
   TrustStore,
   TrustStoreDeps,
   TrustSubject,
   TrustSubjectInput,
+  TrustSubjectKind,
 } from "./types";
 
 export {
+  TRUST_SUBJECT_SOURCE_V1_PREFIX,
   TRUST_SUBJECT_V1_PREFIX,
   canonicalizeRepoRelativePath,
   canonicalizeTrustPath,
+  encodeSourceTrustSubjectV1,
   encodeTrustSubjectV1,
+  sourceTrustSubjectKey,
   trustSubjectKey,
 } from "./model/subject";
 

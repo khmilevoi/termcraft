@@ -49,6 +49,36 @@ export interface TrustSubject extends TrustSubjectInput {
   readonly key: Sha256Hex;
 }
 
+/** Which kind of thing a trust grant names (project-design-systems §8.4). */
+export type TrustSubjectKind = "project" | "source";
+
+/**
+ * The four ordered inputs of the `TrustSubjectSourceV1` byte encoding (project-design-systems
+ * §8.4). A design-system source is a trust subject DISTINCT FROM PROJECT TRUST: adding one is an
+ * explicit, recorded decision, and an unrecorded remote source is never queried.
+ *
+ * Deliberately carries nothing that churns — no branch, no last-fetched time, no package list.
+ * `locationFilesystemIdentity` is present only for a filesystem-backed source, so replacing the
+ * directory at the same path is a new decision exactly as it is for a project; a remote carries
+ * `null` and encodes the same `absent` tag a missing `GitIdentity` does.
+ */
+export interface SourceTrustSubjectInput {
+  /** The adapter family: `"local"`, `"github"`. */
+  readonly sourceKind: string;
+  /** The port's `id`: `"local"`, `"github:acme/design-systems"`. */
+  readonly sourceId: string;
+  /** Canonical absolute path for a filesystem source; canonical remote address otherwise. */
+  readonly canonicalLocation: string;
+  /** `infrastructure/fs-guard`'s identity string, or `null` for a source with no local directory. */
+  readonly locationFilesystemIdentity: string | null;
+}
+
+/** A built source subject: its digested inputs plus the derived trust key. */
+export interface SourceTrustSubject extends SourceTrustSubjectInput {
+  /** Lowercase-hex SHA-256 of the complete `TrustSubjectSourceV1` byte string. */
+  readonly key: Sha256Hex;
+}
+
 /**
  * The impure boundary the trust store needs, injected so tests drive alias resolution,
  * directory replacement, and durable-write failure against fakes. `nodeTrustFsDeps` is
