@@ -633,6 +633,131 @@ declare module "@termcraft/runtime" {
    */
   function Row(props: RowProps): React.ReactNode;
 
+  // ── src/runtime/ui/scroll-box
+  /** Props for the `ScrollBox` scrolling viewport. `id` is the mandatory stable id (§3.2). */
+  interface ScrollBoxProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      readonly children?: unknown;
+      /** Content axis, and therefore the scrolling axis. Defaults to `column`. */
+      readonly direction?: "row" | "column";
+      /** Gap between the content's children. */
+      readonly gap?: number;
+      /** Inner padding around the content. */
+      readonly padding?: number;
+      /** Flex grow factor of the viewport itself. */
+      readonly grow?: number;
+      readonly width?: number;
+      /** Viewport height in rows. A viewport shorter than its content is the point. */
+      readonly height?: number;
+      readonly border?: boolean;
+      /** The frame hue; defaults to the theme's `border`. Read one off `useTokens()` (§4.5). */
+      readonly borderColor?: Color;
+      /** The viewport fill; defaults to the theme's `background`. Read one off `useTokens()`. */
+      readonly background?: Color;
+      /** Whether the viewport holds keyboard focus. Always false under export (§6.3). */
+      readonly focused?: boolean;
+      /**
+       * Pin the viewport to the NEWEST content — the design's chat-scroll "following" state
+       * (`design/termcraft-engine.js:1474-1495`, §28). IGNORED UNDER EXPORT (§6.3): a snapshot is
+       * always taken at offset 0.
+       */
+      readonly follow?: boolean;
+  }
+  /**
+   * A scrolling viewport (design-system §3.2, spec §6.1). Renders one OpenTUI `<scrollbox>`: a
+   * fixed-size frame over content taller (or wider) than itself, with a proportional scrollbar
+   * themed to the design's §28 recipe — a track in `line` and a thumb in `accentDim`, arrows off
+   * (`design/termcraft-engine.js:1478-1483`); this is a REAL DESIGN FACT, drawn there. A focused
+   * frame is drawn in `accentHi`, the hue the design's own palette legend labels `focus`
+   * (`design/termcraft-engine.js:1876`) — but the design ships no screen of an authored page's
+   * focused scroll frame, so `focusedBorderColor = accentHi` is a MAPPING onto existing vocabulary,
+   * recorded here rather than invented as a new hue.
+   *
+   * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: the design's thumb is `█` with `▀`/`▄` at
+   * half-cell precision, drawn by the engine itself. OpenTUI's `SliderRenderable` draws its own
+   * glyphs and exposes only two colours, so this wrapper reproduces the HUES and the arrows-off
+   * rule and not the half-cell thumb.
+   *
+   * NO SCROLL-OFFSET PROP, AND NO SCROLL CALLBACK. `ScrollBoxOptions` carries neither: `scrollTop`
+   * exists only as a class setter, and the scrollbars' own `onChange` is overwritten by
+   * `ScrollBoxRenderable`'s constructor after the caller's spread. Position is therefore expressed
+   * declaratively, through `follow`, which is the design's own vocabulary for it.
+   *
+   * EXPORT DETERMINISM (§6.3): under `hostMode === "export"` the viewport is pinned to the START
+   * edge — offset 0 — whatever `follow` says, and the frame is blurred with its focused hue
+   * collapsed onto the unfocused one.
+   */
+  function ScrollBox(props: ScrollBoxProps): React.ReactNode;
+
+  // ── src/runtime/ui/select
+  /** One selectable row in a `Select` (spec §6.1). */
+  interface SelectItem {
+      /** Stable per-item id; what `onSelect`/`onHighlight` report. */
+      readonly id: string;
+      /** The rendered row label. */
+      readonly label: string;
+  }
+  /** Props for the themed `Select` component. `id` is the mandatory stable id (§3.2). */
+  interface SelectProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      /** The choices, in display order. */
+      readonly items: readonly SelectItem[];
+      /**
+       * The highlighted item's id. A `Select` is a CURSOR, not an optional highlight: an absent or
+       * unmatched id lands on the first item, unlike `List`, where no `selectedId` means no
+       * selection band at all.
+       */
+      readonly selectedId?: string;
+      /** Whether the list holds keyboard focus. Always false under export (§6.3). */
+      readonly focused?: boolean;
+      /** Viewport height in rows; defaults to the item count (one row per item). */
+      readonly height?: number;
+      /**
+       * Invoked with an item id when the cursor MOVES onto it (the intrinsic's `onChange`). The
+       * interactive path lands in phase 7; in the static headless render the handler is inert.
+       */
+      readonly onHighlight?: (id: string) => void;
+      /**
+       * Invoked with an item id when it is COMMITTED (the intrinsic's `onSelect`, i.e. Enter). The
+       * interactive path lands in phase 7; in the static headless render the handler is inert.
+       */
+      readonly onSelect?: (id: string) => void;
+  }
+  /**
+   * Themed single-choice list (design-system §3.2, spec §6.1). Renders one OpenTUI `<select>`,
+   * one line per item, with the design's selection recipe: a `selection` back-fill and
+   * `selectionFg` text on the cursor row (`design/termcraft-engine.js:499-503`, the agent/model
+   * picker), `foreground` on the rest, over the terminal `background`. A focused list lifts its
+   * body onto `surface` — the role its own definition calls the "lifted input body" fill; the
+   * design ships no screen of an authored page's focused select, so that is a MAPPING onto
+   * existing vocabulary, recorded here rather than invented as a new hue.
+   *
+   * CONTROLLED, WITH NO REF. `SelectRenderable`'s `selectedIndex` and `options` setters both clamp
+   * and emit nothing (measured against `@opentui/core@0.4.5`), so re-passing them every render can
+   * never loop back into `onHighlight`. `options` is written before `selectedIndex` so the clamp
+   * sees the new list.
+   *
+   * THAT IS TRUE OF THE SETTER, NOT OF PREVIEW SYNC. `@opentui/react`'s `updateProperties` only
+   * re-applies a prop whose value CHANGED, and `SelectRenderable`'s own keyboard handling mutates
+   * `_selectedIndex` directly — so once the phase-7 input path lands, a user keyboard move followed
+   * by a re-render carrying the SAME `selectedId` will not correct the instance; the cursor stays
+   * where the user left it. This does not affect export (there is no keyboard there); the phase-7
+   * input path owes this a real controlled sync.
+   *
+   * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED: the cursor marker is OpenTUI's own `▶ `
+   * (U+25B6). The design's marker is `▸` (U+25B8) — the glyph `List` and `Tabs` render — but
+   * `SelectRenderableOptions` exposes no marker character. Descriptions are off (upstream defaults
+   * them ON, which would paint a blank line per item) and the scroll indicator is off (upstream
+   * draws it in a hard-coded `#666666` that no theme can reach).
+   *
+   * EXPORT DETERMINISM (§6.3): under `hostMode === "export"` the widget is blurred and its focused
+   * fill collapses onto the unfocused one, so the frame is a function of `items` + `selectedId`
+   * alone.
+   */
+  function Select(props: SelectProps): React.ReactNode;
+
   // ── src/runtime/ui/separator
   /** Props for the `Separator` rule. `id` is the mandatory stable id (§3.2). */
   interface SeparatorProps {
@@ -780,6 +905,67 @@ declare module "@termcraft/runtime" {
    */
   function Text(props: TextProps): React.ReactNode;
 
+  // ── src/runtime/ui/textarea
+  /** Props for the themed `Textarea` component. `id` is the mandatory stable id (§3.2). */
+  interface TextareaProps {
+      /** Stable id the host answers geometry on and the shell selects/pins. Mandatory. */
+      readonly id: string;
+      /**
+       * The text the editor starts from. UNDER EXPORT this is exactly what renders, on every render
+       * (§6.3). In preview it behaves like an HTML `defaultValue` — see the divergence note below.
+       */
+      readonly value?: string;
+      /** Placeholder shown while the buffer is empty. */
+      readonly placeholder?: string;
+      /** Whether the editor holds keyboard focus. Always false under export (§6.3). */
+      readonly focused?: boolean;
+      readonly width?: number;
+      /** Height in rows. An editor is a viewport, so give it one (or a growing parent). */
+      readonly height?: number;
+      /** Flex grow factor — a 0 keeps the editor at its height; ≥1 lets it expand. */
+      readonly grow?: number;
+      /** Soft-wrap mode for long lines. Defaults to `word`. */
+      readonly wrap?: "none" | "char" | "word";
+      /**
+       * Invoked with the whole buffer text on every edit (the intrinsic's `onContentChange`). The
+       * interactive path lands in phase 7; in the static headless render the handler is inert. Its
+       * value is read off the instance through the wrapper's own callback ref (see the component doc
+       * comment below), and that ref path has never been exercised — nothing delivers keystrokes to a
+       * page today, so it is covered only by a "mounts and renders with handlers attached" test.
+       * Whoever builds the interactive path must exercise it before relying on it.
+       */
+      readonly onChange?: (value: string) => void;
+      /**
+       * Invoked when the editor's submit binding fires. The interactive path lands in phase 7; in the
+       * static headless render the handler is inert.
+       */
+      readonly onSubmit?: () => void;
+  }
+  /**
+   * Themed multi-line text editor (design-system §3.2, spec §6.1). Renders one OpenTUI
+   * `<textarea>` with token-resolved text/placeholder/selection colours, so a theme swap re-colours
+   * it without editing sources. A focused editor lifts its body from `background` onto `surface` —
+   * the role its own definition calls the "lifted input body" fill; the design ships no screen of
+   * an authored page's focused editor, so that is a MAPPING onto existing vocabulary, recorded
+   * here rather than invented as a new hue.
+   *
+   * DIVERGENCE, STATED RATHER THAN SILENTLY SUBSTITUTED. `@opentui/core@0.4.5`'s `TextareaOptions`
+   * has no `value`; it has `initialValue`, whose setter is a ONE-SHOT LATCH — it applies the first
+   * time and ignores every later write. In PREVIEW this wrapper therefore behaves like an HTML
+   * `defaultValue`: a `value` change after mount does not re-apply, because keying the element on
+   * the text would remount the editor (losing cursor and undo) on every keystroke once the phase-7
+   * input path lands. UNDER EXPORT that trade is not available — §6.3 requires the value to come
+   * from props rather than internal state — so the element IS keyed on the text there, and a
+   * changed `value` produces a fresh instance whose latch fires again.
+   *
+   * `onChange` reads the buffer through a ref this component owns and never exposes (no
+   * passthrough, spec §6): upstream's `ContentChangeEvent` is an EMPTY interface, so the event
+   * carries no text and `plainText` off the instance is the only source. It is a CALLBACK ref
+   * rather than `useRef` because this repository installs no `@types/react` (see
+   * `host/render/model/error-capture.ts`), which makes any `react` import a TS7016.
+   */
+  function Textarea(props: TextareaProps): React.ReactNode;
+
   // ── the facade's public surface (src/runtime/index.ts)
   export type { Color, PageMeta, Size, ThemeId, ThemeTokens, TokenMap };
   export { CURRENT_KIT_API_VERSION, definePage };
@@ -821,6 +1007,12 @@ declare module "@termcraft/runtime" {
   export type { LineNumberProps };
   export { Diff };
   export type { DiffProps };
+  export { Select };
+  export type { SelectProps, SelectItem };
+  export { Textarea };
+  export type { TextareaProps };
+  export { ScrollBox };
+  export type { ScrollBoxProps };
 }
 
 declare module "@termcraft/runtime/jsx-dev-runtime" {

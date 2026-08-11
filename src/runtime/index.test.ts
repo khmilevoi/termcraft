@@ -56,7 +56,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     expect(runtime.Fragment).toBeDefined();
   });
 
-  test("exports the full 15-component design-system catalog + the low-level Box escape hatch", () => {
+  test("exports the full 18-component design-system catalog + the low-level Box escape hatch", () => {
     for (const name of [
       "Row",
       "Column",
@@ -73,6 +73,9 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
       "Sparkline",
       "LineNumber",
       "Diff",
+      "Select",
+      "Textarea",
+      "ScrollBox",
       "Box",
     ] as const) {
       // See the rationale on the first loop above: tsc already validates `name`.

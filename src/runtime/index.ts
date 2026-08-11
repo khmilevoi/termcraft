@@ -91,3 +91,12 @@ export { LineNumber } from "./ui/line-number";
 export type { LineNumberProps } from "./ui/line-number";
 export { Diff } from "./ui/diff";
 export type { DiffProps } from "./ui/diff";
+
+// Input and scrolling wrappers (spec §6.1). Each renders a defined static state under
+// `hostMode === "export"` (§6.3).
+export { Select } from "./ui/select";
+export type { SelectProps, SelectItem } from "./ui/select";
+export { Textarea } from "./ui/textarea";
+export type { TextareaProps } from "./ui/textarea";
+export { ScrollBox } from "./ui/scroll-box";
+export type { ScrollBoxProps } from "./ui/scroll-box";
