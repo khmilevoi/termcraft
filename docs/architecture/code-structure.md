@@ -73,7 +73,7 @@ flowchart LR
                          (interactive mode wires the real adapter graph, WP-4;
                           headless `export` driver, WP-5 Phase D)
      entities/          pure domain types; no ports, no I/O            [landed]
-       page/  chat/  turn/  pin/
+       page/  chat/  turn/  pin/  design-tree/  design-system-ref/
      core/              Kernel — the only domain decision-maker         [landed]
        ports/           contracts core consumes: GitHistory, GitCommitter, AgentBackend…
        turns/  versions/  export/  chats/
@@ -81,7 +81,7 @@ flowchart LR
        index.ts
      store/             project state; implements core ports            [landed]
        safe-fs/  lease/  trust/  toml/  jsonl/  transaction/
-       sandbox/  migration/  projections/  model/
+       sandbox/  migration/  projections/  design-systems/  model/
        types.ts
        index.ts
      agent/             AgentBackend over the vendors' official TypeScript SDKs [landed]
@@ -357,6 +357,7 @@ final group's own heading spells out which is which).
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
   Claude backend produces both and `src/core/ports/agent-backend.ts` consumes them
+- `src/entities/design-system-ref/model/ref.ts` — `parseDesignSystemRef`/`formatDesignSystemRef`: a design system's ADDRESSABLE identity, `source:system@version` (project-design-systems §8.1). The source id runs to the `#` when there is one and to the first `:` otherwise, which is what lets `local:midnight@1.2.0` and `github:acme/design-systems#midnight@1.3.0` share one grammar. Deliberately separate from the manifest entity (`entities/design-system`, which does not exist on this branch — P2 has not merged): identity and content are different questions
 - `src/runtime/generated/runtime-dts.ts`, `src/runtime/generated/runtime.generated.d.ts` —
   the landed examples of the `generated/`
   exception this item records: both machine-emitted by `scripts/gen-runtime-dts.ts` in
@@ -632,6 +633,7 @@ vendor tier's own pre-split run-loop file.
   (phase-8 WP-3): `core` declares the port, `agent/prompt/` implements it,
   mirroring the `AgentBackend`/`GateRunner` placement precedent this section
   already documents
+- `src/core/ports/design-system-source.ts` — `DesignSystemSource`: `list`/`fetch`/`publish`, asynchronous and failable from the start because "a synchronous contract has no room for a network source later" (§8.1). `list` returns SUMMARIES, not packages, so opening a picker against a remote does not download it; `canPublish` is declared rather than assumed. §8.1's `SourceError` is `FailureDtoV1` at this ring's boundary (decision C1). No consumer is wired into the composition root yet — that is P10's work (§8.6 stage 1 lands the port and one adapter; wiring a picker or install pipeline behind it is out of this plan's scope). `src/core/ports/fakes/design-system-source.ts` is its in-memory fake
 - `src/gate/ports/smoke-renderer.ts` — the real `SmokeRenderer` port this document
   uses as its port-placement illustration (item 5): `gate` declares it, `host`'s
   `src/host/adapters/smoke-renderer.ts` satisfies it over `runOneShotSession`
@@ -755,6 +757,7 @@ vendor tier's own pre-split run-loop file.
   today, and explicitly not the `GitHistory`/`GitCommitter` adapter: its own comment
   calls the generated `.gitignore` a "courtesy mirror," not the live commit-scope
   planner
+- `src/store/design-systems/` — the per-user design-system library under `{userStateRoot}/design-systems/` and the one stage-1 source, a local directory: `model/layout.ts` (paths), `model/content-hash.ts` (the domain-separated sha256 over a package's file set), `model/sources-config.ts` (`sources.json`, with the built-in `local` source never configurable away), `model/cache-entry.ts`, `model/summary.ts` (a minimal, NON-EXECUTING manifest read — the §7 fatals belong to the Gate, not here; it carries a deliberately minimal PRIVATE manifest schema because P2's `entities/design-system` has not merged, and drops that schema in favor of P2's real decoder once it lands), `model/walk.ts` (the two-phase admission boundary a real safe-fs budget attaches to), and `model/{list,fetch,publish,local-source}.ts`. `list` opens exactly one file per candidate and never a `.tsx`. `src/store/adapters/design-system-source.ts` is the `core/ports/design-system-source.ts` port adapter over this module, with its own `SourceError` → `FailureDtoV1` mapping (`store/adapters/failure.ts`)
 
 **Design-spec anchors kept — no code yet, or the spec is the authority for a detail
 the code does not encode**
