@@ -100,6 +100,7 @@ export function createDesignSystemInstallAdapter(deps: StoreAdapterDeps): Design
     readonly nextFiles: readonly DesignSystemInstallFileV1[];
     readonly removedTreeRelPaths: readonly string[];
     readonly provenanceBytes: Uint8Array;
+    readonly expectedTreeRevision: string;
   }): Promise<FailureDtoV1 | undefined> {
     const result = await open.transactions.installDesignSystem({
       transactionId: deps.uuidv7(),
@@ -107,6 +108,7 @@ export function createDesignSystemInstallAdapter(deps: StoreAdapterDeps): Design
       nextFiles: input.nextFiles,
       removedTreeRelPaths: input.removedTreeRelPaths,
       provenanceBytes: input.provenanceBytes,
+      expectedTreeRevision: input.expectedTreeRevision,
       createdAt: nowIso(deps.clock),
     });
     if (result instanceof Error) return toFailureDto(result);

@@ -49,6 +49,8 @@ export type FakeDesignSystemInstallCall =
 export interface RecordedDesignSystemInstallV1 {
   readonly nextFiles: readonly DesignSystemInstallFileV1[];
   readonly removedTreeRelPaths: readonly string[];
+  /** I2 fix: the `expectedTreeRevision` the caller passed — lets a `core`-level test prove `commitDesignSystemInstall` forwards `DesignSystemPreparedInstallV1.treeRevision` verbatim, without this fake modelling any real drift refusal itself (that behavior is `store`'s, real-transaction-only). */
+  readonly expectedTreeRevision: string;
 }
 
 export interface FakeDesignSystemInstall
@@ -159,6 +161,7 @@ export function createFakeDesignSystemInstall(): FakeDesignSystemInstall {
     nextFiles: readonly DesignSystemInstallFileV1[];
     removedTreeRelPaths: readonly string[];
     provenanceBytes: Uint8Array;
+    expectedTreeRevision: string;
   }): Promise<FailureDtoV1 | undefined> {
     calls.push({
       method: "install",
@@ -180,6 +183,7 @@ export function createFakeDesignSystemInstall(): FakeDesignSystemInstall {
     recordedInstalls.push({
       nextFiles: input.nextFiles,
       removedTreeRelPaths: input.removedTreeRelPaths,
+      expectedTreeRevision: input.expectedTreeRevision,
     });
     recordedProvenance.push(decoded);
     return undefined;

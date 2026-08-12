@@ -69,12 +69,14 @@ describe("install / encodeProvenance", () => {
       nextFiles: [{ treeRelPath: "system/design-system.json", bytes: new Uint8Array([1]) }],
       removedTreeRelPaths: ["system/components/Legacy.tsx"],
       provenanceBytes,
+      expectedTreeRevision: "tree-rev-1",
     });
     expect(result).toBeUndefined();
     expect(fake.recordedInstalls).toEqual([
       {
         nextFiles: [{ treeRelPath: "system/design-system.json", bytes: new Uint8Array([1]) }],
         removedTreeRelPaths: ["system/components/Legacy.tsx"],
+        expectedTreeRevision: "tree-rev-1",
       },
     ]);
     expect(fake.recordedProvenance).toEqual([
@@ -98,6 +100,7 @@ describe("install / encodeProvenance", () => {
       nextFiles: [],
       removedTreeRelPaths: [],
       provenanceBytes,
+      expectedTreeRevision: "tree-rev-1",
     });
     expect(result).toEqual(FAILURE);
     expect(fake.recordedInstalls).toEqual([]);
@@ -139,7 +142,12 @@ test("records calls in order across both ports", async () => {
     contentHash: "a".repeat(64),
     installedAt: "2026-08-12T00:00:00.000Z",
   });
-  await fake.install({ nextFiles: [], removedTreeRelPaths: [], provenanceBytes });
+  await fake.install({
+    nextFiles: [],
+    removedTreeRelPaths: [],
+    provenanceBytes,
+    expectedTreeRevision: "tree-rev-1",
+  });
   await fake.readProvenance();
   expect(fake.calls.map((c) => c.method)).toEqual([
     "admit",

@@ -382,6 +382,37 @@ describe("commitDesignSystemInstall", () => {
     });
   });
 
+  test("I2 fix: the preview's treeRevision is forwarded verbatim as expectedTreeRevision", async () => {
+    await context.start(async () => {
+      const ports = createFakePorts({});
+      const prepared = expectPrepared(await wrap(prepareDesignSystemInstall(ports, MIDNIGHT_REF)));
+      expect(prepared.treeRevision).toEqual(expect.any(String));
+      expect(prepared.treeRevision.length).toBeGreaterThan(0);
+
+      await wrap(commitDesignSystemInstall(ports, prepared));
+      expect(ports.recordedInstalls[0]?.expectedTreeRevision).toBe(prepared.treeRevision);
+    });
+  });
+
+  test("I2 fix: a commit refused as DESIGN_SYSTEM_TREE_CHANGED still discards quarantine, exactly like any other install failure", async () => {
+    await context.start(async () => {
+      const ports = createFakePorts({
+        installFailure: {
+          code: "DESIGN_SYSTEM_TREE_CHANGED",
+          retryable: false,
+          safeMessage: "the design tree changed since the design-system install was previewed",
+          details: {},
+        },
+      });
+      const prepared = expectPrepared(await wrap(prepareDesignSystemInstall(ports, MIDNIGHT_REF)));
+      expect(await wrap(commitDesignSystemInstall(ports, prepared))).toHaveProperty(
+        "code",
+        "DESIGN_SYSTEM_TREE_CHANGED",
+      );
+      expect(ports.discarded).toEqual([prepared.installId]);
+    });
+  });
+
   test("a fetch failure surfaces as-is and leaves no quarantine behind", async () => {
     await context.start(async () => {
       const ports = createFakePorts({

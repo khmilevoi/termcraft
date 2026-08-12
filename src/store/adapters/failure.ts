@@ -1,5 +1,5 @@
 import type { FailureDtoV1 } from "core/protocol";
-import { PagesManifestInvalidError } from "entities/design-tree";
+import { DuplicateInventoryPathError, PagesManifestInvalidError } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
 import {
   DesignSystemPackageInvalidError,
@@ -16,6 +16,7 @@ import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
 import { DesignTreeTooDeepError, PageEntryNotFoundError } from "store/model/design-tree-store";
 import {
+  DesignSystemTreeDriftedError,
   EntrySourceDriftedError,
   JsonlOpenError,
   ManifestDriftedError,
@@ -320,6 +321,43 @@ export function toFailureDto(error: Error): FailureDtoV1 {
   if (error instanceof DesignTreeTooDeepError) {
     return {
       code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `assertDesignTreeNotDrifted` (`store/model/factory.ts`, I2 fix): the same tree-relative path
+   * was listed twice while re-walking `design/` for `installDesignSystem`'s drift check — the
+   * identical fault `core/project/model/tree-index.ts`'s `readCanonicalTreeIndex` refuses as
+   * `PERSISTENCE_FAILED` for the same reason there (`entities/design-tree`'s own
+   * `createDesignTreeInventory` refuses rather than silently picking one of two byte images). Not
+   * itself a drift signal — the closed v1 union has no dedicated "inconsistent inventory" code.
+   */
+  if (error instanceof DuplicateInventoryPathError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `TransactionEngine.installDesignSystem()` (I2 fix): the whole design tree
+   * `core/design-systems/model/install.ts`'s Gate pass ran over at preview time drifted before
+   * the commit — `DesignSystemTreeDriftedError`'s own doc comment (`store/model/factory.ts`)
+   * explains why the comparison is whole-tree rather than `system/`-scoped. Gets its OWN code
+   * (`DESIGN_SYSTEM_TREE_CHANGED`) rather than folding into `APPLY_SOURCE_CHANGED`: that code's
+   * `part` is a kernel-command-contract §11.2-fixed, closed `"page" | "manifest"` vocabulary for a
+   * TURN's own CAS conflict, and a whole-design-tree drift scoped to design-system installs is
+   * neither — the UI needs a code it can recognize to say "the tree changed, redo the preview",
+   * not a bucket shared with an unrelated turn-commit race.
+   */
+  if (error instanceof DesignSystemTreeDriftedError) {
+    return {
+      code: "DESIGN_SYSTEM_TREE_CHANGED",
       retryable: false,
       safeMessage: safeMessageOf(error),
       details: {},

@@ -68,11 +68,21 @@ export interface DesignSystemInstallPort {
    * that the incoming one does not, and the provenance record in ONE transaction (D11) — a
    * crash anywhere is rolled forward or discarded by the recovery scan `openProject` already
    * runs, never a half-replaced system.
+   *
+   * `expectedTreeRevision` (I2 fix): the whole design tree's `treeRevision`
+   * (`entities/design-tree`'s `computeTreeRevision`) AT THE MOMENT the Gate pass that produced
+   * this preview ran — `core/design-systems/model/install.ts`'s `DesignSystemPreparedInstallV1
+   * .treeRevision`, forwarded verbatim. The real adapter re-verifies it INSIDE the write permit,
+   * immediately before writing, and refuses (a tagged drift error, surfaced through this method's
+   * ordinary `FailureDtoV1` return) rather than install over a tree that changed since — the same
+   * "checked first, inside the permit" CAS discipline `store`'s `renamePageTitle`/`reorderPages`/
+   * `removePage` already apply to `design/pages.json` and one page's own entry.
    */
   install(input: {
     readonly nextFiles: readonly DesignSystemInstallFileV1[];
     readonly removedTreeRelPaths: readonly string[];
     readonly provenanceBytes: Uint8Array;
+    readonly expectedTreeRevision: string;
   }): Promise<FailureDtoV1 | undefined>;
   encodeProvenance(record: DesignSystemProvenanceRecordV1): Uint8Array;
   /** `null` when the project has never installed from a source — NOT an error (§8.5). */

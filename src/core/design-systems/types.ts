@@ -125,4 +125,16 @@ export interface DesignSystemPreparedInstallV1 {
   readonly summary: DesignSystemSummaryV1;
   readonly preview: DesignSystemPreviewV1;
   readonly candidate: DesignSystemCandidateTreeV1;
+  /**
+   * `readCanonicalTreeIndex`'s own `treeRevision` (`entities/design-tree`'s `computeTreeRevision`)
+   * — the whole design tree's identity AT THE MOMENT the Gate pass this preview reports on ran
+   * (I2 fix, project-design-systems §8.3/§12). `commitDesignSystemInstall` forwards it to
+   * `DesignSystemInstallPort.install` as `expectedTreeRevision`; the `store`-side transaction
+   * re-verifies it INSIDE the write permit, immediately before writing, and refuses the commit
+   * — `DesignSystemTreeDriftedError`, `store/model/factory.ts` — rather than install over a tree
+   * this preview never actually saw, exactly the "checked first, inside the permit" discipline
+   * `ManifestDriftedError`/`EntrySourceDriftedError` already follow for `reorderPages`/
+   * `removePage`/`renamePageTitle`.
+   */
+  readonly treeRevision: string;
 }

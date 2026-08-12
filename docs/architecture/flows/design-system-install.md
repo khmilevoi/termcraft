@@ -46,7 +46,9 @@ flowchart TD
     clean --> previewed
     previewed --> confirm(["designer confirms in the breakage-preview dialog"])
     confirm --> install["designSystem.install → commitDesignSystemInstall"]
-    install --> tx["runProjectMutation('design-system-install'): every design/system/** file + the provenance record, ONE transaction (D11)"]
+    install --> drift{"treeRevision unchanged since the Gate pass? (I2 fix)"}
+    drift -- "no — tree drifted" --> driftfail["DESIGN_SYSTEM_TREE_CHANGED — refused, nothing written, redo the preview"]
+    drift -- "yes" --> tx["runProjectMutation('design-system-install'): every design/system/** file + the provenance record, ONE transaction (D11)"]
     tx --> installed["designSystem.installed"]
 ```
 
@@ -158,18 +160,35 @@ flowchart TD
     `discardPreparedInstall`, which abandons and discards). A second preview for a different
     system evicts and discards the first — no quarantine directory is ever leaked across a
     replaced preparation.
-11. **The commit is ONE recoverable transaction** (`commitDesignSystemInstall`, decision D11).
-    `store/transaction/model/wrappers.ts` appends `"design-system-install"` as a new
+11. **The commit is ONE recoverable transaction, guarded by a whole-tree drift check** (`commitDesignSystemInstall`,
+    decision D11; drift check is the I2 fix). `prepareDesignSystemInstall` captures
+    `readCanonicalTreeIndex`'s own `treeRevision` — the whole `design/` tree's identity at the
+    moment the Gate pass ran — into `DesignSystemPreparedInstallV1.treeRevision`.
+    `commitDesignSystemInstall` forwards it to `DesignSystemInstallPort.install` as
+    `expectedTreeRevision`; `TransactionEngine.installDesignSystem` (`store/model/factory.ts`)
+    checks it FIRST, inside the write permit, before anything else — re-walking `design/` and
+    recomputing `computeTreeRevision` the same way, and refusing with `DesignSystemTreeDriftedError`
+    (surfaced to the picker as `DESIGN_SYSTEM_TREE_CHANGED`) when the two disagree. The comparison
+    is deliberately WHOLE-TREE rather than scoped to `system/**`: a concurrent turn landing
+    `design/system/extra.tsx` mid-preview would survive an install scoped only to the incoming
+    package's own paths (violating §4.4's "replaces the folder wholesale"), and a page edited
+    mid-preview that now uses a token the incoming system lacks is exactly the "breaks-pages" case
+    the preview exists to catch (§8.3, §12) — one `treeRevision` comparison closes both. Only once
+    that check passes does `store/transaction/model/wrappers.ts`'s `"design-system-install"`
     `ProjectMutationKind` — the same closed-registry pattern that added `"chat-creation"`,
     `"page-reorder"` and `"page-remove"`, "without disturbing any already-shipped kind's meaning" —
-    and `buildDesignSystemInstallOperations` folds every `nextFiles` entry (`replace`), every
+    run: `buildDesignSystemInstallOperations` folds every `nextFiles` entry (`replace`), every
     `removedTreeRelPaths` entry (`delete`), and one `replace` for the provenance record into a
-    single operation list `runProjectMutation` commits or refuses as a whole. This reuses the
-    engine's existing per-operation CAS, payload/limit pre-check, and idempotent roll-forward
-    rather than duplicating any of it in a new transaction kind.
-    - *Failure:* a crash before the transaction's `intent.json` is durable leaves the project
-      byte-identical — nothing in `design/system/**` or the provenance record has moved. A crash
-      after intent is rolled forward by the SAME recovery scan (`recoverTransactions`) that
+    single operation list `runProjectMutation` commits or refuses as a whole, reusing the engine's
+    existing per-operation CAS, payload/limit pre-check, and idempotent roll-forward.
+    - *Failure (drift):* refused with `DESIGN_SYSTEM_TREE_CHANGED` — nothing is written, and the
+      already-prepared quarantine is discarded exactly like any other install failure (the
+      `AsyncDisposableStack` in `commitDesignSystemInstall` covers every exit path uniformly). The
+      designer redoes `designSystem.preview` to get an accurate breakage preview against the tree
+      as it now stands.
+    - *Failure (crash):* a crash before the transaction's `intent.json` is durable leaves the
+      project byte-identical — nothing in `design/system/**` or the provenance record has moved. A
+      crash after intent is rolled forward by the SAME recovery scan (`recoverTransactions`) that
       `openProject` already runs for every other transaction kind; there is no
       design-system-specific recovery path, because none is needed.
 12. **Publishing** (`designSystem.publish`, `readOwnDesignSystemPackage` +
@@ -276,7 +295,9 @@ already advertises.
 - `src/core/protocol/model/{command-kind,command-payload,event-kind,event-payload,failure}.ts` —
   the four `designSystem.*` commands (44 → 48 command kinds), their nine events
   (`listed`/`listFailed`/`previewStarted`/`previewed`/`previewFailed`/`installed`/`installFailed`/
-  `published`/`publishFailed`), and the `DESIGN_SYSTEM_REJECTED` failure code
+  `published`/`publishFailed`), and the `DESIGN_SYSTEM_REJECTED`/`DESIGN_SYSTEM_TREE_CHANGED`
+  failure codes (the latter is the I2 fix's own code, distinguishing a stale preview from an
+  invalid package)
 - `src/store/design-systems/model/quarantine.ts` — `admitPackageThroughQuarantine`/
   `discardQuarantine`: the per-install quarantine under `{userStateRoot}/design-systems/quarantine/`,
   the `design/` staging prefix that routes the real limit budget, and the single read-back that
@@ -301,8 +322,10 @@ already advertises.
   (P3)
 - `src/store/transaction/model/wrappers.ts` — `"design-system-install"` (`ProjectMutationKind`,
   decision D11) and `buildDesignSystemInstallOperations`
-- `src/store/model/factory.ts` — `TransactionEngine.installDesignSystem`, wrapping
-  `buildDesignSystemInstallOperations` in `runProjectMutation` under the project's write mutex
+- `src/store/model/factory.ts` — `TransactionEngine.installDesignSystem`: `assertDesignTreeNotDrifted`
+  (checked first, inside the write permit — I2 fix) and `DesignSystemTreeDriftedError`, then
+  `buildDesignSystemInstallOperations` wrapped in `runProjectMutation` under the project's write
+  mutex
 - `src/ui/mirror/model/mirror.ts`, `src/ui/mirror/types.ts` — the `designSystems` slice: sources,
   phase (`idle`/`listing`/`checking`/`installing`/…), the held preview/prompt state, folded from
   the nine events above

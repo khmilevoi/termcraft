@@ -436,6 +436,14 @@ export interface InstallDesignSystemInput {
   readonly removedTreeRelPaths: readonly string[];
   /** `encodeDesignSystemProvenance`'s complete output (`store/design-systems`). */
   readonly provenanceBytes: Uint8Array;
+  /**
+   * The whole design tree's `treeRevision` (I2 fix) AT THE MOMENT the caller's Gate pass ran —
+   * `core/design-systems/model/install.ts`'s `DesignSystemPreparedInstallV1.treeRevision`,
+   * forwarded verbatim through `DesignSystemInstallPort.install`. Re-verified INSIDE the write
+   * permit, immediately before any write — see `TransactionEngine.installDesignSystem`'s own doc
+   * comment and `DesignSystemTreeDriftedError` (`./model/factory.ts`).
+   */
+  readonly expectedTreeRevision: string;
   readonly createdAt: string;
 }
 
@@ -505,10 +513,16 @@ export interface TransactionEngine {
   advanceSessionCheckpoint(input: AdvanceSessionCheckpointInput): Promise<Error | CommittedMarker>;
   /**
    * `designSystem.install` (project-design-systems §8.3): replaces `design/system/**` and writes
-   * `.termcraft/design-system-source.json` in ONE `project-mutation`. Every operation carries a
-   * CAS `oldImage`, so a tree that changed between the Gate pass and the commit is refused rather
-   * than overwritten; a crash is rolled forward or discarded by the recovery scan that already
-   * runs at `openProject`, so a half-replaced system is not a reachable state.
+   * `.termcraft/design-system-source.json` in ONE `project-mutation`. Every operation's own
+   * per-file `oldImage` only re-affirms whatever `observeFileImage` reads INSIDE this same permit
+   * immediately before the write — it cannot, by itself, catch a tree that changed BETWEEN the
+   * caller's Gate pass (preview time) and this call, because it never compares against anything
+   * captured at that earlier point (I2 fix). What closes that window is `input.expectedTreeRevision`:
+   * checked FIRST, inside the permit, against a freshly re-walked `design/` tree's own
+   * `computeTreeRevision` — `DesignSystemTreeDriftedError` (`./model/factory.ts`) refuses the
+   * commit, writing nothing, when the two disagree; the CAS below never even runs. A crash after
+   * that check passes is rolled forward or discarded by the recovery scan that already runs at
+   * `openProject`, so a half-replaced system is not a reachable state either way.
    */
   installDesignSystem(input: InstallDesignSystemInput): Promise<Error | CommittedMarker>;
 
@@ -713,6 +727,7 @@ export type {
   JsonlOpenError,
   ProjectLayoutError,
   ProjectAlreadyExistsError,
+  DesignSystemTreeDriftedError,
   EntrySourceDriftedError,
   ManifestDriftedError,
   ReorderPagesInvalidOrderError,

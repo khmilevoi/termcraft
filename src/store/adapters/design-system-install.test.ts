@@ -5,15 +5,28 @@ import path from "node:path";
 
 import type { PackageFileV1 } from "core/ports";
 import { parseDesignSystemRef } from "entities/design-system-ref";
+import { computeTreeRevision, createDesignTreeInventory } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 import { sha256Hex } from "store/jsonl";
 
+import type { OpenProject } from "../types";
 import {
   createDesignSystemInstallAdapter,
   createDesignSystemQuarantineAdapter,
 } from "./design-system-install";
 import { cleanupScratchRoots, createRealProjectFixture } from "./test-support";
+
+/** I2 fix: `createDesignSystemInstallAdapter`'s `install()` now requires `expectedTreeRevision` — computed the same way `store/model/factory.ts`'s `assertDesignTreeNotDrifted` recomputes it, off `open.pages.listTree()`. */
+async function currentTreeRevision(open: OpenProject): Promise<string> {
+  const listed = await open.pages.listTree();
+  if (listed instanceof Error) throw new Error(`fixture bug: ${listed.message}`);
+  const inventory = createDesignTreeInventory(
+    listed.map((file) => ({ relPath: file.relPath, sha256: file.sha256 })),
+  );
+  if (inventory instanceof Error) throw new Error(`fixture bug: ${inventory.message}`);
+  return computeTreeRevision(inventory);
+}
 
 afterEach(cleanupScratchRoots);
 
@@ -120,6 +133,7 @@ describe("createDesignSystemInstallAdapter — contract test (real project)", ()
         ],
         removedTreeRelPaths: [],
         provenanceBytes,
+        expectedTreeRevision: await currentTreeRevision(open),
       });
       expect(result).toBeUndefined();
 

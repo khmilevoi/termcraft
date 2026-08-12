@@ -123,6 +123,11 @@ export async function prepareDesignSystemInstall(
     summary: fetched.summary,
     preview: summarizeGatePass(pass),
     candidate,
+    // I2 fix: the whole-tree identity the Gate pass above ran over — `commitDesignSystemInstall`
+    // forwards it as `expectedTreeRevision` so the store-side commit can refuse a tree that
+    // drifted since this preview (see this module's header and `DesignSystemPreparedInstallV1`'s
+    // own doc comment).
+    treeRevision: index.treeRevision,
   };
 }
 
@@ -140,6 +145,15 @@ export function discardPreparedInstall(ports: DesignSystemInstallPortsV1, instal
  * is broken — nothing is written), but a `breaks-pages` preview COMMITS on this call, exactly as
  * `clean` does — §12: "surfaced before commit; not prevented". Quarantine is discarded on every
  * exit path via `AsyncDisposableStack`, so a new early return added later cannot forget it.
+ *
+ * TREE DRIFT BETWEEN THE GATE PASS AND THIS COMMIT (I2 fix). `prepared.treeRevision` is the whole
+ * design tree's identity AT THE MOMENT the Gate pass ran — passed through to `ports.install.install`
+ * as `expectedTreeRevision`. This function does NOT re-check it itself (a re-read here would still
+ * race the write, and would be a THIRD whole-tree read on top of the two `prepareDesignSystemInstall`
+ * already pays for); the store-side transaction re-verifies it INSIDE its write permit, immediately
+ * before writing, and refuses with a tagged drift error — surfaced through `ports.install.install`'s
+ * ordinary `FailureDtoV1` return — when a concurrent turn or another install changed the tree since.
+ * `DesignSystemPreparedInstallV1.treeRevision`'s own doc comment names the exact store-side class.
  */
 export async function commitDesignSystemInstall(
   ports: DesignSystemInstallPortsV1,
@@ -162,6 +176,10 @@ export async function commitDesignSystemInstall(
     nextFiles: prepared.candidate.nextFiles,
     removedTreeRelPaths: prepared.candidate.removedTreeRelPaths,
     provenanceBytes,
+    // I2 fix: the tree identity the Gate pass ran over at preview time — the store-side commit
+    // re-verifies this INSIDE its write permit and refuses rather than installs over a tree that
+    // drifted since (`DesignSystemTreeDriftedError`, `store/model/factory.ts`).
+    expectedTreeRevision: prepared.treeRevision,
   });
   if (failure !== undefined) return failure;
 

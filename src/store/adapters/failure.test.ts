@@ -3,6 +3,7 @@ import fs from "node:fs";
 
 import { QuarantineFailedError } from "store/design-systems";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
+import { DesignSystemTreeDriftedError } from "store/model/factory";
 import {
   ChatMutationLockedError,
   SourceChangedError,
@@ -104,6 +105,21 @@ describe("toFailureDto — known store errors that must not reach the unmapped c
       const error = new TurnAlreadyTerminalError({ turnId: "turn-1", targetChatId: "chat-1" });
       const dto = toFailureDto(error);
       expect(dto.code).toBe("PERSISTENCE_FAILED");
+      expect(dto.retryable).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe("toFailureDto — DesignSystemTreeDriftedError (I2 fix) gets its own distinguishable code", () => {
+  test("maps to DESIGN_SYSTEM_TREE_CHANGED, not the generic PERSISTENCE_FAILED bucket — the UI can tell this apart from every other durable fault", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const error = new DesignSystemTreeDriftedError({});
+      const dto = toFailureDto(error);
+      expect(dto.code).toBe("DESIGN_SYSTEM_TREE_CHANGED");
       expect(dto.retryable).toBe(false);
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {

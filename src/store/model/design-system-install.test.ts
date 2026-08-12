@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { parseDesignSystemRef } from "entities/design-system-ref";
+import { computeTreeRevision, createDesignTreeInventory } from "entities/design-tree";
 import { uuidv7 } from "infrastructure/uuid";
 import { CURRENT_KIT_API_VERSION } from "runtime";
 import {
@@ -38,7 +39,7 @@ import type {
 } from "store/transaction";
 
 import type { OpenProject, StoreDeps } from "../types";
-import { createStore, nodeStoreDeps } from "./factory";
+import { DesignSystemTreeDriftedError, createStore, nodeStoreDeps } from "./factory";
 
 // Task 5 (P10 install-and-picker, D11): `installDesignSystem` writes every `design/system/**`
 // file AND the provenance record in ONE recoverable `project-mutation` transaction. This file
@@ -184,6 +185,24 @@ function existsProjectFile(opened: OpenProject, relPath: string): boolean {
 }
 
 /**
+ * The whole `design/` tree's `treeRevision` (I2 fix), computed the SAME way
+ * `core/project/model/tree-index.ts`'s `readCanonicalTreeIndex` computes it at preview time and
+ * `store/model/factory.ts`'s `assertDesignTreeNotDrifted` recomputes it at commit time —
+ * `opened.pages.listTree()` is the store-side counterpart of the `DesignTreeReader` port both of
+ * those use. A test captures this BEFORE whatever state it wants to treat as "what the preview
+ * saw", then passes it as `expectedTreeRevision` to `installDesignSystem`.
+ */
+async function currentTreeRevision(opened: OpenProject): Promise<string> {
+  const listed = await opened.pages.listTree();
+  if (listed instanceof Error) throw new Error(`fixture bug: ${listed.message}`);
+  const inventory = createDesignTreeInventory(
+    listed.map((file) => ({ relPath: file.relPath, sha256: file.sha256 })),
+  );
+  if (inventory instanceof Error) throw new Error(`fixture bug: ${inventory.message}`);
+  return computeTreeRevision(inventory);
+}
+
+/**
  * Every durable journal plan under `transactions.local/` whose `mutationKind` matches, decoded.
  * Filtered by kind rather than listed wholesale: `freshOpenProject()`'s own `createProject` call
  * already commits a `project-creation` plan of its own before the test ever runs, so an
@@ -215,6 +234,7 @@ describe("TransactionEngine.installDesignSystem — one recoverable transaction 
         "system/components/Legacy.tsx",
         bytesOf("export const Legacy = () => null;"),
       );
+      const expectedTreeRevision = await currentTreeRevision(opened);
 
       const built = await opened.transactions.installDesignSystem({
         transactionId: uuidv7(),
@@ -225,6 +245,7 @@ describe("TransactionEngine.installDesignSystem — one recoverable transaction 
         ],
         removedTreeRelPaths: ["system/components/Legacy.tsx"],
         provenanceBytes: encodeDesignSystemProvenance(PROVENANCE),
+        expectedTreeRevision,
         createdAt: TS,
       });
       expect(built).not.toBeInstanceOf(Error);
@@ -243,12 +264,14 @@ describe("TransactionEngine.installDesignSystem — one recoverable transaction 
   test("the provenance record and the system files land in ONE transaction", async () => {
     const opened = await freshOpenProject();
     try {
+      const expectedTreeRevision = await currentTreeRevision(opened);
       const built = await opened.transactions.installDesignSystem({
         transactionId: uuidv7(),
         actionId: uuidv7(),
         nextFiles: [{ treeRelPath: "system/design-system.json", bytes: bytesOf(NEXT_MANIFEST) }],
         removedTreeRelPaths: [],
         provenanceBytes: encodeDesignSystemProvenance(PROVENANCE),
+        expectedTreeRevision,
         createdAt: TS,
       });
       if (built instanceof Error) throw built;
@@ -259,6 +282,86 @@ describe("TransactionEngine.installDesignSystem — one recoverable transaction 
       // provenance plan).
       const plans = designSystemInstallPlans(opened);
       expect(plans).toHaveLength(1);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+});
+
+// ---- I2 fix: tree-drift protection between preview and commit ---------------------------------
+//
+// `assertDesignTreeNotDrifted` (`./factory.ts`) refuses `installDesignSystem` when the whole
+// `design/` tree changed since `expectedTreeRevision` was captured — closing the window a
+// designer's held breakage-preview dialog would otherwise leave open. Both drift and no-drift use
+// ONLY `installDesignSystem` itself (the store's own normal write path into `design/system/**`),
+// never a raw filesystem poke, so "drift" here is exactly what it would be in production: a
+// second install (a concurrent turn's own commit path is the identical shape at the engine level
+// — one `runProjectMutation` under the same write mutex) landing between this test's captured
+// `expectedTreeRevision` and its own `installDesignSystem` call.
+describe("TransactionEngine.installDesignSystem — tree-drift protection (I2 fix)", () => {
+  test("a concurrent install between preview and commit is refused, and the stale commit's own files are never written", async () => {
+    const opened = await freshOpenProject();
+    try {
+      // The "preview": captured before anything else changes the tree.
+      const staleExpectedTreeRevision = await currentTreeRevision(opened);
+
+      // A CONCURRENT install lands first, through the identical `installDesignSystem` path — the
+      // "an agent turn committed design/system/extra.tsx while the dialog was open" scenario.
+      // It carries its OWN freshly-captured revision, so it is not itself drifted, and succeeds.
+      const concurrent = await opened.transactions.installDesignSystem({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        nextFiles: [{ treeRelPath: "system/extra.tsx", bytes: bytesOf("export const x = 1;") }],
+        removedTreeRelPaths: [],
+        provenanceBytes: encodeDesignSystemProvenance(PROVENANCE),
+        expectedTreeRevision: staleExpectedTreeRevision,
+        createdAt: TS,
+      });
+      expect(concurrent).not.toBeInstanceOf(Error);
+      expect(existsProjectFile(opened, "design/system/extra.tsx")).toBe(true);
+
+      // The STALE commit — still carrying the revision captured BEFORE the concurrent install —
+      // is refused rather than overwriting whatever the concurrent install just landed.
+      const stale = await opened.transactions.installDesignSystem({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        nextFiles: [{ treeRelPath: "system/design-system.json", bytes: bytesOf(NEXT_MANIFEST) }],
+        removedTreeRelPaths: [],
+        provenanceBytes: encodeDesignSystemProvenance(PROVENANCE),
+        expectedTreeRevision: staleExpectedTreeRevision,
+        createdAt: TS,
+      });
+      expect(stale).toBeInstanceOf(DesignSystemTreeDriftedError);
+
+      // The tree is untouched by the refused commit: `design-system.json` is still whatever
+      // `createProject` originally seeded (`freshOpenProject` scaffolds one), NEVER the stale
+      // attempt's `NEXT_MANIFEST` — neither the concurrent install nor the refused one touched
+      // this path. `extra.tsx` from the concurrent install is still exactly as it landed, and no
+      // second `design-system-install` transaction plan was ever produced for the refused call.
+      expect(readProjectFile(opened, "design/system/design-system.json")).not.toBe(NEXT_MANIFEST);
+      expect(existsProjectFile(opened, "design/system/extra.tsx")).toBe(true);
+      expect(designSystemInstallPlans(opened)).toHaveLength(1);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
+  test("regression guard: no drift since the captured revision — the commit still succeeds unchanged", async () => {
+    const opened = await freshOpenProject();
+    try {
+      const expectedTreeRevision = await currentTreeRevision(opened);
+
+      const built = await opened.transactions.installDesignSystem({
+        transactionId: uuidv7(),
+        actionId: uuidv7(),
+        nextFiles: [{ treeRelPath: "system/design-system.json", bytes: bytesOf(NEXT_MANIFEST) }],
+        removedTreeRelPaths: [],
+        provenanceBytes: encodeDesignSystemProvenance(PROVENANCE),
+        expectedTreeRevision,
+        createdAt: TS,
+      });
+      expect(built).not.toBeInstanceOf(Error);
+      expect(readProjectFile(opened, "design/system/design-system.json")).toBe(NEXT_MANIFEST);
     } finally {
       await opened.close();
     }

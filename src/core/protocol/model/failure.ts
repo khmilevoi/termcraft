@@ -4,9 +4,10 @@ import { z } from "zod";
  * The closed v1 operational-failure code registry (kernel-command-contract §11.2),
  * transcribed verbatim from the table's "Code" column in table order — rows listing
  * several comma-separated codes expand to one entry each, still in left-to-right order —
- * PLUS one code from a later spec, `DESIGN_SYSTEM_REJECTED` (project-design-systems §8.3/§12,
- * appended last, see its own entry below for why this registry is no longer §11.2-only). Its
- * length is asserted at 31 by the closure test so a member cannot be silently added or dropped.
+ * PLUS two codes from a later spec, `DESIGN_SYSTEM_REJECTED` and `DESIGN_SYSTEM_TREE_CHANGED`
+ * (project-design-systems §8.3/§12, appended last, see their own entries below for why this
+ * registry is no longer §11.2-only). Its length is asserted at 32 by the closure test so a
+ * member cannot be silently added or dropped.
  */
 export const OPERATIONAL_FAILURE_CODES_V1 = [
   "BACKEND_UNAVAILABLE",
@@ -48,12 +49,23 @@ export const OPERATIONAL_FAILURE_CODES_V1 = [
   // type-check its own `FailureDtoV1` return; see that module's own header for the pipeline this
   // closes.
   "DESIGN_SYSTEM_REJECTED",
+  // project-design-systems §8.3/§12, I2 fix (2026-08-12): the whole design tree the Gate pass
+  // ran over at preview time drifted before `designSystem.install` committed — a concurrent turn
+  // (or another install) changed `design/` between the preview and the confirm. Distinct from
+  // `DESIGN_SYSTEM_REJECTED` (the package itself is invalid): here the package is fine, but the
+  // preview it was validated against is stale, so the designer must redo it. Not folded into
+  // `APPLY_SOURCE_CHANGED`: that code's `part` is a kernel-command-contract §11.2-fixed, closed
+  // `"page" | "manifest"` vocabulary describing a TURN's own CAS conflict, and this is neither —
+  // it is a whole-tree comparison scoped to design-system installs, following the exact same
+  // "append a new code rather than stretch an existing spec-fixed one" precedent
+  // `DESIGN_SYSTEM_REJECTED` itself set just above.
+  "DESIGN_SYSTEM_TREE_CHANGED",
 ] as const;
 
 export type OperationalFailureCode = (typeof OPERATIONAL_FAILURE_CODES_V1)[number];
 
-/** The exact member count §11.2 fixes, PLUS `DESIGN_SYSTEM_REJECTED` (see its own entry above). A drifted union fails the closure test, not a review. */
-export const OPERATIONAL_FAILURE_CODE_COUNT = 31;
+/** The exact member count §11.2 fixes, PLUS `DESIGN_SYSTEM_REJECTED`/`DESIGN_SYSTEM_TREE_CHANGED` (see their own entries above). A drifted union fails the closure test, not a review. */
+export const OPERATIONAL_FAILURE_CODE_COUNT = 32;
 
 const OPERATIONAL_FAILURE_CODE_SET: ReadonlySet<string> = new Set(OPERATIONAL_FAILURE_CODES_V1);
 
