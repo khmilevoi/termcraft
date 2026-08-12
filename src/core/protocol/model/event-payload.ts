@@ -1931,14 +1931,21 @@ export interface DesignSystemSummaryDtoV1 {
   readonly componentNames: readonly string[];
 }
 
+// `defaultThemeTokens`/`componentNames` carry NO `.max()` (I3 fix): both are copied straight off
+// an untrusted manifest (`store/design-systems/model/summary.ts`'s `toDesignSystemSummary`, over
+// `manifest.themes[…].tokens`/`manifest.components`) with no producer-side truncation, so a
+// runtime cap here could fail an otherwise-valid `designSystem.listed`/`.previewed` and take the
+// WHOLE event batch down with it (`event-bus.ts`'s `validateBatch` is all-or-nothing). Matches
+// this file's own sibling precedent: `turnGateErrorV1Schema`/`turnGateWarningV1Schema`'s
+// `blockedPages` (~line 880/912) carry no cap either, for the identical reason.
 const designSystemSummaryDtoV1Schema = z.strictObject({
   id: z.string().min(1),
   name: z.string().min(1),
   version: z.string().min(1),
   kitApiVersion: positiveIntSchema,
   defaultTheme: z.string().min(1),
-  defaultThemeTokens: z.array(designSystemTokenSwatchDtoV1Schema).max(256).readonly(),
-  componentNames: z.array(z.string().min(1)).max(64).readonly(),
+  defaultThemeTokens: z.array(designSystemTokenSwatchDtoV1Schema).readonly(),
+  componentNames: z.array(z.string().min(1)).readonly(),
 });
 
 /** One configured source's row for the picker (`SourceListingV1`, `core/design-systems`, decisions D9/D10). */
@@ -1960,7 +1967,11 @@ const sourceListingDtoV1Schema = z.strictObject({
   canPublish: z.boolean(),
   state: z.enum(SOURCE_LIST_STATES_V1),
   systems: z.array(designSystemSummaryDtoV1Schema).readonly(),
-  reason: z.string().max(400).nullable(),
+  // NO `.max()` (I3 fix): `core/design-systems/model/sources.ts`'s `listOne` copies
+  // `raced.message`/`safeMessage` in verbatim, with no producer-side truncation — a long source
+  // failure message used to fail this schema and take the WHOLE `designSystem.listed` batch down
+  // with it. Same sibling precedent as `designSystemSummaryDtoV1Schema`'s fields just above.
+  reason: z.string().nullable(),
 });
 
 /** One Gate diagnostic, redrawn for the picker's breakage-preview dialog (`DesignSystemBreakageItemV1`, decision D6). */
@@ -1973,9 +1984,17 @@ export interface DesignSystemBreakageDtoV1 {
 
 const designSystemBreakageDtoV1Schema = z.strictObject({
   code: z.string().min(1),
+  // `.max(400)` stays: `core/design-systems/model/candidate.ts`'s `truncateMessage` already
+  // truncates every message to this exact bound before `toBreakageItem` builds this DTO, so the
+  // cap is producer-enforced, never producer-unbounded.
   message: z.string().max(400),
   file: z.string().min(1).nullable(),
-  blockedPages: z.array(pageSlugSchema).max(20).readonly(),
+  // NO `.max()` (I3 fix): `candidate.ts`'s `toBreakageItem` copies `blockedPages` in verbatim —
+  // a package that breaks 21+ pages via one shared module used to fail this schema and take the
+  // WHOLE `designSystem.previewed` event down with it, hanging the picker on "checking…" forever.
+  // Matches this file's own sibling precedent: `turnGateErrorV1Schema`/`turnGateWarningV1Schema`'s
+  // `blockedPages` (~line 880/912) carry no cap either.
+  blockedPages: z.array(pageSlugSchema).readonly(),
 });
 
 /** The classified answer `summarizeGatePass` hands the picker (`DesignSystemPreviewV1`, decision D6). */
