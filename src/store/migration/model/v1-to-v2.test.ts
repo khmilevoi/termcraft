@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { PageSlug } from "entities/page";
+import { createDesignSystemSeedFiles } from "store/model/design-system-seed";
 import { createSafeProjectFs, nodeSafeFsDeps, openManagedRoot } from "store/safe-fs";
 import { nodeTransactionFsDeps } from "store/transaction";
 
@@ -18,6 +19,7 @@ const PLAN_ID = "019fb111-0000-7000-8000-000000000001";
 const scan = (input: {
   readonly slugs: readonly string[];
   readonly pinned?: readonly string[];
+  readonly hasDesignSystem?: boolean;
 }): LegacyProjectV1 => ({
   formatVersion: 1,
   projectId: PROJECT_ID,
@@ -29,6 +31,7 @@ const scan = (input: {
     legacySourcePath: `pages/${slug}/page.tsx`,
     legacyPinsPath: (input.pinned ?? []).includes(slug) ? `pages/${slug}/comments.jsonl` : null,
   })),
+  hasDesignSystem: input.hasDesignSystem ?? false,
 });
 
 describe("planV1ToV2 (design-tree §12.2 track 1's move set)", () => {
@@ -69,14 +72,24 @@ describe("planV1ToV2 (design-tree §12.2 track 1's move set)", () => {
     expect(plan.backupsDir).not.toContain(".termcraft");
   });
 
-  test("carries the version pair and the caller's plan id verbatim", () => {
+  test("carries the version pair and the caller's plan id verbatim — straight to format 3", () => {
     const plan = planV1ToV2({
       scan: scan({ slugs: [] }),
       userStateRoot: USER_STATE_ROOT,
       migrationPlanId: PLAN_ID,
     });
-    expect(plan).toMatchObject({ migrationPlanId: PLAN_ID, fromVersion: 1, toVersion: 2 });
+    expect(plan).toMatchObject({ migrationPlanId: PLAN_ID, fromVersion: 1, toVersion: 3 });
     expect(plan.moves).toEqual([]);
+    expect(plan.seedsDesignSystem).toBe(true);
+  });
+
+  test("seedsDesignSystem is false when the scan already found one (ruling 4)", () => {
+    const plan = planV1ToV2({
+      scan: scan({ slugs: [], hasDesignSystem: true }),
+      userStateRoot: USER_STATE_ROOT,
+      migrationPlanId: PLAN_ID,
+    });
+    expect(plan.seedsDesignSystem).toBe(false);
   });
 });
 
@@ -96,6 +109,9 @@ const nextPayloadId = () => `payload-${++payloadCounter}`;
 function seedForOperations(input: {
   readonly slugs: readonly string[];
   readonly pinned?: readonly string[];
+  /** A hand-edit or an abandoned earlier attempt's `design/system/design-system.json`, already
+   *  present before the scan+build pipeline runs — the case ruling 4 guards against. */
+  readonly hasDesignSystem?: boolean;
 }) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "tc-v1v2-"));
   scratchRoots.push(scratch);
@@ -125,6 +141,13 @@ function seedForOperations(input: {
         '{"kind":"header"}\n',
       );
   }
+  if (input.hasDesignSystem === true) {
+    fs.mkdirSync(path.join(termcraftDir, "design", "system"), { recursive: true });
+    fs.writeFileSync(
+      path.join(termcraftDir, "design", "system", "design-system.json"),
+      '{"schemaVersion":1,"hand-edited":true}',
+    );
+  }
   const deps = nodeSafeFsDeps();
   const root = openManagedRoot({ kind: "project-migration", path: termcraftDir, deps });
   if (root instanceof Error) throw root;
@@ -141,7 +164,11 @@ function seedForOperations(input: {
 describe("buildV1ToV2Operations (one transaction, writes before deletes)", () => {
   test("writes the moved sources, the synthesized manifest and the rewritten project.toml", () => {
     const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard", "calendar"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
 
     const byTarget = new Map(built.operations.map((op) => [op.target, op]));
@@ -150,6 +177,8 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
         "design/pages.json",
         "design/pages/calendar.tsx",
         "design/pages/dashboard.tsx",
+        "design/system/design-system.json",
+        "design/system/tokens.ts",
         "pages/calendar/page.tsx",
         "pages/dashboard/page.tsx",
         "project.toml",
@@ -159,9 +188,28 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
     expect(byTarget.get("pages/dashboard/page.tsx")?.mode).toBe("delete");
   });
 
+  test("the seeded design system's bytes are IDENTICAL to createProject's", () => {
+    const { fsDeps, scanned } = seedForOperations({ slugs: [] });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
+    if (built instanceof Error) throw built;
+    const expected = createDesignSystemSeedFiles({ kitApiVersion: 1 });
+    const manifestOp = built.operations.find(
+      (op) => op.target === "design/system/design-system.json",
+    );
+    expect(built.payloads.get(manifestOp?.payloadId ?? "")).toEqual(expected[0]!.bytes);
+  });
+
   test("every delete operation is ordered after every write operation", () => {
     const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
     const lastWrite = built.operations.findLastIndex((op) => op.mode === "replace");
     const firstDelete = built.operations.findIndex((op) => op.mode === "delete");
@@ -170,7 +218,11 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
 
   test("operation indexes are a dense 0..n-1 sequence", () => {
     const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard", "calendar"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
     expect(built.operations.map((op) => op.index)).toEqual(
       built.operations.map((_op, index) => index),
@@ -179,7 +231,11 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
 
   test("the moved page source's payload is the ORIGINAL bytes, unedited", () => {
     const { fsDeps, scanned, sourceBytes } = seedForOperations({ slugs: ["dashboard"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
     const moved = built.operations.find((op) => op.target === "design/pages/dashboard.tsx");
     const payload = built.payloads.get(moved?.payloadId ?? "");
@@ -188,7 +244,11 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
 
   test("the synthesized pages.json preserves manifest order and points at the moved entries", () => {
     const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard", "calendar"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
     const manifestOp = built.operations.find((op) => op.target === "design/pages.json");
     const text = new TextDecoder().decode(built.payloads.get(manifestOp?.payloadId ?? ""));
@@ -201,13 +261,17 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
     });
   });
 
-  test("the rewritten project.toml is format 2 and carries no pages array", () => {
+  test("the rewritten project.toml is format 3 and carries no pages array", () => {
     const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
     const manifestOp = built.operations.find((op) => op.target === "project.toml");
     const text = new TextDecoder().decode(built.payloads.get(manifestOp?.payloadId ?? ""));
-    expect(text).toContain("format_version = 2");
+    expect(text).toContain("format_version = 3");
     expect(text).not.toContain("pages");
     expect(text).toContain('project_id = "019fa002-5f5b-7000-92e3-9931eebd6c52"');
     expect(text).toContain('created_at = "2026-07-26T19:58:57.883Z"');
@@ -215,7 +279,11 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
 
   test("the backup set holds every source byte and the old project.toml", () => {
     const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard"], pinned: ["dashboard"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
     expect(built.backupFiles.map((file) => file.relPath).sort()).toEqual([
       "pages/dashboard/comments.jsonl",
@@ -230,8 +298,30 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
 
   test("a pin log is moved only when the scan found one", () => {
     const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard"] });
-    const built = buildV1ToV2Operations(fsDeps, { scan: scanned, newPayloadId: nextPayloadId });
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
     if (built instanceof Error) throw built;
     expect(built.operations.some((op) => op.target.startsWith("pins/"))).toBe(false);
+  });
+
+  test("an existing design system on a format-1 project is preserved — the seed is not written, and backupFiles stays exact (ruling 4)", () => {
+    const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard"], hasDesignSystem: true });
+    expect(scanned.hasDesignSystem).toBe(true);
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
+    if (built instanceof Error) throw built;
+    expect(built.operations.some((op) => op.target.startsWith("design/system/"))).toBe(false);
+    // "never a superset, never a subset" (V1ToV2OperationsV1's own doc comment): the untouched
+    // design-system.json must never appear in the backup set either.
+    expect(built.backupFiles.map((file) => file.relPath).sort()).toEqual([
+      "pages/dashboard/page.tsx",
+      "project.toml",
+    ]);
   });
 });

@@ -8,6 +8,7 @@ import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { PinCreatedEvent } from "entities/pin";
 import { uuidv7 } from "infrastructure/uuid";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 import {
   buildChatAppend,
   buildPinAppend,
@@ -107,6 +108,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const originalManifest = await created.manifest.read();
@@ -190,6 +192,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();
@@ -198,7 +201,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
     const manifestPath = absOf(termcraftDir, PROJECT_MANIFEST_FILENAME);
     const bumped = fs
       .readFileSync(manifestPath, "utf8")
-      .replace("format_version = 2", "format_version = 3");
+      .replace("format_version = 3", "format_version = 4");
     fs.writeFileSync(manifestPath, bumped);
 
     const reopened = await store.openProject(projectRoot);
@@ -216,6 +219,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();
@@ -249,6 +253,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();
@@ -268,6 +273,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();
@@ -319,6 +325,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const manifest = await created.manifest.read();
@@ -372,6 +379,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Smoke",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();
@@ -421,6 +429,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       ).toBeNull();
       expect(reopened.migrations.chain).toEqual([
         { kind: "project.toml", fromVersion: 1, toVersion: 2 },
+        { kind: "project.toml", fromVersion: 2, toVersion: 3 },
       ]);
     } finally {
       await reopened.close();
@@ -447,6 +456,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Once",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();
@@ -459,6 +469,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       root: projectRoot,
       name: "Twice",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     expect(ProjectAlreadyExistsError.is(recreated)).toBe(true);
   }, 20_000);
@@ -481,6 +492,7 @@ describe("identity checks (storage-identity §5.2)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const manifest = await created.manifest.read();
@@ -524,6 +536,7 @@ describe("identity checks (storage-identity §5.2)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const termcraftDir = path.join(projectRoot, ".termcraft");
@@ -563,6 +576,7 @@ describe("identity checks (storage-identity §5.2)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const manifest = await created.manifest.read();
@@ -621,6 +635,7 @@ describe("identity checks (storage-identity §5.2)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const manifest = await created.manifest.read();
@@ -685,6 +700,7 @@ describe("chat index persistence (projections §7.1, major finding #3)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const termcraftDir = path.join(projectRoot, ".termcraft");
@@ -765,6 +781,7 @@ describe("chat index persistence (projections §7.1, major finding #3)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const termcraftDir = path.join(projectRoot, ".termcraft");
@@ -847,6 +864,7 @@ describe("chat index persistence (projections §7.1, major finding #3)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     const termcraftDir = path.join(projectRoot, ".termcraft");
@@ -936,7 +954,7 @@ interface PlanFixture {
 function oneFileReplacePlan(termcraftDir: string, transactionId: string): PlanFixture {
   const oldBytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 2,
+      formatVersion: 3,
       projectId: uuidv7(),
       name: "Old",
       createdAt: TS,
@@ -946,7 +964,7 @@ function oneFileReplacePlan(termcraftDir: string, transactionId: string): PlanFi
   writeManaged(termcraftDir, PROJECT_MANIFEST_FILENAME, oldBytes);
   const newBytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 2,
+      formatVersion: 3,
       projectId: uuidv7(),
       name: "New",
       createdAt: TS,
@@ -1221,7 +1239,7 @@ function exportPublishPlan(transactionId: string): PlanFixture {
 function migrationPlan(transactionId: string): PlanFixture {
   const bytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 2,
+      formatVersion: 3,
       projectId: uuidv7(),
       name: "Migrated",
       createdAt: TS,

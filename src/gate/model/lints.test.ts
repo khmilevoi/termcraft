@@ -7,7 +7,9 @@ import type { SourceStreamTruncatedError } from "./lexer";
 import {
   lintDeterminism,
   lintDroppedIds,
+  lintModuleScopeTokens,
   lintSilencingAny,
+  lintTokenNameColors,
   lintUnlistedNavigation,
   lintUnpointedElements,
 } from "./lints";
@@ -457,10 +459,230 @@ describe("the token-based lints — a stream that does not cover the source is a
     expect(() => lintUnlistedNavigation(UNREADABLE, "jsx", ["home" as PageSlug])).toThrow();
   });
 
+  test("lintModuleScopeTokens lets the throw PASS rather than returning []", () => {
+    expect(() => lintModuleScopeTokens(UNREADABLE, "jsx")).toThrow();
+  });
+
+  test("lintTokenNameColors lets the throw PASS rather than returning []", () => {
+    expect(() => lintTokenNameColors(UNREADABLE, "jsx")).toThrow();
+  });
+
   test("…and every one of them still runs on an ordinary source — not a blanket refusal", () => {
     expect(scanned(lintDeterminism(COVERED, "jsx"))).toEqual([]);
     expect(scanned(lintSilencingAny(COVERED, "jsx"))).toEqual([]);
     expect(scanned(lintDroppedIds(COVERED, "jsx", []))).toEqual([]);
     expect(scanned(lintUnlistedNavigation(COVERED, "jsx", []))).toEqual([]);
+    expect(scanned(lintModuleScopeTokens(COVERED, "jsx"))).toEqual([]);
+    expect(scanned(lintTokenNameColors(COVERED, "jsx"))).toEqual([]);
+  });
+});
+
+describe("lintModuleScopeTokens (design-systems §4.5, §7)", () => {
+  const kinds = (source: string) => {
+    // NOTE: the brief's own snippet used "tsx", which is not a valid `SourceSyntax` —
+    // `lexer.ts` declares `SourceSyntax = "jsx" | "no-jsx"`. Corrected to "jsx" here.
+    const result = lintModuleScopeTokens(source, "jsx");
+    if (result instanceof Error) throw result;
+    return result.map((w) => w.kind);
+  };
+
+  test("a call at module scope warns", () => {
+    expect(kinds(`import { useTokens } from "../system/tokens"\nconst t = useTokens()\n`)).toEqual([
+      "module-scope-tokens",
+    ]);
+  });
+
+  test("the warning names the fix, not just the fault", () => {
+    const result = lintModuleScopeTokens(`const t = useTokens()\n`, "jsx");
+    if (result instanceof Error) throw result;
+    expect(result[0]?.message).toContain("inside the component");
+    expect(result[0]?.line).toBe(1);
+  });
+
+  test("a call inside a component body is clean", () => {
+    expect(
+      kinds(
+        `export default reatomComponent(function Page() {\n  const t = useTokens()\n  return null\n})\n`,
+      ),
+    ).toEqual([]);
+  });
+
+  test("the §4.3 scaffold stays clean — a regression pin, not a guard pin", () => {
+    // NOT actually exercising the `=>` guard (review finding 3): the scaffold's `useTokens` is a
+    // declaration binding (`useTokens = …`, followed by `=` not `(`) and the call inside it is a
+    // DIFFERENT identifier (`useRuntimeTokens`), so the shape check alone already rejects both —
+    // this passes with or without the `=>` guard. Kept anyway as a regression pin: if a future
+    // change to the shape check ever made it match `useTokens = (...)`-style bindings, this would
+    // catch it turning the tool's own generated file non-clean.
+    expect(
+      kinds(
+        `import { useTokens as useRuntimeTokens, type Color } from "@termcraft/runtime"\n` +
+          `import ds from "./design-system.json"\n\n` +
+          `export type Tokens = { [K in keyof (typeof ds)["themes"]["dark-default"]["tokens"]]: Color }\n` +
+          `export const useTokens = () => useRuntimeTokens<Tokens>()\n`,
+      ),
+    ).toEqual([]);
+  });
+
+  test("an arrow with a BRACE body is clean too — the call is inside the brace", () => {
+    expect(kinds(`const read = () => {\n  const t = useTokens()\n  return t\n}\n`)).toEqual([]);
+  });
+
+  test("a second module-scope call after a braced function still warns", () => {
+    // The `=>` latch must reset at a statement boundary, or one arrow anywhere would disable the
+    // lint for the rest of the file. This source has no braces and no semicolons — the boundary
+    // between the two statements is drawn only by automatic semicolon insertion, which the token
+    // stream carries no token for, so the latch must reset on the second line's `const` keyword.
+    expect(kinds(`const read = () => useTokens()\nconst t = useTokens()\n`)).toEqual([
+      "module-scope-tokens",
+    ]);
+  });
+
+  test("an IMPORT of the name is not a call", () => {
+    expect(kinds(`import { useTokens } from "../system/tokens"\n`)).toEqual([]);
+  });
+
+  test("a call WITH arguments is not this lint's business", () => {
+    expect(kinds(`const t = useTokens(1)\n`)).toEqual([]);
+  });
+
+  test("a member access is not the runtime hook", () => {
+    expect(kinds(`const t = kit.useTokens()\n`)).toEqual([]);
+  });
+
+  describe("a lazy arrow helper reading useTokens() more than once is clean (review finding 1)", () => {
+    // A reset on the CALL closing (an earlier draft of this lint) made every one of these warn on
+    // their second read — still inside the same un-braced arrow expression, still a legitimate
+    // deferred read, and an over-report D10 forbids. The fix resets the latch on a statement-start
+    // keyword token instead, which cannot appear mid-expression.
+    test("two reads combined by an operator", () => {
+      expect(kinds(`const f = () => useTokens() + useTokens()\n`)).toEqual([]);
+    });
+
+    test("two reads inside an array literal", () => {
+      expect(kinds(`const pair = () => [useTokens().fg, useTokens().bg]\n`)).toEqual([]);
+    });
+
+    test("two reads joined by nullish coalescing, after export/const before the arrow", () => {
+      expect(kinds(`export const c = () => useTokens().bg ?? useTokens().fg\n`)).toEqual([]);
+    });
+
+    test("two reads on either side of a conditional expression", () => {
+      expect(kinds(`const g = () => (cond ? useTokens() : useTokens())\n`)).toEqual([]);
+    });
+  });
+});
+
+describe("lintTokenNameColors (design-systems §4.5, §7, §9)", () => {
+  const only = (source: string) => {
+    // NOTE: the brief's own snippet used "tsx", which is not a valid `SourceSyntax` —
+    // `lexer.ts` declares `SourceSyntax = "jsx" | "no-jsx"`. Corrected to "jsx" here, same as
+    // `lintModuleScopeTokens`'s test block above.
+    const result = lintTokenNameColors(source, "jsx");
+    if (result instanceof Error) throw result;
+    return result;
+  };
+
+  test("carries the EXACT rewrite, not a bare complaint", () => {
+    const [warning] = only(`<Text id="t" color="foregroundMuted">hi</Text>`);
+    expect(warning?.kind).toBe("token-name-as-color");
+    expect(warning?.message).toContain('color="foregroundMuted"');
+    expect(warning?.message).toContain("color={t.foregroundMuted}");
+    expect(warning?.message).toContain("const t = useTokens()");
+  });
+
+  test("fires on every Color-typed prop the catalog declares", () => {
+    // `color`, `background`, `borderColor`, `titleColor` are the four in `src/runtime/ui/*.tsx`
+    // today; the `*Color` suffix rule is what makes the wrapper plans (P5-P9) need no edit here.
+    expect(
+      only(`<Panel id="p" borderColor="accent" titleColor="accentHi" background="surface" />`)
+        .length,
+    ).toBe(3);
+  });
+
+  test("a real hex is clean", () => {
+    expect(only(`<Text id="t" color="#e6a23c">hi</Text>`)).toEqual([]);
+  });
+
+  test("an expression binding is clean — that is the shape this lint is teaching", () => {
+    expect(only(`<Text id="t" color={t.accent}>hi</Text>`)).toEqual([]);
+  });
+
+  test("a non-colour prop with a string value is clean", () => {
+    expect(only(`<Text id="title" title="accent">hi</Text>`)).toEqual([]);
+  });
+
+  test("a hyphenated attribute whose tail is `color` is NOT a colour prop", () => {
+    // The lexer hands `data`, `-`, `color` back as three tokens; a bare tail match would read
+    // `data-color` as `color`.
+    expect(only(`<box data-color="accent" id="b">x</box>`)).toEqual([]);
+  });
+
+  test("the warning carries a position", () => {
+    const [warning] = only(`<Text\n  id="t"\n  color="accent"\n/>`);
+    expect(warning?.line).toBe(3);
+  });
+
+  describe("the message is bounded plain text (review round 1, Finding 1)", () => {
+    // MEASURED: an attribute value carrying a raw ESC byte used to produce a warning whose
+    // `message` contained that same control byte, before `boundedPlainText` (`./type-check`,
+    // reused rather than duplicated) was threaded through the interpolated attribute value. Built
+    // via `String.fromCharCode` rather than an escape embedded in the template literal, so the
+    // ESC byte exists only at RUNTIME and this source file itself stays plain ASCII.
+    test("a control character (ESC) in the attribute value never reaches the message", () => {
+      const esc = String.fromCharCode(27);
+      const [warning] = only(`<box id="b" color="${esc}[31mred" />`);
+      expect(warning?.message).toBeDefined();
+      // eslint-disable-next-line no-control-regex -- the assertion IS that no control byte survives
+      expect(/[\x00-\x1f\x7f-\x9f]/.test(warning?.message ?? "")).toBe(false);
+      expect(warning?.message).toContain("[31mred");
+    });
+
+    test("an attribute value past the 200-char cap is truncated, not carried verbatim", () => {
+      const long = "a".repeat(250);
+      const [warning] = only(`<box id="b" color="${long}" />`);
+      expect(warning?.message).toBeDefined();
+      // The full 250-char run appears nowhere — `boundedPlainText` caps it at 200 before either
+      // interpolation, so the untruncated value cannot survive into the message even once.
+      expect(warning?.message).not.toContain(long);
+      expect(warning?.message).toContain("...");
+    });
+  });
+
+  describe("gated to JSX attribute position, never a bare identifier (review round 1, Finding 3)", () => {
+    // D10 specs this lint as firing on a JSX attribute; the type checker never rejects any of
+    // these four shapes, so warning on them would be advice ("rewrite it as `color={t.accent}`")
+    // that makes no sense outside JSX, and it would contradict the doc's own "does not duplicate
+    // that verdict" claim — verified false positives from the review, now pinned clean.
+    test("a plain variable declaration is not a JSX attribute", () => {
+      expect(only(`const color = "accent";\n`)).toEqual([]);
+    });
+
+    test("a property assignment is not a JSX attribute", () => {
+      expect(only(`theme.color = "accent";\n`)).toEqual([]);
+    });
+
+    test("a `let` binding is not a JSX attribute", () => {
+      expect(only(`let background = "surface"\n`)).toEqual([]);
+    });
+
+    test("a default parameter value is not a JSX attribute", () => {
+      expect(only(`function f(color = "accent") {}\n`)).toEqual([]);
+    });
+
+    test("a relational comparison right after an identifier is not a JSX open — `a < b` stays clean", () => {
+      expect(only(`const x = a < b;\nconst color = "accent";\n`)).toEqual([]);
+    });
+
+    test("a CLOSING tag's `</Foo>` never opens the latch on its own", () => {
+      // The `/` right after `<` fails the "next token is an Identifier" check that OPENS the
+      // latch — no separate slash guard needed. Regression pin for that mechanism specifically.
+      expect(only(`<Text id="t">hi</Text>`)).toEqual([]);
+    });
+
+    test("a dotted (member-expression) tag name still opens the latch", () => {
+      const [warning] = only(`<Kit.Text id="t" color="accent">hi</Kit.Text>`);
+      expect(warning?.kind).toBe("token-name-as-color");
+    });
   });
 });

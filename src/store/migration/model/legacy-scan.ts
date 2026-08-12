@@ -1,6 +1,7 @@
 import * as errore from "errore";
 import { z } from "zod";
 
+import { DESIGN_SYSTEM_MANIFEST_RELPATH } from "entities/design-system";
 import { pageSlugSchema } from "entities/page";
 import type { PageSlug } from "entities/page";
 import { rfc3339UtcSchema } from "infrastructure/clock";
@@ -9,6 +10,7 @@ import { FsAccessError, isNotFound } from "store/safe-fs";
 import type { SafeProjectFs } from "store/safe-fs";
 import { PROJECT_MANIFEST_FILENAME, TARGET_STACKS, parseToml, readFormatVersion } from "store/toml";
 import type { TargetStack } from "store/toml";
+import { designFilePath } from "store/transaction";
 
 import type { LegacyPageV1, LegacyProjectV1 } from "../types";
 
@@ -64,8 +66,14 @@ export function legacyPinsPath(slug: PageSlug): string {
   return `pages/${slug}/comments.jsonl`;
 }
 
-/** Whether a managed leaf exists, distinguishing "absent" from "could not tell". */
-function probeLeaf(safeFs: SafeProjectFs, relPath: string): LegacyScanError | boolean {
+/**
+ * Whether a managed leaf exists, distinguishing "absent" from "could not tell". Exported so
+ * `format-two-scan.ts` reuses this exact three-way check for its own `hasDesignSystem` probe
+ * rather than writing a second copy that could disagree about what "absent" means; on a real
+ * stat failure the returned {@link LegacyScanError} is a generic carrier (`.message`/`.cause`)
+ * — a caller outside this module reads those two fields and wraps them in its own error type.
+ */
+export function probeLeaf(safeFs: SafeProjectFs, relPath: string): LegacyScanError | boolean {
   const stat = safeFs.stat(relPath);
   if (!(stat instanceof Error)) return true;
   if (stat instanceof FsAccessError && isNotFound(stat)) return false;
@@ -150,6 +158,13 @@ export function scanLegacyProject(safeFs: SafeProjectFs): LegacyScanError | Lega
     });
   }
 
+  // A format-1 layout has no `design/` folder by construction, so this is normally `false` — but
+  // nothing on disk enforces that, and `buildV1ToV2Operations` must not clobber a design system a
+  // hand-edit, a third-party tool, or an abandoned earlier attempt already left in the tree
+  // (design-systems §9 ruling 4, the same rule `FormatTwoProjectV1.hasDesignSystem` carries).
+  const hasDesignSystem = probeLeaf(safeFs, designFilePath(DESIGN_SYSTEM_MANIFEST_RELPATH));
+  if (hasDesignSystem instanceof Error) return hasDesignSystem;
+
   return {
     formatVersion: LEGACY_PROJECT_FORMAT_VERSION,
     projectId: decoded.data.project_id,
@@ -157,5 +172,6 @@ export function scanLegacyProject(safeFs: SafeProjectFs): LegacyScanError | Lega
     createdAt: decoded.data.created_at,
     targetStack: decoded.data.target_stack satisfies TargetStack,
     pages,
+    hasDesignSystem,
   };
 }

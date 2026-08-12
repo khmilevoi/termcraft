@@ -1200,6 +1200,28 @@ describe("createUiDeps requestExit (phase-8 Task 11 / WP-10)", () => {
   });
 });
 
+describe("createUiDeps seedComposerText (design-systems §9)", () => {
+  test("a seeded composer text is the composer's initial value", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(
+      kernel,
+      { w: 120, h: 36 },
+      undefined,
+      undefined,
+      undefined,
+      null,
+      "rewrite the colours",
+    );
+    expect(deps.local.composer()).toBe("rewrite the colours");
+  });
+
+  test("with no seed the composer starts empty", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    expect(deps.local.composer()).toBe("");
+  });
+});
+
 describe("preview resize", () => {
   const sessionReady = (previewSessionId: string, size: { w: number; h: number }) =>
     event("preview.sessionReady", {

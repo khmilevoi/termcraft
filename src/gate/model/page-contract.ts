@@ -196,7 +196,10 @@ function validateMetaShape(
   };
   if (kit?.kind !== "number" || !Number.isInteger(kit.n)) missing("kitApiVersion");
   if (title?.kind !== "string") missing("title");
-  if (theme?.kind !== "string") missing("theme");
+  // `theme` is OPTIONAL (design-systems §4.6): absent means the project manifest's `defaultTheme`.
+  // PRESENT-BUT-WRONG is still fatal — a page that meant to pin a theme and wrote `theme: 7` is a
+  // mistake, and "optional" must not launder it into silence.
+  if (theme !== undefined && theme.kind !== "string") missing("theme");
   const w = size?.kind === "object" ? size.o.w : undefined;
   const h = size?.kind === "object" ? size.o.h : undefined;
   if (w?.kind !== "number" || h?.kind !== "number") missing("minSize");
@@ -214,11 +217,18 @@ function validateMetaShape(
     !ok ||
     kit?.kind !== "number" ||
     title?.kind !== "string" ||
-    theme?.kind !== "string" ||
+    (theme !== undefined && theme.kind !== "string") ||
     w?.kind !== "number" ||
     h?.kind !== "number"
   ) {
     return null;
   }
-  return { kitApiVersion: kit.n, title: title.s, minSize: { w: w.n, h: h.n }, theme: theme.s };
+  return {
+    kitApiVersion: kit.n,
+    title: title.s,
+    minSize: { w: w.n, h: h.n },
+    // OMITTED, never `theme: undefined`: `PageMeta` is consumed by `z.strictObject`-decoded DTO
+    // builders downstream, where an explicit `undefined` key and an absent key are different facts.
+    ...(theme?.kind === "string" ? { theme: theme.s } : {}),
+  };
 }

@@ -3,12 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  DESIGN_SYSTEM_MANIFEST_RELPATH,
+  DESIGN_SYSTEM_TOKENS_RELPATH,
+} from "entities/design-system";
 import { PagesManifestInvalidError, encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { parsePageSlug } from "entities/page";
 import type { PageSlug } from "entities/page";
 import type { PinCreatedEvent } from "entities/pin";
 import { uuidv7 } from "infrastructure/uuid";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 import { computeSessionPrefixHash, sha256Hex } from "store/jsonl";
 
 import type { OpenProject, StoreDeps } from "../types";
@@ -60,6 +65,7 @@ async function freshOpenProject() {
     root: projectRoot,
     name: "Engine Methods",
     targetStack: "generic",
+    kitApiVersion: CURRENT_KIT_API_VERSION,
   });
   if (opened instanceof Error)
     throw new Error(`fixture bug: createProject failed: ${opened.message}`);
@@ -1030,13 +1036,18 @@ describe("TransactionEngine — named domain methods (phase-6 blocker B3)", () =
     const opened = await freshOpenProject();
     try {
       // A FRESHLY CREATED project is no longer tree-less: task 16 seeds `design/pages.json`
-      // with an empty `pages` array as part of the creation transaction (design §3, §10). So
+      // with an empty `pages` array, and task 10 (design-systems §4.4) seeds the design
+      // system's two files, all as part of the same creation transaction (design §3, §10). So
       // the "absent design/" case is reached by REMOVING the seeded tree, not by taking a new
       // project as-is — the honest-empty contract still has to hold for a project whose
       // `design/` was deleted outside the product.
       const seeded = await opened.pages.listTree();
       if (seeded instanceof Error) throw new Error(`fixture bug: ${seeded.message}`);
-      expect(seeded.map((file) => file.relPath)).toEqual(["pages.json"]);
+      expect(seeded.map((file) => file.relPath)).toEqual([
+        "pages.json",
+        DESIGN_SYSTEM_MANIFEST_RELPATH,
+        DESIGN_SYSTEM_TOKENS_RELPATH,
+      ]);
 
       fs.rmSync(designPath(opened, ""), { recursive: true, force: true });
       const empty = await opened.pages.listTree();

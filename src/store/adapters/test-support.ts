@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { systemClock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 import { createStore, nodeStoreDeps } from "store/model/factory";
 
 import type { OpenProject } from "../types";
@@ -45,6 +46,7 @@ export async function createRealProjectFixture(options?: {
     root: projectRoot,
     name: options?.name ?? "Adapter Fixture Project",
     targetStack: options?.targetStack ?? "generic",
+    kitApiVersion: CURRENT_KIT_API_VERSION,
   });
   if (opened instanceof Error) {
     throw new Error(`fixture bug: createProject failed: ${opened.message}`, { cause: opened });

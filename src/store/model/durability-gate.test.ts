@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { DirectoryFlushError, flushDir } from "infrastructure/durability";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 import { LeaseIoError } from "store/lease";
 
 import type { StoreDeps } from "../types";
@@ -49,6 +50,7 @@ describe("durability pre-flight gate (M5)", () => {
       root: projectRoot,
       name: "Refused",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
 
     expect(result instanceof Error).toBe(true);
@@ -66,6 +68,7 @@ describe("durability pre-flight gate (M5)", () => {
       root: projectRoot,
       name: "Original",
       targetStack: "generic",
+      kitApiVersion: CURRENT_KIT_API_VERSION,
     });
     if (created instanceof Error) throw new Error(`fixture bug: ${created.message}`);
     await created.close();

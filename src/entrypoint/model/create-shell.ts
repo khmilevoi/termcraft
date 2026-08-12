@@ -81,13 +81,23 @@ export async function createShell(
 /**
  * Caller-supplied seeding for the shell this call builds — distinct from {@link ShellDeps}, which
  * overrides the seams `interactiveShell` otherwise computes from the real process. Only
- * `bootstrap.ts`'s post-migration `createShell` call passes this today (design-tree §12.2 track 2):
- * the FIRST `createShell` call in a run never has a migration to seed a refactor turn from.
+ * `bootstrap.ts`'s post-migration `createShell` call passes either field today: the FIRST
+ * `createShell` call in a run never has a migration to seed a draft from.
+ *
+ * `seedTurnText` is retained plumbing, not the live path: `bootstrap.ts` no longer passes it in
+ * production (design-systems §9 / plan P4 decision D8 — an auto-run turn is actively harmful right
+ * after a migration, see {@link ShellWithAgentRegistry.seedTurnText}'s own doc comment). Only
+ * `seedComposerText` is passed by the real post-migration call; `seedTurnText` stays declared and
+ * tested as a still-live protocol path (`project.open`'s own `text` payload), never removed as
+ * churn this plan does not need.
  */
 export interface ShellOptions {
   /** Threaded straight through to {@link ShellWithAgentRegistry.seedTurnText} — see that field's
-   *  own doc comment (`../types.ts`). */
+   *  own doc comment (`../types.ts`) for why nothing in production passes this any more. */
   readonly seedTurnText?: string;
+  /** Threaded straight through to {@link ShellWithAgentRegistry.seedComposerText} — see that
+   *  field's own doc comment (`../types.ts`). */
+  readonly seedComposerText?: string;
 }
 
 /**
@@ -255,6 +265,7 @@ async function interactiveShell(
     agentRegistry,
     launch,
     seedTurnText: options?.seedTurnText ?? null,
+    seedComposerText: options?.seedComposerText ?? null,
     // Reverse acquisition order: the Kernel (and the host children its active preview may
     // hold) release first, then any other still-live host process, then the project lease
     // last — `open` was acquired first, so it is released last. Each step is guarded (see
@@ -392,11 +403,12 @@ async function openOrCreateProject(
     const plan = await store.planMigration(root);
     // A project that says "migrate me" but cannot say what migrating would change is a genuine
     // failure — the offer would have nothing honest to draw. Reported, not silently downgraded to
-    // the create path.
+    // the create path. The concrete origin (1 or 2) lives in the plan `planMigration` just failed
+    // to produce, so it is not in scope here — "an older format" is what is actually known.
     if (plan instanceof Error)
       return new ShellCompositionError({
         root,
-        reason: `the project is on format 1 but its migration plan could not be read (${plan.message})`,
+        reason: `the project is on an older format but its migration plan could not be read (${plan.message})`,
         cause: plan,
       });
     return { kind: "needs-migration", root, plan };
@@ -409,6 +421,10 @@ async function openOrCreateProject(
     // `EMBEDDED_RUNTIME_DECLARATION.module`) and Gate actually validate/render pages for
     // today — a fact about this MVP's supported stack, not an invented design value.
     targetStack: "js-opentui",
+    // `store` must not import `runtime` (D3), so this binary's own embedded kit API identity
+    // — the same constant the host/Gate handshake checks — is supplied here, never re-derived
+    // inside `store` (`CreateProjectInput.kitApiVersion`'s own doc comment).
+    kitApiVersion: EMBEDDED_RUNTIME_DECLARATION.currentKitApiVersion,
   });
   if (created instanceof Error) {
     return new ShellCompositionError({
@@ -674,6 +690,8 @@ function demoShell(env: UiEnv): ShellWithAgentRegistry {
     // No real project has just been migrated in an offline demo (design-tree §12.2 track 2) —
     // never a synthesized refactor turn to seed.
     seedTurnText: null,
+    // Same reasoning as `seedTurnText` above, for the composer draft (design-systems §9).
+    seedComposerText: null,
     close: () => {
       if (closed) return Promise.resolve();
       closed = true;

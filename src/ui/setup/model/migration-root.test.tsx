@@ -38,8 +38,11 @@ describe("migrationChoiceForKey (design §12.1's `⏎ migrate` / `esc later`)", 
 });
 
 const VIEW: MigratePromptViewV1 = {
+  fromVersion: 1,
+  toVersion: 3,
   pageCount: 2,
   pinLogCount: 0,
+  seedsDesignSystem: true,
   backupsDir: "C:\\Users\\dev\\AppData\\Local\\termcraft\\backups\\019fa002",
 };
 

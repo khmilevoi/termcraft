@@ -1,3 +1,4 @@
+import type { DesignSystemManifestV1 } from "entities/design-system";
 import type { PageSlug } from "entities/page";
 
 import type { StagingRuntimeDocV1 } from "./staging";
@@ -25,6 +26,13 @@ export interface AgentPromptContextV1 {
   readonly pageOrder: readonly PageSlug[];
   readonly kitApiVersion: number;
   readonly openPins: readonly { readonly pageSlug: PageSlug; readonly text: string }[];
+  /**
+   * The project's own design system, decoded (design-systems §5: "the agent gets the list in its
+   * prompt, beside the runtime documentation: these exist in this project, use them"). `null`
+   * means the project has none — every project before the mechanical migration (§9) — and the
+   * prompt then carries no design-system section at all rather than a fabricated default.
+   */
+  readonly designSystem: DesignSystemManifestV1 | null;
 }
 
 /**

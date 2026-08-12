@@ -16,7 +16,7 @@ import type {
   StagingTreeFileV1,
   TurnWorkspaceV1,
 } from "core/ports";
-import { readPageOrder } from "core/project";
+import { readDesignSystemManifest, readPageOrder } from "core/project";
 import {
   type CommandPayloadByKindV1,
   type EventPayloadByKindV1,
@@ -1292,6 +1292,15 @@ async function runTurnStart(
   }
   const pageSlugs = pageEntries.map((entry) => entry.slug);
 
+  // §5 — the design system the agent is authoring against. Read from the SAME inventory the
+  // page order was read from, so the two cannot describe different trees. NEVER refuses the
+  // turn (plan P4, decision D7): an agent that wrote a malformed manifest must stay able to
+  // repair it on the next turn — see `readDesignSystemManifest`'s own doc for why this reads
+  // differently from `readPageOrder`'s refusal just above.
+  const designSystem = await wrap(
+    readDesignSystemManifest(context.deps.designReader, treePathsForOrder),
+  );
+
   // kernel-command-contract §12.2 item 1 ("captures ... only currently open, resolvable
   // pins") — see this file's header, "candidatePins," for the full rationale. No active page
   // means nothing to fold: an empty candidate list then is an honest empty, not a refusal.
@@ -1408,6 +1417,7 @@ async function runTurnStart(
     pageOrder: pageSlugs,
     kitApiVersion: context.deps.exportRender.runtimeDeclaration.currentKitApiVersion,
     openPins: openPinsForPrompt,
+    designSystem,
   };
 
   const baseTask: Omit<AgentTask, "fence"> = {

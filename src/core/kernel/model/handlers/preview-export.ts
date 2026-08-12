@@ -31,6 +31,7 @@ import {
   readCanonicalTreeIndex,
   readPageEntrySource,
   readPageOrder,
+  resolveActiveThemeId,
 } from "core/project";
 import {
   type CapabilityStateV1,
@@ -373,7 +374,10 @@ async function resolvePageSettings(
     expectedFiles: index.inventory.files,
     kitApiVersion: meta.kitApiVersion,
     minSize: meta.minSize,
-    theme: meta.theme,
+    // RESOLVED, not echoed (design-systems §4.6): `meta.theme` is optional, and `HostSessionSpec`
+    // requires a concrete non-empty id. One resolution, here, off the same index every other fact
+    // in this object came from.
+    theme: resolveActiveThemeId({ metaTheme: meta.theme, designSystem: index.designSystem }),
   };
 }
 

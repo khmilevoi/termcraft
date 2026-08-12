@@ -109,6 +109,7 @@ function fakeShell(
     agentRegistry,
     launch,
     seedTurnText: null,
+    seedComposerText: null,
     close: () => {
       calls.push("shell-close");
       return Promise.resolve();

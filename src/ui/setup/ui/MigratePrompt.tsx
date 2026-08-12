@@ -23,23 +23,44 @@ const bulletBudget = (width: number) => BOX_WIDTH(width) - 6;
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 /**
- * The three bullets, populated with THIS migration's real plan (design §12.1: "the bullet list is
+ * The bullets, populated with THIS migration's real plan (design §12.1: "the bullet list is
  * populated for this migration with the real plan: pages moved into `design/`, `pages.json`
- * synthesized from the existing order, pin logs relocated, `project.toml` rewritten").
+ * synthesized from the existing order, pin logs relocated, `project.toml` rewritten"; design-
+ * systems §9 extends this to the version-2 origin, which relocates nothing and seeds
+ * `design/system/` instead).
  *
  * DIVERGENCE (recorded, not silent): the mock's own three bullets are its sample content for a
  * different migration (`3 pages → current page.tsx`, `kit 2.1 · tweaks · pins · agent choice`).
- * §12.1's four facts are carried on the mock's three lines rather than growing the 16-row box,
- * because the box height is design and the sample copy is not: the third line pairs the pin logs
- * with the manifest rewrite, and states the rewrite alone when the project has no pin logs.
+ * §12.1's four facts were originally carried on three lines by pairing the pin logs with the
+ * manifest rewrite (stating the rewrite alone when the project has no pin logs); design-systems §9
+ * adds a genuine FOURTH line — the seeded design system, when `seedsDesignSystem` is true — rather
+ * than folding it into an existing bullet, because unlike the pin-log/manifest pairing there is no
+ * natural pairing for it. The 16-row box still fits four bullets plus the warning, lead-in and
+ * git-history lines comfortably (15 of 16 rows at this component's own fixed heights), so this
+ * stays a content divergence from the mock, not a layout one.
+ *
+ * `view.fromVersion === 2` draws the version-2 -> 3 bullets instead: no moves at all (ruling 1's
+ * "no page source byte is edited" applies doubly here — a version-2 project's sources were
+ * already in `design/`), so the bullets must not claim any.
  */
 export function migrateBullets(view: MigratePromptViewV1): readonly string[] {
+  const versionBullet = `project.toml → format_version ${view.toVersion}`;
+  if (view.fromVersion === 2) {
+    return [
+      `${plural(view.pageCount, "page")} — sources untouched`,
+      view.seedsDesignSystem
+        ? "design/system/ ← the default design system"
+        : "design/system/ — already present",
+      versionBullet,
+    ];
+  }
   return [
     `${plural(view.pageCount, "page")} → design/pages/<slug>.tsx`,
     "design/pages.json ← the order in project.toml",
     view.pinLogCount === 0
-      ? "project.toml → format_version 2"
-      : `${plural(view.pinLogCount, "pin log")} → pins/<slug>.jsonl · project.toml → v2`,
+      ? versionBullet
+      : `${plural(view.pinLogCount, "pin log")} → pins/<slug>.jsonl · ${versionBullet}`,
+    ...(view.seedsDesignSystem ? ["design/system/ ← the default design system"] : []),
   ];
 }
 

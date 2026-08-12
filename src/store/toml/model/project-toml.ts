@@ -10,8 +10,13 @@ import type { ProjectManifest } from "../types";
 /** The portable manifest's name inside `.termcraft/` (storage-identity §4, §5.1). */
 export const PROJECT_MANIFEST_FILENAME = "project.toml";
 
-/** The only shipped portable schema version (storage-identity §5.1; multi-file design tree design §3). */
-export const PROJECT_MANIFEST_FORMAT_VERSION = 2;
+/**
+ * The only shipped portable schema version. 1 → 2 was the multi-file design tree (design §3);
+ * 2 → 3 seeds the project-owned design system (design-systems §9). The field set is UNCHANGED
+ * between 2 and 3 — the version moves because the project's TREE gained a required folder, and
+ * `format_version` is what tells an older binary it cannot read this project.
+ */
+export const PROJECT_MANIFEST_FORMAT_VERSION = 3;
 
 /**
  * `project.toml` is unreadable: not TOML, missing/non-integer `format_version`, a failed

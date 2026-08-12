@@ -18,8 +18,11 @@ const findRun = (frame: { rows: StyledRun[][] }, needle: string) =>
   frame.rows.flat().find((run) => run.text.includes(needle));
 
 const VIEW = {
+  fromVersion: 1,
+  toVersion: 3,
   pageCount: 2,
   pinLogCount: 0,
+  seedsDesignSystem: true,
   backupsDir: "C:\\Users\\dev\\AppData\\Local\\termcraft\\backups\\019fa002",
 };
 
@@ -34,24 +37,39 @@ async function draw(props: { working?: boolean } = {}) {
 }
 
 describe("migrateBullets (design §12.1's real plan, in the mock's three lines)", () => {
-  test("names the pages, the synthesized manifest, and the rewritten project.toml", () => {
+  test("names the pages, the synthesized manifest, the rewritten project.toml and the seeded design system", () => {
     expect(migrateBullets(VIEW)).toEqual([
       "2 pages → design/pages/<slug>.tsx",
       "design/pages.json ← the order in project.toml",
-      "project.toml → format_version 2",
+      "project.toml → format_version 3",
+      "design/system/ ← the default design system",
     ]);
   });
 
   test("folds the pin logs into the third line when there are any", () => {
     expect(migrateBullets({ ...VIEW, pinLogCount: 3 })[2]).toBe(
-      "3 pin logs → pins/<slug>.jsonl · project.toml → v2",
+      "3 pin logs → pins/<slug>.jsonl · project.toml → format_version 3",
     );
   });
 
   test("uses the singular for one page and one pin log", () => {
     const bullets = migrateBullets({ ...VIEW, pageCount: 1, pinLogCount: 1 });
     expect(bullets[0]).toBe("1 page → design/pages/<slug>.tsx");
-    expect(bullets[2]).toBe("1 pin log → pins/<slug>.jsonl · project.toml → v2");
+    expect(bullets[2]).toBe("1 pin log → pins/<slug>.jsonl · project.toml → format_version 3");
+  });
+
+  test("the version-2 origin draws sources-untouched bullets and no moves", () => {
+    const v2View = { ...VIEW, fromVersion: 2, pageCount: 4, pinLogCount: 0 };
+    expect(migrateBullets(v2View)).toEqual([
+      "4 pages — sources untouched",
+      "design/system/ ← the default design system",
+      "project.toml → format_version 3",
+    ]);
+  });
+
+  test("the version-2 origin says 'already present' when seedsDesignSystem is false", () => {
+    const v2View = { ...VIEW, fromVersion: 2, seedsDesignSystem: false };
+    expect(migrateBullets(v2View)[1]).toBe("design/system/ — already present");
   });
 });
 

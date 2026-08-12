@@ -597,6 +597,14 @@ export interface CreateProjectInput {
   readonly root: AbsPath;
   readonly name: string;
   readonly targetStack: ProjectManifest["targetStack"];
+  /**
+   * The binary's own `CURRENT_KIT_API_VERSION` (design-systems §4.4, §9), stamped into the
+   * seeded `design/system/design-system.json`. `store` must not import `runtime` (D3), and
+   * `StoreDeps` does not carry this constant, so — like every other cross-ring value this
+   * factory needs — the caller supplies it: `src/entrypoint/model/create-shell.ts` passes
+   * `EMBEDDED_RUNTIME_DECLARATION.currentKitApiVersion`, which `entrypoint` already holds.
+   */
+  readonly kitApiVersion: number;
 }
 
 /** What one completed migration produced — the identities the journal and the backup share. */
@@ -653,20 +661,28 @@ export interface Store {
    */
   createProject(input: CreateProjectInput): Promise<Error | OpenProject>;
   /**
-   * Read a version-1 project and describe what migrating it would change (design-tree §12.1).
-   * WRITES NOTHING — this is the read behind the `migrate-80` offer. Fails for any project that is
-   * not a readable version 1, including one already on format 2.
+   * Read a project on an old format and describe what migrating it would change (design-tree
+   * §12.1; design-systems §9). WRITES NOTHING — this is the read behind the `migrate-80` offer.
+   * Fails for any project that is not a readable version 1 or version 2 — including one already
+   * on the current format.
    */
   planMigration(root: AbsPath): Promise<Error | MigrationPlanV1>;
   /**
-   * Run the mechanical migration (design-tree §12.2 track 1): verified backup, then ONE
-   * transaction, then release. Takes only `root` — nothing from a prior `planMigration` call
-   * is carried in, not even its `migrationPlanId`. This deliberately re-scans and re-derives
-   * everything itself, including minting a fresh `migrationPlanId`/`migrationActionId` pair
-   * at commit time, because it does not trust anything computed for the read-only offer
-   * (storage §17).
+   * Run the mechanical migration (design-tree §12.2 track 1; design-systems §9): verified
+   * backup, then ONE transaction, then release. Takes `root` plus `kitApiVersion` — nothing
+   * else from a prior `planMigration` call is carried in, not even its `migrationPlanId`. This
+   * deliberately re-scans and re-derives everything itself, including minting a fresh
+   * `migrationPlanId`/`migrationActionId` pair at commit time, because it does not trust
+   * anything computed for the read-only offer (storage §17).
+   *
+   * `kitApiVersion` is stamped into the seeded `design/system/design-system.json` exactly like
+   * `CreateProjectInput.kitApiVersion` — `store` must not import `runtime` (D3), so the caller
+   * supplies the binary's own `CURRENT_KIT_API_VERSION`.
    */
-  migrateProject(root: AbsPath): Promise<Error | MigrationOutcomeV1>;
+  migrateProject(
+    root: AbsPath,
+    input: { readonly kitApiVersion: number },
+  ): Promise<Error | MigrationOutcomeV1>;
 }
 
 export type {

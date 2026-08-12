@@ -31,6 +31,9 @@ function seedLegacyProject(input: {
   readonly manifest: string;
   readonly slugs: readonly string[];
   readonly pinnedSlugs?: readonly string[];
+  /** A hand-edit or an abandoned earlier attempt's `design/system/design-system.json`, already
+   *  present before this scan runs — the case ruling 4 guards against. */
+  readonly hasDesignSystem?: boolean;
 }): SafeProjectFs {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "tc-legacy-scan-"));
   scratchRoots.push(scratch);
@@ -48,6 +51,13 @@ function seedLegacyProject(input: {
     fs.writeFileSync(
       path.join(termcraftDir, "pages", slug, "comments.jsonl"),
       '{"kind":"header"}\n',
+    );
+  }
+  if (input.hasDesignSystem === true) {
+    fs.mkdirSync(path.join(termcraftDir, "design", "system"), { recursive: true });
+    fs.writeFileSync(
+      path.join(termcraftDir, "design", "system", "design-system.json"),
+      '{"schemaVersion":1}',
     );
   }
   const deps = nodeSafeFsDeps();
@@ -69,6 +79,19 @@ describe("scanLegacyProject (design-tree §12.2 track 1's only reader of the old
     expect(scanned.targetStack).toBe("js-opentui");
     expect(scanned.pages.map((page) => page.slug as string)).toEqual(["dashboard", "calendar"]);
     expect(scanned.pages[0]?.legacySourcePath).toBe("pages/dashboard/page.tsx");
+    expect(scanned.hasDesignSystem).toBe(false);
+  });
+
+  test("reports hasDesignSystem true when design/system/design-system.json already exists", () => {
+    const scanned = scanLegacyProject(
+      seedLegacyProject({
+        manifest: V1_MANIFEST,
+        slugs: ["dashboard", "calendar"],
+        hasDesignSystem: true,
+      }),
+    );
+    if (scanned instanceof Error) throw scanned;
+    expect(scanned.hasDesignSystem).toBe(true);
   });
 
   test("reports an absent pin log as null, never as a fabricated path", () => {

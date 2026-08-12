@@ -573,6 +573,60 @@ describe("runTurnValidation — the verdict", () => {
     });
   });
 
+  test("dedupes a token-name-as-color warning runTree and runPage BOTH report for the SAME entry (task 9 review round 1, Finding 2)", async () => {
+    // MEASURED SCENARIO: `gate/adapters/gate-runner.ts`'s `lintFileDeterminism` (the whole-tree
+    // pass) and `gate/model/gate.ts`'s `runGate` (the per-page pass) both run `lintTokenNameColors`
+    // over a page's own entry source, so `color="accent"` written directly in a page's entry file
+    // produced this warning TWICE — the exact same defect Task 5 fixed for the three determinism
+    // kinds, reopened by Task 8's `module-scope-tokens` and Task 9's `token-name-as-color` without
+    // either kind being added to `DEDUPE_ELIGIBLE_WARNING_KINDS`.
+    await context.start(async () => {
+      const h = harness();
+      h.gateRunner.queueRunManifestSliceResult(sliceOf(HOME_ENTRY_V1));
+      h.gateRunner.queueRunTreeResult({
+        errors: [],
+        warnings: [
+          {
+            kind: "token-name-as-color",
+            message: '`color="accent"` is a token NAME, but colour props now take a concrete...',
+            file: HOME_ENTRY,
+            line: 3,
+            column: 15,
+            blockedPages: [PAGE_HOME],
+          },
+        ],
+        closures: [],
+      });
+      h.gateRunner.queueRunPageResult({
+        ok: true,
+        errors: [],
+        warnings: [
+          {
+            kind: "token-name-as-color",
+            message: '`color="accent"` is a token NAME, but colour props now take a concrete...',
+            file: HOME_ENTRY,
+            line: 3,
+            column: 15,
+          },
+        ],
+        descriptor: {
+          slug: PAGE_HOME,
+          meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "default" },
+        },
+      });
+
+      const result = await wrap(runTurnValidation(h.deps, baseInput(1)));
+
+      if (result.kind !== "passed")
+        throw new Error(`expected passed, got ${JSON.stringify(result)}`);
+      // Exactly ONE, not two — same collapse `nondeterministic-time` already gets.
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]?.kind).toBe("token-name-as-color");
+      // The MORE INFORMATIVE copy — `runTree`'s, naming the page in `blockedPages` — survives.
+      expect(result.warnings[0]?.blockedPages).toEqual([PAGE_HOME]);
+    });
+  });
+
   test("warnings that are NOT the runTree/runPage overlap pass through completely unaffected, including two same-kind same-file dropped-id warnings with no position", async () => {
     // The risk a BLANKET `kind+file+line+column` key would have introduced: `dropped-id`
     // (`gate/model/lints.ts`'s `lintDroppedIds`) carries no line/column at all, so two

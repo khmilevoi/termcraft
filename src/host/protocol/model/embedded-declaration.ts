@@ -1,4 +1,4 @@
-import { CURRENT_KIT_API_VERSION, DEFAULT_THEME_ID } from "runtime";
+import { CURRENT_KIT_API_VERSION } from "runtime";
 
 import type { RuntimeDeclarationBundleV1 } from "../types";
 
@@ -20,9 +20,9 @@ export const SUPPORTED_KIT_API_VERSIONS: readonly number[] = [1];
  * value, so the two can never diverge into a retyped copy and a runtime `RUNTIME_INTEGRITY_MISMATCH`.
  *
  * Home: `host/protocol` owns the `RuntimeDeclarationBundleV1` type and its validator
- * (`bundle.ts`); `runtime` owns the semantics this bundle describes (`CURRENT_KIT_API_VERSION`,
- * `DEFAULT_THEME_ID`) — this file is the one place that is allowed to import both, because it
- * lives inside `host` (already an established `host` → `runtime` import direction, see
+ * (`bundle.ts`); `runtime` owns the semantics this bundle describes (`CURRENT_KIT_API_VERSION`) —
+ * this file is the one place that is allowed to import both, because it lives inside `host`
+ * (already an established `host` → `runtime` import direction, see
  * `host/session/model/resolver.ts`), while `runtime` itself stays the leaf
  * `docs/architecture/code-structure.md` item 10 requires (it never imports this type back).
  *
@@ -31,6 +31,16 @@ export const SUPPORTED_KIT_API_VERSIONS: readonly number[] = [1];
  * enforces this — `embedded-declaration.test.ts` runs the real validator over this exact
  * constant). Widening the capability set is a later phase's job, not this seam's.
  */
+
+/**
+ * The theme capability's FIXED public id (design-systems §4.6). It replaced `theme:<themeId>`,
+ * which embedded the compiled `dark-default` palette's name: the handshake is a BINARY-integrity
+ * check between the Gate and the host (runtime-api §7.2), a project's theme names live in its own
+ * `design/system/design-system.json`, and putting them here would make every project mismatch every
+ * other one.
+ */
+export const THEME_CAPABILITY_ID = "theme:project-design-system";
+
 export const EMBEDDED_RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
   module: "@termcraft/runtime",
   currentKitApiVersion: CURRENT_KIT_API_VERSION,
@@ -38,5 +48,5 @@ export const EMBEDDED_RUNTIME_DECLARATION: RuntimeDeclarationBundleV1 = {
   // `number[]` (protocol/types.ts), while `SUPPORTED_KIT_API_VERSIONS` above is exported
   // `readonly` so nothing downstream can mutate the shared source-of-truth literal.
   supportedKitApiVersions: [...SUPPORTED_KIT_API_VERSIONS],
-  publicCapabilityIds: [`theme:${DEFAULT_THEME_ID}`],
+  publicCapabilityIds: [THEME_CAPABILITY_ID],
 };

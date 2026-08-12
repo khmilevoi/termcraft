@@ -826,6 +826,14 @@ const GATE_WARNING_KINDS_V1 = [
   // edges, and a code file no page's proven closure reaches.
   "import-cycle",
   "dead-module",
+  // design-systems §4.5 — `useTokens()` read at MODULE SCOPE captures one theme's values
+  // forever, so theme switching renders nothing new. See `gate/model/lints.ts`'s
+  // `lintModuleScopeTokens`.
+  "module-scope-tokens",
+  // design-systems §4.5, §9, D10 — a token NAME written where a `Color` (`#rrggbb`) is
+  // expected. `TS2322` already rejects this fatally; this warning carries the EXACT rewrite
+  // alongside that verdict. See `gate/model/lints.ts`'s `lintTokenNameColors`.
+  "token-name-as-color",
 ] as const;
 
 const turnGateErrorV1Schema = z.strictObject({

@@ -251,8 +251,15 @@ function isControlCodePoint(code: number): boolean {
  * spaces and the whole string capped in length (host-supervision §13): a
  * `TYPE_CHECK_UNAVAILABLE` message may embed a compiler panic, which must never reach
  * a terminal as raw control sequences nor be unbounded.
+ *
+ * EXPORTED (task 9, Finding 1) so `gate/model/lints.ts`'s `lintTokenNameColors` can reuse the
+ * SAME sanitizer for a cooked string-literal VALUE lifted straight from source text — a
+ * `GateWarning.message` is bounded plain text project-wide (`gate/types.ts`'s own doc comment,
+ * the plan's Global Constraints), and a source attribute value is exactly as untrusted as a
+ * compiler panic message: both are attacker/author-controlled text this function's caller
+ * interpolates into a diagnostic. One sanitizer, not two.
  */
-function boundedPlainText(raw: string): string {
+export function boundedPlainText(raw: string): string {
   const sanitized = Array.from(raw, (ch) =>
     isControlCodePoint(ch.codePointAt(0) ?? 0) ? " " : ch,
   ).join("");

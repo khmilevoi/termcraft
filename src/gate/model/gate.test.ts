@@ -58,7 +58,7 @@ describe("runGate (§6.3 pipeline)", () => {
   });
 
   test("a contract violation fails the candidate with a contract-kind error and null descriptor", async () => {
-    const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    const src = `export const meta = definePage({ kitApiVersion: 1, minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     const result = await runGate({
       source: src,
       slug: SLUG,
@@ -75,7 +75,7 @@ describe("runGate (§6.3 pipeline)", () => {
     // The rule this whole plan exists to establish: which file a page lives in is
     // `pages.json`'s `entry` value. `screens/overview/index.tsx` is deliberately UNRELATED
     // to the slug `dash` — a slug-derived default (`dash.tsx`) would get this wrong.
-    const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    const src = `export const meta = definePage({ kitApiVersion: 1, minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     const result = await runGate({
       source: src,
       slug: SLUG,
@@ -217,7 +217,7 @@ describe("runGate (§6.3 pipeline)", () => {
 
   test("manifest + smoke stages only run when the page contract is clean", async () => {
     let smokeRan = false;
-    const brokenContractSource = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    const brokenContractSource = `export const meta = definePage({ kitApiVersion: 1, minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     await runGate(
       // `smoke: "run"` deliberately: the EXISTING precondition (nothing fatal yet) is what
       // must keep this candidate out of the smoke stage, not the step-8 scoping added beside it.

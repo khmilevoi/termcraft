@@ -33,7 +33,12 @@ import {
   unscannableMessage,
 } from "../model/gate";
 import type { GatePorts } from "../model/gate";
-import { lintDeterminism, lintSilencingAny } from "../model/lints";
+import {
+  lintDeterminism,
+  lintModuleScopeTokens,
+  lintSilencingAny,
+  lintTokenNameColors,
+} from "../model/lints";
 import { checkManifestSlice } from "../model/manifest";
 import { checkPageContract } from "../model/page-contract";
 import { createSmokeRender } from "../model/smoke";
@@ -922,20 +927,21 @@ class DeterminismLintUnreadableError extends errore.createTaggedError({
 }) {}
 
 /**
- * `nondeterministic-time`/`nondeterministic-randomness`/`silencing-any` warnings for ONE code
- * file's text, stamped with `file: relPath` — the SAME two lints `gate/model/gate.ts`'s
- * `runGate` runs per page (`lintDeterminism`, `lintSilencingAny`), called here over a file this
- * pass read directly rather than only over a manifest entry's own source. See
+ * `nondeterministic-time`/`nondeterministic-randomness`/`silencing-any`/`module-scope-tokens`/
+ * `token-name-as-color` warnings for ONE code file's text, stamped with `file: relPath` — the
+ * SAME four lints `gate/model/gate.ts`'s `runGate` runs per page (`lintDeterminism`,
+ * `lintSilencingAny`, `lintModuleScopeTokens`, `lintTokenNameColors`), called here over a file
+ * this pass read directly rather than only over a manifest entry's own source. See
  * {@link lintWholeTreeDeterminism}'s doc for why this scans every code file, not only entries.
  *
- * TOLERANT OF AN UNSCANNABLE SOURCE, deliberately, TWO WAYS. Both lints share `tokenize` with the
- * flat allowlist scan (`runTreeImports`): a RETURNED `SourceStreamTruncatedError` from either lint
- * is filtered out below, and a THROW (see {@link DeterminismLintUnreadableError}) is caught here
- * — mirroring `gate/model/gate.ts`'s own `errore.try` around the identical pair of calls, rather
- * than a second, divergent way of surviving the same hazard. Either way the file already carries
- * its own `UNSCANNABLE_SOURCE` fatal from the flat scan; returning no warnings for it is honest —
- * nothing here could read past the same truncation — not a second, redundant diagnostic for the
- * same underlying fact.
+ * TOLERANT OF AN UNSCANNABLE SOURCE, deliberately, TWO WAYS. All four lints share `tokenize`
+ * with the flat allowlist scan (`runTreeImports`): a RETURNED `SourceStreamTruncatedError` from
+ * any lint is filtered out below, and a THROW (see {@link DeterminismLintUnreadableError}) is
+ * caught here — mirroring `gate/model/gate.ts`'s own `errore.try` around the identical group of
+ * calls, rather than a second, divergent way of surviving the same hazard. Either way the file
+ * already carries its own `UNSCANNABLE_SOURCE` fatal from the flat scan; returning no warnings
+ * for it is honest — nothing here could read past the same truncation — not a second, redundant
+ * diagnostic for the same underlying fact.
  */
 function lintFileDeterminism(relPath: string, source: string): readonly GateWarning[] {
   const syntax = parsesJsx(relPath);
@@ -943,6 +949,8 @@ function lintFileDeterminism(relPath: string, source: string): readonly GateWarn
     try: () => ({
       timers: lintDeterminism(source, syntax),
       anys: lintSilencingAny(source, syntax),
+      tokens: lintModuleScopeTokens(source, syntax),
+      colors: lintTokenNameColors(source, syntax),
     }),
     catch: (cause) => new DeterminismLintUnreadableError({ file: relPath, cause }),
   });
@@ -956,6 +964,8 @@ function lintFileDeterminism(relPath: string, source: string): readonly GateWarn
   return [
     ...(linted.timers instanceof Error ? [] : linted.timers.map(stamp)),
     ...(linted.anys instanceof Error ? [] : linted.anys.map(stamp)),
+    ...(linted.tokens instanceof Error ? [] : linted.tokens.map(stamp)),
+    ...(linted.colors instanceof Error ? [] : linted.colors.map(stamp)),
   ];
 }
 

@@ -4,12 +4,18 @@ import { context, wrap } from "@reatom/core";
 
 import { type DesignTreeFileSeedV1, createFakeDesignStore } from "core/ports/fakes";
 import { type PageDescriptorV1, type Sha256Hex, eventPayloadV1SchemaByKind } from "core/protocol";
+import {
+  DESIGN_SYSTEM_MANIFEST_RELPATH,
+  createSeedManifest,
+  renderDesignSystemManifest,
+} from "entities/design-system";
 import { computeSourceHash } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 
 import {
   buildPageDescriptorsChangedPayload,
   computePageDescriptorChanges,
+  readDesignSystemManifest,
   readPageEntrySource,
   readPageOrder,
 } from "./descriptors";
@@ -406,6 +412,54 @@ describe("readPageOrder / readPageEntrySource — the manifest is the only slug 
       const order = await wrap(readPageOrder(store, ["pages.json", HOME_ENTRY]));
       if (!("code" in order)) throw new Error("expected the decode failure to propagate");
       expect(store.calls.some((c) => c.method === "listTree")).toBe(false);
+    });
+  });
+});
+
+describe("readDesignSystemManifest (P4 decision D7)", () => {
+  test("returns null when the tree names none", async () => {
+    await context.start(async () => {
+      const store = createFakeDesignStore({
+        manifest: { schemaVersion: 1, pages: [], requestedActivePage: null },
+        files: new Map(),
+      });
+      const result = await wrap(readDesignSystemManifest(store, []));
+      expect(result).toBeNull();
+      // Absent from `treePaths` means never even asking the reader for it.
+      expect(store.calls.some((c) => c.method === "readTreeFile")).toBe(false);
+    });
+  });
+
+  test("decodes a present manifest", async () => {
+    await context.start(async () => {
+      const manifest = createSeedManifest({ kitApiVersion: 1 });
+      const store = createFakeDesignStore({
+        manifest: { schemaVersion: 1, pages: [], requestedActivePage: null },
+        files: new Map([
+          [
+            DESIGN_SYSTEM_MANIFEST_RELPATH,
+            { bytes: new TextEncoder().encode(renderDesignSystemManifest(manifest)) },
+          ],
+        ]),
+      });
+      const result = await wrap(readDesignSystemManifest(store, [DESIGN_SYSTEM_MANIFEST_RELPATH]));
+      expect(result).toEqual(manifest);
+    });
+  });
+
+  test("an undecodable manifest is null, never a refusal (P4 D7)", async () => {
+    // An agent turn that wrote a malformed manifest must stay able to repair it on the next turn
+    // — refusing here (as `readPageOrder` does for a broken `pages.json`) would make that
+    // impossible, since the repair is itself a turn that needs this same read to succeed.
+    await context.start(async () => {
+      const store = createFakeDesignStore({
+        manifest: { schemaVersion: 1, pages: [], requestedActivePage: null },
+        files: new Map([
+          [DESIGN_SYSTEM_MANIFEST_RELPATH, { bytes: new TextEncoder().encode("{ not json") }],
+        ]),
+      });
+      const result = await wrap(readDesignSystemManifest(store, [DESIGN_SYSTEM_MANIFEST_RELPATH]));
+      expect(result).toBeNull();
     });
   });
 });

@@ -7,13 +7,13 @@ and their recovery boundaries.
 ```mermaid
 flowchart TB
     subgraph tc[".termcraft/ — one folder, one project"]
-        proj["project.toml — format_version 2 · project_id · name · created_at · target_stack"]
+        proj["project.toml — format_version 3 · project_id · name · created_at · target_stack"]
         gi[".gitignore — generated hard exclusions"]
         subgraph pg["design/ — the canonical authored tree"]
             manifest["pages.json — ordered slug to entry bindings + requested active page"]
             entries["{entry} — each page's own file, anywhere in the tree"]
             shared["shared modules — anything no entry names"]
-            dsmanifest["system/design-system.json — OPTIONAL project design-system manifest<br/>(themes + component catalog)"]
+            dsmanifest["system/design-system.json + system/tokens.ts — REQUIRED as of format_version 3<br/>seeded for every new/migrated project (themes + component catalog)"]
         end
         pins["pins/{stable-slug}.jsonl — append-only pin events"]
         subgraph local["machine-local and hard-excluded"]
@@ -44,23 +44,31 @@ flowchart TB
 ## Walkthrough
 
 1. **Portable project state.** `project.toml` carries exactly `format_version` (now
-   `2`), portable UUIDv7 `project_id`, `name`, UTC `created_at`, and enum
+   `3`, plan P4), portable UUIDv7 `project_id`, `name`, UTC `created_at`, and enum
    `target_stack`. It no longer carries a page array: which pages exist, in what order,
    and which file each one lives in is `design/pages.json`'s answer alone, because
    keeping both would give page order two sources of truth and the manifest is the one
    the agent edits. `project.toml` also does not carry the active page, active chat,
    preview state, selected backend/model/effort, or cached page metadata. A page's
    static `meta` in its own entry file is the only source of title, minimum size,
-   theme, and integer `kitApiVersion`.
-   - *Failure:* a project still at `format_version = 1` is refused with a typed
-     "must be migrated" error (`ManifestMigrationRequiredError`) rather than read
-     leniently — no compatibility reader for the version-1 layout exists in the
-     ORDINARY open path, deliberately. The one place that DOES understand it,
-     `store/migration/model/legacy-scan.ts`'s `scanLegacyProject`, is reached only
-     from the migration itself (`flows/migration.md`). A real version-1 project is
-     preserved verbatim at `test-fixtures/format-v1-project/`, and it is no longer
-     only a future subject: `src/store/model/migration-fixture.test.ts` runs the
-     real, shipped migration against it.
+   OPTIONAL `theme` (resolved once, against the design system's `defaultTheme`, by
+   `core/project`'s `resolveActiveThemeId` — a page with no `meta.theme` still renders,
+   in the manifest's default theme), and integer `kitApiVersion`. Format 3's own
+   addition over format 2: the `design/` tree gains a REQUIRED `design/system/` folder
+   (`design-system.json` + `tokens.ts`), seeded in the SAME transaction as
+   `project.toml` for every new or migrated project — see `flows/migration.md`.
+   - *Failure:* a project still below `format_version = 3` (found at `1` or `2`) is
+     refused with a typed "must be migrated" error (`ManifestMigrationRequiredError`)
+     rather than read leniently — no compatibility reader for either retired layout
+     exists in the ORDINARY open path, deliberately. The two things that DO understand
+     them, `store/migration/model/legacy-scan.ts`'s `scanLegacyProject` (format 1) and
+     `store/migration/model/format-two-scan.ts`'s `scanFormatTwoProject` (format 2), are
+     reached only from the migration itself (`flows/migration.md`), which now carries
+     `MIGRATION_CHAIN`'s two steps and lands either origin on format 3 in one
+     transaction. A real version-1 project is preserved verbatim at
+     `test-fixtures/format-v1-project/`, and it is no longer only a future subject:
+     `src/store/model/migration-fixture.test.ts` runs the real, shipped migration
+     against it.
 2. **Local workspace state.** `workspace.local.toml` carries active page/chat,
    backend/model/effort, preview size mode and custom dimensions, theme/color
    override, static/interactive mode, fullscreen flag, and scoped session
@@ -412,7 +420,8 @@ flowchart TB
   `isInsideDesignSystem` is the `system/`-folder membership test the Gate's
   containment boundary and the closure's extra roots both key on
 - `src/store/model/factory.ts` — item 1: `createProject` writing the
-  format-2 `project.toml` and the seeded empty `design/pages.json` in ONE
+  format-3 `project.toml`, the seeded empty `design/pages.json`, and the seeded
+  `design/system/` design-system files (`store/model/design-system-seed.ts`) in ONE
   project-creation transaction
 - `src/store/model/design-tree-store.ts` — item 3: the `DesignTreeStore` reads
   over the tree (`createDesignTreeStore`, `readManifestFromDisk`,

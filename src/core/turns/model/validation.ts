@@ -258,18 +258,31 @@ function toGateWarningDto(warning: GateWarningV1): TurnGateDiagnosticsV1["warnin
 }
 
 /**
- * The determinism/`silencing-any` warning kinds `GateRunner.runTree`'s whole-tree lint
- * (`gate/adapters/gate-runner.ts`'s `lintWholeTreeDeterminism`, Task 5) and
- * `GateRunner.runPage`'s per-page lint (`gate/model/gate.ts`'s `runGate`, unchanged since Task 4)
- * can BOTH produce for the SAME entry file. Every other kind (`dropped-id`, `unpointed-element`,
- * `unlisted-navigation`, `import-cycle`, `dead-module`) is produced by exactly ONE of the two
- * methods, so it can never collide with itself here — see {@link dedupeWarnings}'s own doc for
- * why that exclusion is load-bearing, not merely narrow scoping for its own sake.
+ * The warning kinds `GateRunner.runTree`'s whole-tree lint (`gate/adapters/gate-runner.ts`'s
+ * `lintWholeTreeDeterminism`/`lintFileDeterminism`, Task 5) and `GateRunner.runPage`'s per-page
+ * lint (`gate/model/gate.ts`'s `runGate`) can BOTH produce for the SAME entry file: originally the
+ * three determinism/`silencing-any` kinds (Task 5), joined by `module-scope-tokens` (design-tree
+ * design-systems Task 8) and `token-name-as-color` (Task 9) — `gate/adapters/gate-runner.ts`'s
+ * `lintFileDeterminism` runs all five of `lintDeterminism`/`lintSilencingAny`/
+ * `lintModuleScopeTokens`/`lintTokenNameColors` over every code file in the whole-tree pass, the
+ * exact same four functions (plus `lintDroppedIds`/`lintUnlistedNavigation`, which are NOT
+ * duplicated here — see below) `runGate` runs per page.
+ *
+ * TASK 8 INTRODUCED THIS SAME DEFECT FOR `module-scope-tokens` AND DID NOT CLOSE IT (task 9 review
+ * round 1, Finding 2) — fixed here for both new kinds together, since eligibility is one list and
+ * the fix is the same shape for either kind.
+ *
+ * Every OTHER kind (`dropped-id`, `unpointed-element`, `unlisted-navigation`, `import-cycle`,
+ * `dead-module`) is still produced by exactly ONE of the two methods, so none of THOSE can ever
+ * collide with itself here — see {@link dedupeWarnings}'s own doc for why that exclusion is
+ * load-bearing, not merely narrow scoping for its own sake.
  */
 const DEDUPE_ELIGIBLE_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
   "nondeterministic-time",
   "nondeterministic-randomness",
   "silencing-any",
+  "module-scope-tokens",
+  "token-name-as-color",
 ]);
 
 /**
@@ -294,11 +307,13 @@ const DEDUPE_ELIGIBLE_WARNING_KINDS: ReadonlySet<GateWarningKindV1> = new Set([
  * `lintDroppedIds`) carries NO line/column at all, so two GENUINELY DISTINCT `dropped-id`
  * warnings for one page (two different ids referenced but no longer present) would collide on an
  * unscoped `kind+file+line+column` key and one would be silently swallowed — a real regression an
- * unscoped key would introduce, not a theoretical one. Restricting eligibility to the three kinds
- * `runTree`'s lint can actually produce is what keeps every other kind completely unaffected:
- * each of the rest is produced by exactly ONE of `runPage`/`runTree`, so nothing else here can
- * ever generate a same-kind collision to begin with, and this function never even computes a key
- * for them — they pass straight through unconditionally, however many share the same file.
+ * unscoped key would introduce, not a theoretical one. Restricting eligibility to the five kinds
+ * `runTree`'s whole-tree lint can actually produce (originally three, Task 5; `module-scope-tokens`
+ * and `token-name-as-color` joined it at Tasks 8/9 — see {@link DEDUPE_ELIGIBLE_WARNING_KINDS}'s
+ * own doc) is what keeps every other kind completely unaffected: each of the rest is produced by
+ * exactly ONE of `runPage`/`runTree`, so nothing else here can ever generate a same-kind collision
+ * to begin with, and this function never even computes a key for them — they pass straight through
+ * unconditionally, however many share the same file.
  *
  * KEEPS THE FIRST OCCURRENCE, never the last: `treePass.warnings` is pushed into the caller's
  * array before any `pageResult.warnings`, so keeping first is what keeps the MORE INFORMATIVE

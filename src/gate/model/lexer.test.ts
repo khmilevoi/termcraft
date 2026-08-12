@@ -374,7 +374,7 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // its test — two branches, two files each, taking it to 947. The project-design-systems P1
     // plan (runtime colour model) adds `runtime/types.test.ts` and
     // `runtime/model/tokens.reactivity.test.tsx`, taking it to 949.
-// The project-design-systems P9 plan (Diff/LineNumber wrappers) adds
+    // The project-design-systems P9 plan (Diff/LineNumber wrappers) adds
     // `runtime/ui/line-number.tsx` and its own `line-number.test.tsx`, taking it to 951.
     // The same plan's second task adds `runtime/ui/diff.tsx` and its own `diff.test.tsx`,
     // taking it to 953.
@@ -406,7 +406,10 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // (minus one shared), taking it to 1027.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(1027);
+    // The project-design-systems P4 plan (integration spine) adds 16 files, taking it to 1043.
+    // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
+    // grows.
+    expect(files.length).toBe(1043);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

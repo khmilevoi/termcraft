@@ -40,6 +40,12 @@ export interface UiRootOptions {
    * never an invented identity.
    */
   readonly agentSelection?: HomeAgentSelection;
+  /**
+   * Text the composer starts life holding (design-systems §9). Forwarded verbatim into
+   * `createUiDeps`'s seventh parameter. Optional so every existing `createUiRoot` call keeps
+   * compiling; `createUiDeps`'s own default (`null`) applies when omitted.
+   */
+  readonly seedComposerText?: string;
 }
 
 export interface UiRootHandle {
@@ -78,6 +84,7 @@ export async function createUiRoot(options: UiRootOptions): Promise<UiRootError 
       options.agentHealthProbe,
       options.requestExit,
       options.agentSelection,
+      options.seedComposerText,
     );
     return <App deps={deps} />;
   });

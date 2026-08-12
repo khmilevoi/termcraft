@@ -11,7 +11,7 @@ export const TARGET_STACKS = ["rust-ratatui", "go-bubbletea", "js-opentui", "gen
 
 /**
  * `.termcraft/project.toml` — the PORTABLE project state (storage-identity §5.1), with
- * `format_version = 2` and exactly these four semantic fields. It deliberately carries no
+ * `format_version = 3` and exactly these four semantic fields. It deliberately carries no
  * active page, active chat, backend, model, effort, preview/UI setting, agent session id,
  * Git status, page title, `minSize`, theme, source hash, or extracted page metadata, so
  * changing machines never produces a workspace-navigation or backend-preference diff
@@ -22,9 +22,13 @@ export const TARGET_STACKS = ["rust-ratatui", "go-bubbletea", "js-opentui", "gen
  * the authored source tree the agent edits. Keeping both here and there would be two
  * sources of truth for the same fact. A version-1 file (which still has `pages`) is refused
  * outright by `decodeProjectManifest` — see `ManifestMigrationRequiredError`.
+ *
+ * format_version 3 (design-systems §9) changes NO field here — it only requires the project's
+ * tree to carry `design/system/` (the project-owned design system). The field set stays
+ * identical to format 2's; only the version counter moves.
  */
 export interface ProjectManifest {
-  readonly formatVersion: 2;
+  readonly formatVersion: 3;
   readonly projectId: string;
   readonly name: string;
   /** UTC RFC 3339. */

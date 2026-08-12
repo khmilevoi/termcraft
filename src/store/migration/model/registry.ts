@@ -80,6 +80,7 @@ export const PROJECT_TOML_MIGRATION_KIND = "project.toml";
  */
 export const MIGRATION_CHAIN: readonly MigrationStep[] = [
   { kind: PROJECT_TOML_MIGRATION_KIND, fromVersion: 1, toVersion: 2 },
+  { kind: PROJECT_TOML_MIGRATION_KIND, fromVersion: 2, toVersion: 3 },
 ];
 
 /** No registered step walks `kind` from `fromVersion` to `toVersion` in the given chain. */

@@ -1,7 +1,9 @@
 import { createElement } from "@opentui/react";
+import { wrap } from "@reatom/core";
 
 import type { DesignFileEntryV1 } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
+import { seedThemeCapability } from "runtime/model/tokens";
 
 import {
   type ControlEnvelope,
@@ -213,6 +215,37 @@ export function createHostSession(deps: HostSessionDeps): HostSession {
       expectedFiles: request.expectedFiles,
     });
     if (loaded instanceof ProtocolError) return fail(loaded);
+
+    // THE THEME SEAM (design-systems §4.6; plan P1 built it, P4 wires it). It runs BEFORE
+    // `handle.mount(...)` below so a page's FIRST render already reads the project's own palette —
+    // seeding after the mount would draw one frame against the compiled defaults and then repaint.
+    // `seedThemeCapability` is one named grouped transition that moves both theme atoms together
+    // (Reatom RTM-S04), so a mount can never leave the id and the values describing different
+    // themes; it is imported from `runtime/model/tokens` by path and is deliberately NOT on the
+    // `@termcraft/runtime` facade, so an authored page cannot repaint its own theme.
+    //
+    // `wrap(...)` on THIS await, not the whole `handleMount` function (Reatom rule RTM-A04, the
+    // same pattern `core/kernel/model/kernel.ts`'s `runLaunchedOperation` and
+    // `core/preview/model/session-commands.ts` already use, and for the measured reason
+    // `kernel.ts`'s own doc comment records: wrapping only the OUTER async function preserves
+    // context up to its own first `await`, but the continuation after an UNWRAPPED `await`
+    // resumes outside the captured frame — which is exactly how `kernel.ts` found a write go
+    // missing into a shared atom system. `seedThemeCapability` below is that same shape: a
+    // Reatom action call sitting right after this await).
+    const themeSeed = await wrap(
+      deps.loadThemeSeed({
+        treeRoot: request.treeRoot,
+        expectedFiles: request.expectedFiles,
+        theme: request.theme,
+      }),
+    );
+    if (themeSeed instanceof ProtocolError) return fail(themeSeed);
+    // `null` is the honest "this tree carries no design system" — the atoms keep the runtime's own
+    // compiled defaults, which is exactly what every project renders against before the mechanical
+    // migration runs (§9).
+    if (themeSeed !== null) {
+      seedThemeCapability({ themeId: themeSeed.themeId, tokens: themeSeed.tokens });
+    }
 
     // REUSE THE LIVE HANDLE, NEVER A SECOND RENDERER. `RenderHandle.mount` is documented as
     // "mount (or replace) the React tree" and re-creates its error sink per call

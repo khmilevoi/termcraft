@@ -19,3 +19,14 @@ export {
   findUnresolvedComponents,
   isInsideDesignSystem,
 } from "./model/components";
+export { DESIGN_SYSTEM_TOKENS_RELPATH } from "./types";
+export {
+  SEED_DESIGN_SYSTEM_ID,
+  SEED_DESIGN_SYSTEM_NAME,
+  SEED_DESIGN_SYSTEM_VERSION,
+  SEED_THEME_ID,
+  SEED_THEME_LABEL,
+  SEED_TOKENS,
+  createSeedManifest,
+} from "./model/seed";
+export { renderDesignSystemManifest, renderTokensScaffold } from "./model/scaffold";

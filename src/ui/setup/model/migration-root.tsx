@@ -32,9 +32,12 @@ export function migrationChoiceForKey(key: {
 
 /**
  * Mount the `migrate-80` offer as the ONLY thing on screen, before any Kernel exists
- * (design §12.1: "a version-1 project never opens ... the dialog is the only thing the project
- * produces"). Returns a promise that settles on the first decisive key, plus a `setWorking` the
- * caller flips before running the migration so the key row becomes `⠹ migrating…`.
+ * (design §12.1's original wording: "a version-1 project never opens ... the dialog is the only
+ * thing the project produces" — design-systems §9 / plan P4 decision D8 made format 2 a SECOND
+ * migratable origin that reaches this same dialog, so "a version-1 project" is no longer the only
+ * project this offer can be drawn for). Returns a promise that settles on the first decisive key,
+ * plus a `setWorking` the caller flips before running the migration so the key row becomes
+ * `⠹ migrating…`.
  *
  * `ctrl+c` resolves `"later"`, not `"migrate"`: `UI_RENDERER_CONFIG` sets `exitOnCtrlC: false`, so
  * without this the chord would do nothing at all and the user would be stuck in a dialog with no

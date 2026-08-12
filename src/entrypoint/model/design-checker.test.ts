@@ -385,6 +385,8 @@ describe("every Gate warning kind is either rendered or deliberately excluded", 
     "silencing-any": true,
     "import-cycle": true,
     "dead-module": true,
+    "module-scope-tokens": true,
+    "token-name-as-color": true,
   };
   const kinds = Object.keys(EVERY_GATE_WARNING_KIND);
 

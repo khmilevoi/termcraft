@@ -3,6 +3,7 @@ import type { Stats } from "node:fs";
 import * as errore from "errore";
 import { z } from "zod";
 
+import { DESIGN_SYSTEM_MANIFEST_RELPATH, decodeDesignSystemManifest } from "entities/design-system";
 import type { DesignFileEntryV1 } from "entities/design-tree";
 import {
   isCodeFile,
@@ -10,9 +11,17 @@ import {
   resolveClosure,
   resolveDesignSpecifier,
 } from "entities/design-tree";
+import { trace } from "infrastructure/debug-log";
+import type { TokenMap } from "runtime/types";
 
 import { ProtocolError } from "../../protocol";
-import type { LoadPageArgs, LoadedPage, ValidatedPageMeta } from "../types";
+import type {
+  LoadPageArgs,
+  LoadThemeSeedArgs,
+  LoadedPage,
+  ThemeSeedV1,
+  ValidatedPageMeta,
+} from "../types";
 
 /** The one legal bare module edge (runtime-api §2, design §6). */
 const RUNTIME_SPECIFIER = "@termcraft/runtime";
@@ -245,17 +254,27 @@ interface ReadTreeFileV1 {
  * Read, verify and decode ONE closure member.
  *
  * A non-code member ({@link isCodeFile}) is still read and hash-verified — it is part of the
- * closure and its bytes are part of what the page renders — but it is neither decoded as UTF-8
- * nor tokenized: Bun's loader never executes it, so it carries no module edge to find, and
- * pushing image or JSON bytes through a JS/TS parser could only ever manufacture a false
+ * closure and its bytes are part of what the page renders — but by default it is neither decoded
+ * as UTF-8 nor tokenized: Bun's loader never executes it, so it carries no module edge to find,
+ * and pushing image or JSON bytes through a JS/TS parser could only ever manufacture a false
  * `MALFORMED_PROTOCOL`. That is the same measured criterion, and the same reasoning, as the
  * Gate's own scan loop.
+ *
+ * `options.decodeText` is the ONE opt-in, added for {@link createThemeSeedLoader}: the design
+ * system manifest (`system/design-system.json`) is JSON, so `isCodeFile` correctly says Bun never
+ * executes it — but the theme loader still needs its TEXT, not just its verified hash, to decode
+ * it. Every existing caller (`readClosure`'s closure walk) never passes this flag, so a binary or
+ * prose closure member is still never pushed through `TextDecoder`'s `{ fatal: true }` decode,
+ * except when a caller names ONE specific, known-text relPath — never a caller-chosen or
+ * arbitrary one. The import scanner ({@link scanFileImports}) still runs ONLY for a code file
+ * either way: a decoded-on-request non-code member carries no edges to find, same as before.
  */
 async function readTreeFile(
   treeRoot: string,
   relPath: string,
   expectedSha256: string,
   verifyPath: (treeRoot: string, relPath: string) => Promise<ProtocolError | void>,
+  options: { readonly decodeText?: boolean } = {},
 ): Promise<ProtocolError | ReadTreeFileV1> {
   const shapeError = checkTreeRelPath(relPath);
   if (shapeError instanceof ProtocolError) return shapeError;
@@ -276,7 +295,10 @@ async function readTreeFile(
     );
   }
 
-  if (!isCodeFile(relPath)) return { relPath, sha256, sourceText: null, edges: [] };
+  const isCode = isCodeFile(relPath);
+  if (!isCode && options.decodeText !== true) {
+    return { relPath, sha256, sourceText: null, edges: [] };
+  }
 
   // §5: invalid UTF-8 is a protocol violation, not a throw. TextDecoder with { fatal: true }
   // throws on bad bytes, so wrap this sync boundary (errore rule 12, { try, catch } options
@@ -286,6 +308,10 @@ async function readTreeFile(
     catch: (cause) => malformed(`${relPath} is not valid UTF-8`, cause),
   });
   if (sourceText instanceof ProtocolError) return sourceText;
+
+  // A non-code member decoded only because `options.decodeText` asked for it still carries no
+  // module edge to scan (Bun's loader never executes it) — return before the import scanner.
+  if (!isCode) return { relPath, sha256, sourceText, edges: [] };
 
   const records = scanFileImports(relPath, sourceText);
   if (records instanceof ProtocolError) return records;
@@ -529,6 +555,93 @@ export function createPageLoader(
   };
 }
 
+/**
+ * Widen a manifest theme's Gate-validated `#rrggbb` record into the runtime's typed `TokenMap` —
+ * the SAME widen-then-single-assertion idiom `host-state-machine.ts`'s `readyBodyRecord` already
+ * uses, reused here rather than invented fresh. This performs no NEW validation: every value was
+ * already checked against `#rrggbb` by `decodeDesignSystemManifest`'s Zod schema (design-systems
+ * §4.1) before it ever reaches this function — it only reshapes an already-checked `Record` into
+ * the shape `seedThemeCapability` (`runtime/model/tokens`) requires.
+ */
+function toTokenMap(tokens: Readonly<Record<string, string>>): TokenMap {
+  const widened: Record<string, unknown> = { ...tokens };
+  return widened as TokenMap;
+}
+
+/**
+ * The theme seed loader (design-systems §4.6). It is in THIS module rather than beside the state
+ * machine because this is where a tree file is read and hash-verified against `expectedFiles`; a
+ * second reader would be a second answer to "what bytes are in this tree".
+ *
+ * WHY THE CHILD READS THE MANIFEST AT ALL, rather than the values riding the protocol: they are in
+ * `design/system/design-system.json`, which is inside `treeRoot` and covered by `expectedFiles`, so
+ * they already travel by the route everything else does. Adding them to the wire would put a
+ * project's palette into the mount request and make the request's size a function of the project's
+ * token count.
+ */
+export function createThemeSeedLoader(
+  deps: PageLoaderDeps,
+): (args: LoadThemeSeedArgs) => Promise<ProtocolError | ThemeSeedV1 | null> {
+  const verifyPath = createTreePathVerifier({ lstat: deps.lstat });
+
+  return async (args) => {
+    const entry = args.expectedFiles.find(
+      (file) => file.relPath === DESIGN_SYSTEM_MANIFEST_RELPATH,
+    );
+    // ABSENT IS NOT A FAILURE (P2's D8, applied at the host): a tree that predates the mechanical
+    // migration mounts exactly as it does today, against the runtime's compiled defaults.
+    if (entry === undefined) return null;
+
+    const read = await readTreeFile(args.treeRoot, entry.relPath, entry.sha256, verifyPath, {
+      decodeText: true,
+    });
+    if (read instanceof ProtocolError) return read;
+
+    // Defensive only (errore rule 21, never silently assumed): `decodeText: true` above always
+    // decodes a hash-verified read for a text file, so `sourceText` is never `null` here in
+    // practice — the same "unreachable but stated" family as `createPageLoader`'s own `entry`
+    // lookup a few lines above.
+    if (read.sourceText === null) return malformed(`${entry.relPath} carried no decodable text`);
+
+    const manifest = decodeDesignSystemManifest(read.sourceText);
+    // LOUD HERE, unlike `core` (P4 D7): the child is DOWNSTREAM of the Gate, so a manifest that
+    // does not decode means the bytes it was handed are not the bytes the Gate judged.
+    if (manifest instanceof Error) {
+      return new ProtocolError({
+        code: "MALFORMED_PROTOCOL",
+        reason: `${DESIGN_SYSTEM_MANIFEST_RELPATH} did not decode: ${manifest.message}`,
+        cause: manifest,
+      });
+    }
+
+    // `Object.hasOwn`, NOT bracket-access `!== undefined`: `manifest.themes` is a plain object off
+    // a `z.record` and still carries `Object.prototype`, so `args.theme === "constructor"` (or
+    // `toString`/`valueOf`/`hasOwnProperty`/`__proto__`) would otherwise resolve to an INHERITED
+    // member instead of `undefined` — `requested.tokens` would then be `undefined`, and
+    // `toTokenMap(undefined)` would silently seed an EMPTY token map with no `trace` and no
+    // fatal, worse than either documented D2 outcome. `request.theme` is only bounded as a
+    // non-empty string ≤64 chars on the wire (`host-state-machine.ts`'s `parseMountRequest`), and
+    // `core/project`'s `resolveActiveThemeId` passes a page's declared `meta.theme` through
+    // verbatim ("resolves; it does not validate"), so this is reachable. Same fix, same reasoning,
+    // as `entities/design-system/model/manifest.ts`'s `TOKEN_PARITY`/`DEFAULT_THEME_UNDECLARED`
+    // checks already apply to this identical hazard.
+    const requested = Object.hasOwn(manifest.themes, args.theme)
+      ? manifest.themes[args.theme]
+      : undefined;
+    if (requested !== undefined) {
+      return { themeId: args.theme, tokens: toTokenMap(requested.tokens) };
+    }
+
+    // FALLBACK, NOT A REFUSAL, and the value is the manifest's OWN declared default — read out of
+    // the project, never invented here. See plan P4's decision D2 for the smoke-render case this
+    // exists for. The Gate is what fatals a page's `meta.theme` naming an undeclared theme (§7).
+    const fallback = manifest.themes[manifest.defaultTheme];
+    if (fallback === undefined) return null;
+    trace("host.mount.themeFallback", { requested: args.theme, used: manifest.defaultTheme });
+    return { themeId: manifest.defaultTheme, tokens: toTokenMap(fallback.tokens) };
+  };
+}
+
 const THEME_MAX = 64;
 const TITLE_MAX = 256;
 const AXIS_MAX = 2048;
@@ -541,7 +654,10 @@ const pageSizeSchema = z.object({
 const pageMetaSchema = z.object({
   kitApiVersion: z.number().int().positive(),
   title: z.string().min(1).max(TITLE_MAX),
-  theme: z.string().min(1).max(THEME_MAX),
+  // OPTIONAL (design-systems §4.6): absent means the project manifest's `defaultTheme`, which
+  // `core` has already resolved into `MountRequestBody.theme` by the time this runs. `.min(1)`
+  // survives — an empty string names no theme and is corruption, not an absence.
+  theme: z.string().min(1).max(THEME_MAX).optional(),
   minSize: pageSizeSchema,
 });
 

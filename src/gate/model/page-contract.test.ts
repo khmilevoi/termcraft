@@ -69,7 +69,9 @@ describe("checkPageContract (runtime-api §4)", () => {
   });
 
   test("a missing required field is MISSING_META_FIELD", () => {
-    const src = `export const meta = definePage({ kitApiVersion: 1, title: "x", minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
+    // `theme` is OPTIONAL (design-systems §4.6, task 2) so this omits `title` instead — one of
+    // the three fields that still remain required.
+    const src = `export const meta = definePage({ kitApiVersion: 1, minSize: { w: 80, h: 24 } })\nexport default reatomComponent(() => null)\n`;
     const codes = scanned(checkPageContract(src, "jsx")).errors.map((e) => e.code);
     expect(codes).toContain("MISSING_META_FIELD");
   });
@@ -132,5 +134,57 @@ describe("checkPageContract — a stream that does not cover the source is an ER
     const result = scanned(checkPageContract(COVERED, "jsx"));
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.meta).toBeNull();
+  });
+});
+
+describe("meta.theme is optional (design-systems §4.6)", () => {
+  const page = (
+    metaBody: string,
+  ) => `import { definePage, reatomComponent } from "@termcraft/runtime"
+export const meta = definePage({ ${metaBody} })
+export default reatomComponent(function Page() { return null })
+`;
+
+  test("a page omitting `theme` passes the contract, with meta.theme undefined", () => {
+    const result = checkPageContract(
+      page(`kitApiVersion: 1, title: "T", minSize: { w: 80, h: 24 }`),
+      "jsx",
+    );
+    expect(result).not.toBeInstanceOf(Error);
+    if (result instanceof Error) return;
+    expect(result.errors).toEqual([]);
+    expect(result.meta).not.toBeNull();
+    expect(result.meta?.theme).toBeUndefined();
+  });
+
+  test("a page declaring `theme` still carries it verbatim", () => {
+    const result = checkPageContract(
+      page(`kitApiVersion: 1, title: "T", minSize: { w: 80, h: 24 }, theme: "midnight"`),
+      "jsx",
+    );
+    expect(result).not.toBeInstanceOf(Error);
+    if (result instanceof Error) return;
+    expect(result.errors).toEqual([]);
+    expect(result.meta?.theme).toBe("midnight");
+  });
+
+  test("a PRESENT but non-string `theme` is still MISSING_META_FIELD", () => {
+    // Optional means "may be absent", never "may be anything". A numeric theme is a page that
+    // meant to pin a theme and got it wrong; reporting nothing would hide that.
+    const result = checkPageContract(
+      page(`kitApiVersion: 1, title: "T", minSize: { w: 80, h: 24 }, theme: 7`),
+      "jsx",
+    );
+    expect(result).not.toBeInstanceOf(Error);
+    if (result instanceof Error) return;
+    expect(result.errors.map((e) => e.code)).toContain("MISSING_META_FIELD");
+    expect(result.meta).toBeNull();
+  });
+
+  test("the other three fields stay required", () => {
+    const result = checkPageContract(page(`title: "T", minSize: { w: 80, h: 24 }`), "jsx");
+    expect(result).not.toBeInstanceOf(Error);
+    if (result instanceof Error) return;
+    expect(result.errors.map((e) => e.code)).toContain("MISSING_META_FIELD");
   });
 });

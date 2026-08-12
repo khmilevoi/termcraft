@@ -60,19 +60,37 @@ export interface ShellWithAgentRegistry extends AppShell {
   /** The open-vs-create discriminator (Gap D) — see {@link ShellLaunchV1}'s own doc comment. */
   readonly launch: ShellLaunchV1;
   /**
-   * The text the startup `project.open` seeds a first turn with, or `null` for an ordinary launch.
-   * Non-null only immediately after a migration (design-tree §12.2 track 2). `runProjectReadySequence`
-   * decides whether it actually becomes a turn: it needs a trusted project and an active chat, and
-   * an untrusted project refuses the turn through the ordinary `PROJECT_UNTRUSTED` guard.
+   * The text the startup `project.open` would seed a first turn with, or `null` for an ordinary
+   * launch. `runProjectReadySequence` decides whether a non-null value actually becomes a turn: it
+   * needs a trusted project and an active chat, and an untrusted project refuses the turn through
+   * the ordinary `PROJECT_UNTRUSTED` guard.
+   *
+   * ALWAYS `null` IN PRODUCTION as of design-systems §9 / plan P4 decision D8: `bootstrap.ts`'s
+   * post-migration `createShell` call used to pass this (design-tree §12.2 track 2's refactor
+   * seed), but now passes {@link ShellWithAgentRegistry.seedComposerText} instead — an auto-run
+   * turn is actively harmful here, since every existing page fails the Gate on the `Color` type
+   * change until the seeded rewrite lands, and the user has not yet seen those diagnostics. This
+   * field and its `ShellOptions.seedTurnText` plumbing are kept deliberately: it is a live protocol
+   * path (`project.open`'s own `text` payload) with its own tests, not dead code — a future,
+   * genuinely user-confirmed auto-start could still use it.
    */
   readonly seedTurnText: string | null;
+  /**
+   * Text pre-filled into the Workspace composer at construction, or `null` for an ordinary launch.
+   * Non-null only immediately after a migration (design-systems §9). It is a DRAFT: nothing is
+   * sent, and no turn starts — distinct from {@link ShellWithAgentRegistry.seedTurnText}, which
+   * `runProjectReadySequence` turns into a real turn.
+   */
+  readonly seedComposerText: string | null;
 }
 
 /**
- * A project the composition root refuses to open because it is on format 1 (design-tree §12.1: "a
- * version-1 project never opens"). Carries the read-only plan the `migrate-80` dialog is drawn
- * from. NOT an `Error`: nothing is broken — the user has a project and a choice, and reporting
- * this through the fatal path is exactly the defect this outcome removes.
+ * A project the composition root refuses to open because it is on an older manifest format
+ * (design-tree §12.1's original wording: "a version-1 project never opens"; design-systems §9 /
+ * plan P4 decision D8 added format 2 as a SECOND migratable origin, so `plan.fromVersion` is now
+ * `1 | 2`, not always 1). Carries the read-only plan the `migrate-80` dialog is drawn from. NOT
+ * an `Error`: nothing is broken — the user has a project and a choice, and reporting this through
+ * the fatal path is exactly the defect this outcome removes.
  */
 export interface MigrationRequiredV1 {
   readonly kind: "needs-migration";

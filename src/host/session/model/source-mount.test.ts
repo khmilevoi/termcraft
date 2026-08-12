@@ -2,15 +2,17 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { lstat, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
+import { DESIGN_SYSTEM_MANIFEST_RELPATH, createSeedManifest } from "entities/design-system";
 import type { DesignFileEntryV1 } from "entities/design-tree";
 
 import { ProtocolError } from "../../protocol";
-import type { LoadPageArgs, LoadedPage } from "../types";
+import type { LoadPageArgs, LoadedPage, ThemeSeedV1 } from "../types";
 import { DynamicCodeDeniedError, denyDynamicCodeCapability } from "./capability-denial";
 import { registerRuntimeResolver } from "./resolver";
 import {
   computeSourceHash,
   createPageLoader,
+  createThemeSeedLoader,
   createTreePathVerifier,
   computeSourceHash as hashBytes,
   scanClosureImports,
@@ -808,5 +810,150 @@ export default function P() { return null }
     if (!(result instanceof ProtocolError)) throw result;
     expect(result.cause).toBeInstanceOf(DynamicCodeDeniedError);
     expect((result.cause as DynamicCodeDeniedError).entryPoint).toBe("AsyncFunction");
+  });
+});
+
+describe("meta.theme is optional (design-systems §4.6)", () => {
+  test("a page with no `theme` loads, and its validated meta omits theme", async () => {
+    const PAGE_NO_THEME = `import { definePage } from "@termcraft/runtime"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "T",
+  minSize: { w: 10, h: 2 },
+})
+
+export default function P() {
+  return null
+}
+`;
+    const root = await writeTree({ "pages/no-theme.tsx": PAGE_NO_THEME });
+    registerRuntimeResolver();
+
+    const loaded = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/no-theme.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/no-theme.tsx"]),
+    });
+    expect(loaded).not.toBeInstanceOf(Error);
+    if (loaded instanceof Error) return;
+    expect(loaded.meta.theme).toBeUndefined();
+    expect(loaded.meta.title).toBe("T");
+  });
+
+  test("a page whose `theme` is an empty string is still MALFORMED_PROTOCOL", async () => {
+    // Optional means absent-or-valid. `theme: ""` names no theme and must not pass.
+    const PAGE_EMPTY_THEME = `import { definePage } from "@termcraft/runtime"
+
+export const meta = definePage({
+  kitApiVersion: 1,
+  title: "T",
+  minSize: { w: 10, h: 2 },
+  theme: "",
+})
+
+export default function P() {
+  return null
+}
+`;
+    const root = await writeTree({ "pages/empty-theme.tsx": PAGE_EMPTY_THEME });
+    registerRuntimeResolver();
+
+    const loaded = await loadPage({
+      treeRoot: root,
+      entryRelPath: "pages/empty-theme.tsx",
+      expectedFiles: await inventoryOf(root, ["pages/empty-theme.tsx"]),
+    });
+    expect(loaded).toBeInstanceOf(Error);
+    if (!(loaded instanceof Error)) return;
+    expect(loaded.code).toBe("MALFORMED_PROTOCOL");
+  });
+});
+
+describe("createThemeSeedLoader (design-systems §4.6, P4 D2)", () => {
+  /** A tree whose manifest declares the seed theme under its own id — `createSeedManifest`'s
+   * `defaultTheme` and only theme are both `dark-default` (`entities/design-system`'s own seed),
+   * so a request for `"dark-default"` hits directly and a request for anything else exercises the
+   * fallback onto that same id. */
+  const withManifest = (): Record<string, string> => ({
+    [DESIGN_SYSTEM_MANIFEST_RELPATH]: JSON.stringify(createSeedManifest({ kitApiVersion: 1 })),
+  });
+
+  /** One loader call over a fresh temp tree, reusing this file's own `writeTree`/`inventoryOf`
+   * helpers rather than a second set. `corruptHash` drifts ONLY the manifest's recorded hash in
+   * `expectedFiles`, leaving the bytes on disk untouched — the SOURCE_HASH_MISMATCH case. */
+  async function load(args: {
+    readonly files: Record<string, string>;
+    readonly theme: string;
+    readonly corruptHash?: boolean;
+  }): Promise<ProtocolError | ThemeSeedV1 | null> {
+    const root = await writeTree(args.files);
+    const expectedFiles = await inventoryOf(root, Object.keys(args.files));
+    const finalFiles = args.corruptHash
+      ? expectedFiles.map((file) =>
+          file.relPath === DESIGN_SYSTEM_MANIFEST_RELPATH
+            ? { ...file, sha256: "0".repeat(64) }
+            : file,
+        )
+      : expectedFiles;
+    const loader = createThemeSeedLoader({ link: realLink, lstat });
+    return loader({ treeRoot: root, expectedFiles: finalFiles, theme: args.theme });
+  }
+
+  test("returns null when the tree names no design system", async () => {
+    // The transitional rule (P2's D8) at the host: a tree that predates the migration mounts
+    // exactly as it does today.
+    expect(await load({ files: { "pages/a.tsx": "…" }, theme: "dark-default" })).toBeNull();
+  });
+
+  test("returns the requested theme's tokens when the manifest declares it", async () => {
+    const seed = await load({ files: withManifest(), theme: "dark-default" });
+    expect(seed).not.toBeInstanceOf(Error);
+    if (seed === null || seed instanceof Error) throw new Error("expected a seed");
+    expect(seed.themeId).toBe("dark-default");
+    expect(seed.tokens.accent).toBe("#e6a23c");
+  });
+
+  test("falls back to the manifest's defaultTheme for an undeclared id, and still seeds", async () => {
+    // NOT a mount failure: `host/adapters/smoke-renderer.ts` fills `theme: DEFAULT_THEME_ID`
+    // deliberately, so a strict refusal would break every smoke render in a project whose manifest
+    // does not happen to declare a theme called "dark-default". The fallback is the manifest's OWN
+    // default.
+    const seed = await load({ files: withManifest(), theme: "no-such-theme" });
+    if (seed === null || seed instanceof Error) throw new Error("expected a seed");
+    expect(seed.themeId).toBe("dark-default");
+  });
+
+  test("a theme id that names an inherited Object.prototype member also takes the fallback path, not an empty seed", async () => {
+    // Regression: `manifest.themes` is a plain object off a `z.record`, so it still carries
+    // `Object.prototype`. A bracket-access `!== undefined` check would resolve `"constructor"` to
+    // the INHERITED constructor function rather than `undefined`, and the (then-truthy) `requested`
+    // would have `.tokens === undefined` — `toTokenMap(undefined)` would silently seed an EMPTY
+    // token map, worse than either documented D2 outcome. This must take the SAME fallback path as
+    // any other undeclared id.
+    const seed = await load({ files: withManifest(), theme: "constructor" });
+    if (seed === null || seed instanceof Error) throw new Error("expected a seed");
+    expect(seed.themeId).toBe("dark-default");
+    expect(Object.keys(seed.tokens).length).toBeGreaterThan(0);
+    expect(seed.tokens.accent).toBe("#e6a23c");
+  });
+
+  test("a manifest whose bytes do not match expectedFiles is SOURCE_HASH_MISMATCH", async () => {
+    const seed = await load({ files: withManifest(), theme: "dark-default", corruptHash: true });
+    expect(seed).toBeInstanceOf(Error);
+    if (!(seed instanceof Error)) return;
+    expect(seed.code).toBe("SOURCE_HASH_MISMATCH");
+  });
+
+  test("a manifest that does not decode is MALFORMED_PROTOCOL", async () => {
+    // Unlike `core` (P4 D7), the child fails LOUD: it is downstream of the Gate, so an invalid
+    // manifest here means the bytes it was handed are not the bytes the Gate judged.
+    const seed = await load({
+      files: { [DESIGN_SYSTEM_MANIFEST_RELPATH]: "{ not json" },
+      theme: "x",
+    });
+    expect(seed).toBeInstanceOf(Error);
+    if (!(seed instanceof Error)) return;
+    expect(seed.code).toBe("MALFORMED_PROTOCOL");
   });
 });

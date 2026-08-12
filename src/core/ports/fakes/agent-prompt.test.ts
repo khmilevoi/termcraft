@@ -8,6 +8,7 @@ const CONTEXT: AgentPromptContextV1 = {
   pageOrder: [],
   kitApiVersion: 1,
   openPins: [],
+  designSystem: null,
 };
 
 describe("createFakeAgentPromptSource", () => {

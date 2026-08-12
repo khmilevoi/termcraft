@@ -87,11 +87,30 @@ export const DESIGN_CHECK_RENDERED_WARNING_KINDS: ReadonlySet<string> = new Set(
   ...SILENCING_WARNING_KINDS,
 ]);
 
-/** The retry fold's own UI-contract exclusions, carried verbatim — see this file's header. */
+/**
+ * The retry fold's own UI-contract exclusions, carried verbatim — see this file's header — plus
+ * `module-scope-tokens` (design-systems §4.5, added alongside Task 8) and `token-name-as-color`
+ * (design-systems §4.5, §9, D10, added alongside Task 9): both are token-scan advisories in the
+ * same family as `dropped-id`/`unpointed-element`/`unlisted-navigation`, not a determinism/graph
+ * finding and not the specific type-suppression escape hatch `silencing-any` was added here to
+ * catch. No incident drove giving either its own header, so both follow the retry fold's own
+ * implicit treatment (neither `DETERMINISM_WARNING_KINDS` nor `GRAPH_WARNING_KINDS` names them in
+ * `core/turns/model/prompt.ts` either) rather than inventing one.
+ *
+ * `token-name-as-color` STAYS EXCLUDED HERE BY THE SAME RULING AS `module-scope-tokens`, NOT BY
+ * DEFAULT (task 9, controller ruling — do not re-litigate without one). It still reaches the
+ * agent as a residual Gate warning over the protocol (rendered in the chat scrollback, the same
+ * path `module-scope-tokens` takes); routing it to THIS tool instead would mean inventing a new
+ * render surface neither the spec nor this plan specifies. This is a deliberate, plan-scoped
+ * choice, not an oversight — the two warnings are not being treated the same because they look
+ * alike, but because P4 gives neither a reason to diverge from the other.
+ */
 export const DESIGN_CHECK_EXCLUDED_WARNING_KINDS: ReadonlySet<string> = new Set([
   "dropped-id",
   "unpointed-element",
   "unlisted-navigation",
+  "module-scope-tokens",
+  "token-name-as-color",
 ]);
 
 const DESIGN_TREE_PREFIX = `${DESIGN_DIRNAME}/`;
