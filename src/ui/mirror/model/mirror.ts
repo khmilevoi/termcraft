@@ -883,8 +883,16 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         return;
       }
       case "designSystem.published": {
+        // A success case, same as `listed`/`previewed`/`installed` — clears `failure` so a
+        // stale banner from an earlier, unrelated failure does not survive a publish that just
+        // succeeded (fix round 1, Important finding). `phase` is deliberately left untouched: a
+        // publish success says nothing about the picker's own list/preview state.
         const p = envelope.payload;
-        designSystemsAtom.set({ ...designSystemsAtom(), publishedAt: p.publishedAt });
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          publishedAt: p.publishedAt,
+          failure: null,
+        });
         return;
       }
       case "designSystem.publishFailed": {

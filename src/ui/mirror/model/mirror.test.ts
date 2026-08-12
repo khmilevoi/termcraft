@@ -2072,8 +2072,13 @@ describe("mirror.apply â€” design systems (P10 task 10, project-design-systems Â
     }
   });
 
-  test("designSystem.published records publishedAt", () => {
+  test("designSystem.published records publishedAt and clears a stale failure (fix round 1, Important)", () => {
     const mirror = createMirror();
+    // An earlier, unrelated failure left `phase: "failed"` with `failure` populated â€” the same
+    // shape every other success case (`listed`/`previewed`/`installed`) is proven to clear.
+    applyDesignSystemFailure(mirror, "designSystem.listFailed");
+    expect(mirror.designSystems().failure).toEqual(FAILURE);
+
     mirror.apply(
       event("designSystem.published", {
         operationId: OP,
@@ -2082,6 +2087,7 @@ describe("mirror.apply â€” design systems (P10 task 10, project-design-systems Â
       }),
     );
     expect(mirror.designSystems().publishedAt).toBe(NOW);
+    expect(mirror.designSystems().failure).toBeNull();
   });
 
   test("a fresh kernel.snapshot resets the design-systems slice, like every other transient slice", () => {
