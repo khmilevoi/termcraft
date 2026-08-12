@@ -406,6 +406,12 @@ export function createUiDeps(
   // `null` — the honest "no registry" absence every existing test/demo construction had before
   // this parameter existed — never an invented identity.
   agentSelection: HomeAgentSelection | null = null,
+  // The named design-systems §9 injection point: the composition root supplies the pre-filled
+  // code-migration draft (`entrypoint/model/bootstrap.ts`'s post-migration `seedComposerText`),
+  // forwarded verbatim into the `composer` atom's initial value below. Defaults to `null` — the
+  // honest "no seed" state every existing test/demo construction had before this parameter
+  // existed — never a fabricated draft.
+  seedComposerText: string | null = null,
 ): UiDeps {
   const mirror = createMirror();
   const terminal = atom(initialSize, "ui.app.terminal");
@@ -955,7 +961,12 @@ export function createUiDeps(
     }),
   );
 
-  const composer = atom("", "ui.local.composer");
+  // SEEDED AT CONSTRUCTION, never through a post-mount effect (design-systems §9).
+  // `createEditorBridge`'s `attach` already seeds a newly mounted editor from its mirror atom —
+  // "the mirror is the seed at mount; the buffer is the truth while mounted" (§7.2) — so putting
+  // the text in the atom before anything mounts is the whole mechanism. A post-mount `setText`
+  // would race the mount and could clobber a keystroke.
+  const composer = atom(seedComposerText ?? "", "ui.local.composer");
   // Hoisted above `slashSelection` (like `composer`) so its own `withComputed` can read it
   // directly — phase-8 Task 17 (§3.10): the Home prompt is the OTHER primary input the slash
   // selection must re-derive from, exactly as `composer` already does for Workspace.

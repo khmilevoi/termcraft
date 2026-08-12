@@ -66,6 +66,13 @@ export interface ShellWithAgentRegistry extends AppShell {
    * an untrusted project refuses the turn through the ordinary `PROJECT_UNTRUSTED` guard.
    */
   readonly seedTurnText: string | null;
+  /**
+   * Text pre-filled into the Workspace composer at construction, or `null` for an ordinary launch.
+   * Non-null only immediately after a migration (design-systems §9). It is a DRAFT: nothing is
+   * sent, and no turn starts — distinct from {@link ShellWithAgentRegistry.seedTurnText}, which
+   * `runProjectReadySequence` turns into a real turn.
+   */
+  readonly seedComposerText: string | null;
 }
 
 /**

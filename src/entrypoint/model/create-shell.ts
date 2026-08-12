@@ -88,6 +88,9 @@ export interface ShellOptions {
   /** Threaded straight through to {@link ShellWithAgentRegistry.seedTurnText} — see that field's
    *  own doc comment (`../types.ts`). */
   readonly seedTurnText?: string;
+  /** Threaded straight through to {@link ShellWithAgentRegistry.seedComposerText} — see that
+   *  field's own doc comment (`../types.ts`). */
+  readonly seedComposerText?: string;
 }
 
 /**
@@ -255,6 +258,7 @@ async function interactiveShell(
     agentRegistry,
     launch,
     seedTurnText: options?.seedTurnText ?? null,
+    seedComposerText: options?.seedComposerText ?? null,
     // Reverse acquisition order: the Kernel (and the host children its active preview may
     // hold) release first, then any other still-live host process, then the project lease
     // last — `open` was acquired first, so it is released last. Each step is guarded (see
@@ -678,6 +682,8 @@ function demoShell(env: UiEnv): ShellWithAgentRegistry {
     // No real project has just been migrated in an offline demo (design-tree §12.2 track 2) —
     // never a synthesized refactor turn to seed.
     seedTurnText: null,
+    // Same reasoning as `seedTurnText` above, for the composer draft (design-systems §9).
+    seedComposerText: null,
     close: () => {
       if (closed) return Promise.resolve();
       closed = true;

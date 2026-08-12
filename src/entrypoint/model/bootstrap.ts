@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { migrationRefactorSeed } from "agent/prompt";
+import { designSystemMigrationSeed, migrationRefactorSeed } from "agent/prompt";
 import { EMBEDDED_RUNTIME_DECLARATION } from "host/protocol";
 import type { UiEnv, UiRootAdapters } from "ui";
 
@@ -67,14 +67,21 @@ export async function bootstrap(
   if (migrated instanceof Error) return new AppStartupError({ cause: migrated });
 
   // Migrated: build the real shell from scratch. `createShell` re-opens the project, which now
-  // decodes as format 2. A second `needs-migration` here would mean the migration reported success
-  // without changing the manifest — refused loudly rather than looping.
+  // decodes as the current format. A second `needs-migration` here would mean the migration
+  // reported success without changing the manifest — refused loudly rather than looping.
   //
-  // Track 2 (design-tree §12.2): the seed rides ONLY this second `createShell` call — the first
-  // call above never got this far without hitting the `needs-migration` branch, so there is never
-  // a migration to seed a refactor turn from on an ordinary (non-migrated) launch.
+  // Track 2 (design-tree §12.2) / design-systems §9: the seed rides ONLY this second `createShell`
+  // call — the first call above never got this far without hitting the `needs-migration` branch,
+  // so there is never a migration to seed a draft from on an ordinary (non-migrated) launch.
+  //
+  // §9: the code migration is a SEEDED DRAFT, never an automatic turn. `seedTurnText` is
+  // deliberately NOT passed any more — see plan P4's decision D8 for why an auto-run turn is
+  // actively harmful here (every page is red on the `Color` change until this rewrite lands).
   const second = await createShell(mode, env, deps.shell, {
-    seedTurnText: migrationRefactorSeed({ pageCount: first.plan.pageCount }),
+    seedComposerText:
+      first.plan.fromVersion === 1
+        ? `${migrationRefactorSeed({ pageCount: first.plan.pageCount })}\n\n${designSystemMigrationSeed({ pageCount: first.plan.pageCount })}`
+        : designSystemMigrationSeed({ pageCount: first.plan.pageCount }),
   });
   if (second instanceof Error) return second;
   if ("kind" in second)

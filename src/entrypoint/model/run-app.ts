@@ -114,6 +114,9 @@ export async function runApp(options: RunAppOptions): Promise<AppStartupError | 
     agentHealthProbe: resolveAgentHealthProbe(shell.agentRegistry),
     agentSelection: resolveDefaultAgentSelection(shell.agentRegistry) ?? undefined,
     requestExit,
+    // `text` is OMITTED, not set to `undefined`, matching `projectOpenPayloadSchema`'s own
+    // strict-object precedent a couple of blocks below (design-systems §9).
+    ...(shell.seedComposerText === null ? {} : { seedComposerText: shell.seedComposerText }),
   }).catch((cause: unknown) => new AppStartupError({ cause }));
   if (root instanceof Error) {
     await closeShell(shell, boundary);
