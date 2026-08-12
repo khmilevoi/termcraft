@@ -9,6 +9,7 @@ const CONTEXT: AgentPromptContextV1 = {
   pageOrder: [],
   kitApiVersion: 1,
   openPins: [],
+  designSystem: null,
 };
 
 describe("createProductionAgentPromptSource (phase-8 WP-3 contract test)", () => {

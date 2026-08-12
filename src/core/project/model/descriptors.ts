@@ -9,6 +9,8 @@ import type {
   PageDescriptorV1,
   Sha256Hex,
 } from "core/protocol";
+import { DESIGN_SYSTEM_MANIFEST_RELPATH, decodeDesignSystemManifest } from "entities/design-system";
+import type { DesignSystemManifestV1 } from "entities/design-system";
 import { DESIGN_DIRNAME, PAGES_MANIFEST_RELPATH } from "entities/design-tree";
 import type { PageEntryV1 } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
@@ -157,6 +159,61 @@ async function readTreePaths(
     return manifestFailure;
   }
   return listed.map((file) => file.relPath);
+}
+
+/**
+ * `system/design-system.json`, decoded — or `null` (plan P4 decision D7). Placed beside
+ * {@link readPageOrder} because both answer "what does this tree currently declare" from the
+ * same `treePaths` a caller already walked, but they answer DIFFERENTLY on a broken file:
+ *
+ *   - ABSENT from `treePaths` -> `null`. The ordinary case: every project has no design system
+ *     until the mechanical migration writes one (design-systems §9).
+ *   - PRESENT but does not decode -> `null`, logged via `log.warn` — NEVER thrown, NEVER a
+ *     `FailureDtoV1`.
+ *
+ * CONTRAST WITH `readPageOrder`, DELIBERATELY: a present-but-undecodable `design/pages.json`
+ * PROPAGATES as a refusal (see that function's own doc) because a broken page order corrupts
+ * every downstream page-identity decision this handler makes for the rest of the turn. A broken
+ * design-system manifest has no such blast radius — `gate` already reports an invalid manifest
+ * as its own fatal, on the same candidate, before any commit reaches disk — so refusing the
+ * turn here too would make a project whose manifest an agent just broke unopenable AND
+ * unrepairable, since the repair is itself a turn that would need this very read to succeed
+ * first. Every branch that discards the decode failure logs it (errore rule 21).
+ *
+ * MIRRORS, RATHER THAN DUPLICATES BY ACCIDENT: `core/project/model/tree-index.ts`'s own
+ * `decodeDesignSystemFrom` makes the identical present-and-undecodable-is-null-plus-warn
+ * allowance, for the identical reason (its own doc cites this same D7). It is not reused
+ * directly because it decodes from an ALREADY-READ `files` map — `readCanonicalTreeIndex` reads
+ * every tree file's text up front, for the whole-tree Gate pass. This function is called from
+ * `turn.start`, which at this point in the handler holds only `treePaths` (a `listTree()`
+ * result) and has no other reason to read the rest of the tree's text just to answer this one
+ * question — so it performs its own single `readTreeFile`, the way `readPageEntrySource` below
+ * reads one page's own entry rather than taking a pre-read map. Keep the two decode-or-null
+ * branches read the same way if either changes; a different message shape here would make the
+ * exact same manifest failure trace differently depending on which caller hit it.
+ */
+export async function readDesignSystemManifest(
+  designReader: DesignTreeReader,
+  treePaths: readonly string[],
+): Promise<DesignSystemManifestV1 | null> {
+  if (!treePaths.includes(DESIGN_SYSTEM_MANIFEST_RELPATH)) return null;
+
+  const file = await wrap(designReader.readTreeFile(DESIGN_SYSTEM_MANIFEST_RELPATH));
+  if ("code" in file) {
+    log.warn(
+      `core/project/descriptors: the tree names "${DESIGN_SYSTEM_MANIFEST_RELPATH}" but it could not be read (${file.safeMessage}); treating the project as having no design system (P4 D7)`,
+    );
+    return null;
+  }
+
+  const decoded = decodeDesignSystemManifest(new TextDecoder().decode(file.bytes));
+  if (decoded instanceof Error) {
+    log.warn(
+      `core/project/descriptors: "${DESIGN_SYSTEM_MANIFEST_RELPATH}" did not decode (${decoded.message}) — the Gate reports this as a fatal on the candidate; treating the project as having no design system rather than refusing the turn, so a manifest an agent broke stays repairable on its next turn (P4 D7)`,
+    );
+    return null;
+  }
+  return decoded;
 }
 
 /**

@@ -35,6 +35,7 @@ export type { PageEntrySourceV1 } from "./model/descriptors";
 export {
   computePageDescriptorChanges,
   buildPageDescriptorsChangedPayload,
+  readDesignSystemManifest,
   readPageEntrySource,
   readPageOrder,
 } from "./model/descriptors";

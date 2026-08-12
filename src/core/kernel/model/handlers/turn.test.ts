@@ -1363,6 +1363,7 @@ describe('turnHandlers["turn.start"]', () => {
       pageOrder: [HOME, ABOUT],
       kitApiVersion: 1,
       openPins: [{ pageSlug: HOME, text: "make this gauge red" }],
+      designSystem: null,
     });
     expect(fakePrompts.calls.some((c) => c.method === "runtimeDocs")).toBe(true);
 
