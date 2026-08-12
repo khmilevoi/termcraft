@@ -83,3 +83,13 @@ export {
   decodeDesignSystemProvenance,
   encodeDesignSystemProvenance,
 } from "./model/provenance";
+export type { AdmittedPackage, QuarantineDeps, QuarantineFsDeps } from "./model/quarantine";
+export {
+  QUARANTINE_DIRNAME,
+  QuarantineFailedError,
+  admitPackageThroughQuarantine,
+  discardQuarantine,
+  nodeQuarantineFsDeps,
+  quarantineInstallDir,
+  quarantineRootDir,
+} from "./model/quarantine";
