@@ -130,6 +130,14 @@ describe("classifyNamespace — turn-durability §5.3/§5.4 namespace grammar", 
     expectNamespace("project", `export/generations/${CHAT_ID}/pages/home.json`, "export-artifact");
   });
 
+  test("`.termcraft/design-system-source.json` is admitted as project-config", () => {
+    expectNamespace("project", "design-system-source.json", "project-config");
+  });
+
+  test("an arbitrary new top-level file is still refused", () => {
+    expectUnknown("project", "whatever.json");
+  });
+
   test("the workspace grammar does not leak into the project root and vice versa", () => {
     expectUnknown("project", "pages/home.tsx"); // the retired agent shape, not the design tree
     expectUnknown("workspace", "project.toml");

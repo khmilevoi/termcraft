@@ -75,3 +75,11 @@ export type { LocalPackage, PublishReceipt } from "./types";
 export { publishLocalPackage } from "./model/publish";
 export type { DesignSystemSource } from "./types";
 export { createLocalDesignSystemSource } from "./model/local-source";
+export type { DesignSystemProvenanceV1 } from "./model/provenance";
+export {
+  DESIGN_SYSTEM_PROVENANCE_FILENAME,
+  DESIGN_SYSTEM_PROVENANCE_SCHEMA_VERSION,
+  DesignSystemProvenanceInvalidError,
+  decodeDesignSystemProvenance,
+  encodeDesignSystemProvenance,
+} from "./model/provenance";
