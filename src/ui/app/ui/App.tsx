@@ -9,10 +9,13 @@ import type { HomeAgentSelection, HomeCombo } from "ui/home";
 import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
 import {
   ChatListPopup,
+  DesignSystemInstallPrompt,
+  DesignSystemPicker,
   ExportFailurePopup,
   ExportPopup,
   FRESH_CHAT_LABEL,
   TrustPrompt,
+  designSystemRows,
   formatChatWhen,
 } from "ui/popups";
 import { EnlargePlaceholder } from "ui/preview";
@@ -99,6 +102,51 @@ function renderOverlay(deps: UiDeps, nowMs: number, overlay: OverlayKind | null)
     }));
     return (
       <ChatListPopup id="overlay-chats" rows={rows} selectedIndex={deps.local.chatSelection()} />
+    );
+  }
+  if (overlay === "design-system") {
+    const state = deps.mirror.designSystems();
+    const rows = designSystemRows(state.sources);
+    const selectedIndex = deps.local.designSystemSelection();
+    const prompt = deps.local.designSystemPrompt();
+    if (prompt === null) {
+      const selectedRow = rows[selectedIndex];
+      const canPublishSelected =
+        selectedRow !== undefined &&
+        (state.sources.find((source) => source.sourceId === selectedRow.sourceId)?.canPublish ??
+          false);
+      return (
+        <DesignSystemPicker
+          id="overlay-design-systems"
+          rows={rows}
+          selectedIndex={selectedIndex}
+          canPublishSelected={canPublishSelected}
+          updateNote={state.update !== null ? `${state.update.availableRef} is available` : null}
+          // "installing" never reaches this branch: `applyIntent`'s `design-system-activate` sets
+          // `designSystemPrompt` to `"install"` in the SAME step that opens the confirm dialog, so
+          // the picker itself is only ever busy for the ONE phase reachable while it alone is
+          // showing — the optimistic "listing" `intent.ts`'s `open-design-systems` effect sets.
+          busy={state.phase === "listing"}
+        />
+      );
+    }
+    return (
+      <DesignSystemInstallPrompt
+        id="overlay-design-system-prompt"
+        kind={prompt}
+        ref={state.previewRef ?? ""}
+        summary={state.previewSummary}
+        preview={state.preview}
+        failure={state.failure}
+        // DIVERGENCE: `checking`/`installing` are the only two Kernel-driven busy phases this
+        // dialog can be in — there is no mirror phase for "a publish is in flight" (`designSystem
+        // .publish` has no optimistic phase per the mirror contract, only list/install do, since
+        // publish is a quick local-library write with no Gate pass to freeze the thread), so the
+        // `kind === "publish"` confirm never shows `DesignSystemInstallPrompt`'s own "⠹
+        // publishing…" divergence text. Recorded here rather than invented a new UI-local flag no
+        // task before this one specified.
+        busy={state.phase === "checking" || state.phase === "installing"}
+      />
     );
   }
   // `pin-input` is deliberately absent: its box is not a centred modal. Spec §3.2 opens it "at
@@ -207,6 +255,7 @@ export const App = reatomComponent<{ deps: UiDeps; clock?: () => number }>((prop
       turnRunning: deps.mirror.turn().phase === "running",
       projectOpening: deps.mirror.project().opening,
       projectOpen: deps.mirror.project().projectId !== null,
+      designSystemPrompt: deps.local.designSystemPrompt(),
     };
     const intent = resolveKey(key, context);
     // DIAGNOSTIC (infrastructure/debug-log): the single choke point where a keystroke becomes an

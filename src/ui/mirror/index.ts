@@ -10,6 +10,8 @@ export type {
   ChatRecord,
   ChatsMirror,
   ChatSummary,
+  DesignSystemMirror,
+  DesignSystemPhase,
   ExportMirror,
   PreviewMirror,
   ProjectMirror,
@@ -24,7 +26,7 @@ export type {
   TurnUsage,
 } from "./types";
 export type { Mirror } from "./model/mirror";
-export { createMirror } from "./model/mirror";
+export { createMirror, EMPTY_DESIGN_SYSTEM_MIRROR } from "./model/mirror";
 export { sortChatSummariesNewestFirst } from "./model/chats";
 export {
   agentIdentityFromSnapshot,

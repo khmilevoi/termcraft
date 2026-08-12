@@ -70,11 +70,12 @@ describe("SLASH_COMMANDS registry", () => {
       ["commit.infra", { kind: "inert" }],
       ["commit.all", { kind: "inert" }],
       ["preview.controls", { kind: "inert" }],
+      ["design-system.open", { kind: "local", effect: "open-design-systems" }],
       ["app.exit", { kind: "local", effect: "exit" }],
     ]);
   });
 
-  test("matches design's commandRegistry order and mapping, plus the trailing /exit row", () => {
+  test("matches design's commandRegistry order and mapping, plus the trailing /exit row and the /design-systems extension (D8, P10)", () => {
     expect(SLASH_COMMANDS.map((c) => c.cmd)).toEqual([
       "/new",
       "/chats",
@@ -83,10 +84,14 @@ describe("SLASH_COMMANDS registry", () => {
       "/commit-page",
       "/commit-infra",
       "/commit-all",
+      "/design-systems",
       "/exit",
     ]);
     expect(SLASH_COMMANDS.find((c) => c.cmd === "/chats")?.capability).toBeNull();
     expect(SLASH_COMMANDS.find((c) => c.cmd === "/export")?.capability).toBe("export.start");
+    expect(SLASH_COMMANDS.find((c) => c.cmd === "/design-systems")?.capability).toBe(
+      "designSystem.list",
+    );
   });
 
   test("/exit is a UI-local action with no Kernel capability", () => {
@@ -115,6 +120,7 @@ describe("SLASH_COMMANDS registry", () => {
       ["/commit-page", ["workspace"]],
       ["/commit-infra", ["workspace"]],
       ["/commit-all", ["workspace"]],
+      ["/design-systems", ["workspace"]],
       ["/exit", ["workspace", "home"]],
     ]);
   });
@@ -177,6 +183,20 @@ describe("slashRowState", () => {
     );
     expect(model).toMatchObject({ visible: true, availability: "unavailable" });
     expect(commit).toMatchObject({ visible: true, availability: "unavailable" });
+  });
+
+  test("/design-systems reads its own designSystem.list capability, matching /export's own pattern (D8, P10)", () => {
+    const s = slashRowState(
+      {
+        cmd: "/design-systems",
+        desc: "",
+        order: 7.5,
+        capability: "designSystem.list",
+        screens: ["workspace"],
+      },
+      context([["designSystem.list", available]]),
+    );
+    expect(s).toEqual({ visible: true, availability: "available", hint: null });
   });
 
   test("a missing capability is treated as unavailable", () => {
@@ -309,9 +329,9 @@ describe("slashRowState", () => {
 });
 
 describe("filterSlashRows", () => {
-  test('"/" shows all eight rows in order (the seven design rows plus /exit)', () => {
+  test('"/" shows all nine rows in order (the seven design rows plus /design-systems and /exit)', () => {
     const rows = filterSlashRows("/", context());
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(9);
     expect(rows[0]?.command.cmd).toBe("/new");
     expect(rows.at(-1)?.command.cmd).toBe("/exit");
   });

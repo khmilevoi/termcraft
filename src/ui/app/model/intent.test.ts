@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
+import type {
+  DesignSystemPreviewDtoV1,
+  DesignSystemSummaryDtoV1,
+  SourceListingDtoV1,
+} from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
+import { EMPTY_DESIGN_SYSTEM_MIRROR } from "ui/mirror";
 import { TEST_SHA, TEST_TS, createFakeKernel, event, resetEventSeq, snapshot } from "ui/testing";
 import type { TextEditorHandle } from "ui/text-input";
 
@@ -574,10 +580,12 @@ describe("applyIntent — slash menu", () => {
     );
     applyIntent({ kind: "slash-open" }, deps);
     applyIntent({ kind: "slash-move", delta: -1 }, deps);
-    // Enabled rows here are /new(0), /chats(1), /export(2), /exit(7) — /model and every
-    // /commit-* stay inert regardless of capability. Moving -1 from /new wraps to the LAST
-    // enabled row, /exit, not to inert /model or the commits in between.
-    expect(deps.local.slashSelection()).toBe(7);
+    // Enabled rows here are /new(0), /chats(1), /export(2), /exit(8) — /model and every
+    // /commit-* stay inert regardless of capability, and /design-systems (P10, index 7) reads
+    // `designSystem.list`'s own unpublished capability here, so it is `unavailable` too, not
+    // `available`. Moving -1 from /new wraps to the LAST enabled row, /exit, not to inert /model,
+    // /design-systems, or the commits in between.
+    expect(deps.local.slashSelection()).toBe(8);
     applyIntent({ kind: "slash-move", delta: 1 }, deps);
     expect(deps.local.slashSelection()).toBe(0);
   });
@@ -1039,4 +1047,207 @@ describe("applyIntent — Esc layers", () => {
     applyIntent({ kind: "esc" }, deps);
     expect(dispatchedKinds(kernel)).toEqual(["selection.clear"]);
   });
+});
+
+describe("applyIntent — design-system picker (P10 task 13)", () => {
+  const MIDNIGHT_SUMMARY: DesignSystemSummaryDtoV1 = {
+    id: "midnight",
+    name: "midnight",
+    version: "1.2.0",
+    kitApiVersion: 1,
+    defaultTheme: "dark",
+    defaultThemeTokens: [],
+    componentNames: [],
+  };
+  const AURORA_SUMMARY: DesignSystemSummaryDtoV1 = {
+    id: "aurora",
+    name: "aurora",
+    version: "1.0.0",
+    kitApiVersion: 1,
+    defaultTheme: "dark",
+    defaultThemeTokens: [],
+    componentNames: [],
+  };
+  // `designSystemRows` sorts a source's OWN systems by id — "aurora" sorts before "midnight" — so
+  // row 0 is aurora and row 1 is midnight regardless of this array's own order.
+  const SOURCE: SourceListingDtoV1 = {
+    sourceId: "local",
+    label: "Local library",
+    canPublish: true,
+    state: "listed",
+    systems: [MIDNIGHT_SUMMARY, AURORA_SUMMARY],
+    reason: null,
+  };
+  const BREAKS_PAGES_PREVIEW: DesignSystemPreviewDtoV1 = {
+    verdict: "breaks-pages",
+    errors: [
+      {
+        code: "TOKEN_MISSING",
+        message: "t.brandBlue does not exist",
+        file: "pages/dashboard.tsx",
+        blockedPages: ["dashboard"],
+      },
+    ],
+    warnings: [],
+  };
+  const BLOCKED_PREVIEW: DesignSystemPreviewDtoV1 = {
+    verdict: "blocked",
+    errors: [
+      {
+        code: "MANIFEST_INVALID",
+        message: "system/design-system.json failed schema validation",
+        file: "system/design-system.json",
+        blockedPages: [],
+      },
+    ],
+    warnings: [],
+  };
+
+  function withSources(
+    deps: ReturnType<typeof createUiDeps>,
+    sources: readonly SourceListingDtoV1[],
+  ) {
+    deps.mirror.designSystems.set({ ...EMPTY_DESIGN_SYSTEM_MIRROR, phase: "listed", sources });
+  }
+
+  test("design-system-move wraps around the row count", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    withSources(deps, [SOURCE]);
+    deps.local.designSystemSelection.set(0);
+    applyIntent({ kind: "design-system-move", delta: -1 }, deps);
+    // Two rows (aurora, midnight) — moving -1 from row 0 wraps to the LAST row, index 1.
+    expect(deps.local.designSystemSelection()).toBe(1);
+  });
+
+  test("design-system-activate on an installable row dispatches designSystem.preview and opens the confirm dialog", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    withSources(deps, [SOURCE]);
+    deps.local.designSystemSelection.set(1); // row 1 is midnight, sorted after aurora
+
+    applyIntent({ kind: "design-system-activate" }, deps);
+
+    expect(dispatchedKinds(kernel)).toEqual(["designSystem.preview"]);
+    expect((kernel.dispatched[0] as { payload: { ref: string } }).payload.ref).toBe(
+      "local:midnight@1.2.0",
+    );
+    expect(deps.local.designSystemPrompt()).toBe("install");
+  });
+
+  test("design-system-activate on a PREVIEWED prompt dispatches designSystem.install with the installId", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const installId = uuidv7();
+    deps.mirror.designSystems.set({
+      ...EMPTY_DESIGN_SYSTEM_MIRROR,
+      phase: "previewed",
+      installId,
+      preview: BREAKS_PAGES_PREVIEW,
+    });
+    deps.local.designSystemPrompt.set("install");
+
+    applyIntent({ kind: "design-system-activate" }, deps);
+
+    expect(dispatchedKinds(kernel)).toEqual(["designSystem.install"]);
+    expect((kernel.dispatched[0] as { payload: { installId: string } }).payload).toEqual({
+      installId,
+    });
+    // Mirror contract: no `designSystem.installStarted` event exists — this command's own
+    // dispatch sets the phase optimistically.
+    expect(deps.mirror.designSystems().phase).toBe("installing");
+  });
+
+  // D6: gated on the preview's own VERDICT, never on the presence of a carried-over `installId` —
+  // `designSystem.previewStarted`/`listed` deliberately do not clear a stale one.
+  test("D6: activate on a BLOCKED preview dispatches nothing", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.designSystems.set({
+      ...EMPTY_DESIGN_SYSTEM_MIRROR,
+      phase: "previewed",
+      installId: uuidv7(),
+      preview: BLOCKED_PREVIEW,
+    });
+    deps.local.designSystemPrompt.set("install");
+
+    applyIntent({ kind: "design-system-activate" }, deps);
+
+    expect(kernel.dispatched).toEqual([]);
+  });
+
+  test("design-system-publish opens the publish confirm only when the selected source can publish", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    withSources(deps, [SOURCE]); // canPublish: true
+    deps.local.designSystemSelection.set(0);
+
+    applyIntent({ kind: "design-system-publish" }, deps);
+
+    expect(deps.local.designSystemPrompt()).toBe("publish");
+  });
+
+  test("design-system-publish does nothing when the selected source cannot publish", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    withSources(deps, [{ ...SOURCE, canPublish: false }]);
+    deps.local.designSystemSelection.set(0);
+
+    applyIntent({ kind: "design-system-publish" }, deps);
+
+    expect(deps.local.designSystemPrompt()).toBeNull();
+  });
+
+  test("design-system-activate on a publish confirm dispatches designSystem.publish with the selected row's source", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    withSources(deps, [SOURCE]);
+    deps.local.designSystemSelection.set(0);
+    deps.local.designSystemPrompt.set("publish");
+
+    applyIntent({ kind: "design-system-activate" }, deps);
+
+    expect(dispatchedKinds(kernel)).toEqual(["designSystem.publish"]);
+    expect((kernel.dispatched[0] as { payload: { sourceId: string } }).payload).toEqual({
+      sourceId: "local",
+    });
+  });
+
+  test("overlay-dismiss from a confirmation returns to the picker, not to the workspace", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.local.overlay.set("design-system");
+    deps.local.designSystemPrompt.set("install");
+
+    applyIntent({ kind: "overlay-dismiss" }, deps);
+
+    expect(deps.local.designSystemPrompt()).toBeNull();
+    expect(deps.local.overlay()).toBe("design-system");
+  });
+
+  test("overlay-dismiss from the picker closes the overlay", () => {
+    const deps = createUiDeps(createFakeKernel(), { w: 120, h: 36 });
+    deps.local.overlay.set("design-system");
+    deps.local.designSystemPrompt.set(null);
+
+    applyIntent({ kind: "overlay-dismiss" }, deps);
+
+    expect(deps.local.overlay()).toBeNull();
+  });
+
+  test("opening the overlay dispatches designSystem.list once, with the phase set optimistically", () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+
+    applyIntent({ kind: "action-execute", actionId: "design-system.open" }, deps);
+
+    expect(deps.local.overlay()).toBe("design-system");
+    expect(dispatchedKinds(kernel)).toEqual(["designSystem.list"]);
+    expect((kernel.dispatched[0] as { payload: unknown }).payload).toEqual({});
+    // Mirror contract: no `designSystem.listStarted` event exists — this command's own dispatch
+    // sets the phase optimistically, so the picker never renders an empty list it will not fill.
+    expect(deps.mirror.designSystems().phase).toBe("listing");
+  });
+
+  // The `designSystem.installed`/`published` auto-close behaviour lives in `deps.ts`'s
+  // `applyEnvelope` (the connect-hook-scoped event consumer), not in `applyIntent` — it is
+  // exercised through `deps.mirror.apply(...)` alone, which is EXACTLY the gap `applyEnvelope`
+  // exists to close (mirror.apply is the raw fold; the connect hook is what production actually
+  // runs). Covered in `deps.test.ts`, which already connects `deps.runtime` for this reason.
 });

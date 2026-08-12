@@ -2,6 +2,7 @@ import { resolveHotkey } from "ui/actions";
 import type { AgentHealth } from "ui/agent-health";
 import { homeSubmitAllowed } from "ui/home";
 import type { ScreenKind } from "ui/mirror";
+import type { DesignSystemPromptKind } from "ui/popups";
 import { effectiveZone } from "ui/workspace";
 import type { FocusTarget, OverlayKind } from "ui/workspace";
 
@@ -125,6 +126,14 @@ export interface KeyContext {
    * `ProjectMirror.opening`, which is still false between UI mount and command admission.
    */
   readonly projectOpen: boolean;
+  /**
+   * The design-system overlay's own sub-state (P10 task 13, `UiLocalState.designSystemPrompt`):
+   * `null` while the picker itself is showing, `"install"`/`"publish"` while its breakage-preview
+   * / publish-confirm dialog covers it. Read for exactly one decision: `p` publishes only from the
+   * picker (§8.5's row action), never from a confirmation already asking about something else —
+   * the same "only reachable from the surface it belongs to" discipline `overlay` itself enforces.
+   */
+  readonly designSystemPrompt: DesignSystemPromptKind | null;
 }
 
 /**
@@ -165,6 +174,9 @@ export type KeyIntent =
   | { readonly kind: "trust-decline" }
   | { readonly kind: "overlay-dismiss" }
   | { readonly kind: "export-dismiss" }
+  | { readonly kind: "design-system-move"; readonly delta: -1 | 1 }
+  | { readonly kind: "design-system-activate" }
+  | { readonly kind: "design-system-publish" }
   | { readonly kind: "esc" }
   | { readonly kind: "tab" }
   | { readonly kind: "exit" }
@@ -255,6 +267,20 @@ export function resolveKey(key: KeyLike, context: KeyContext): KeyIntent {
     // this keeps the refusal explicit at the key layer as well.
     if (context.screen === "read-only") return { kind: "none" };
     if (isSubmitKey(key)) return { kind: "pin-save" };
+    return { kind: "none" };
+  }
+
+  if (context.overlay === "design-system") {
+    if (key.name === "escape") return { kind: "overlay-dismiss" };
+    if (key.name === "up") return { kind: "design-system-move", delta: -1 };
+    if (key.name === "down") return { kind: "design-system-move", delta: 1 };
+    if (isSubmitKey(key)) return { kind: "design-system-activate" };
+    // §8.5's own row action, and ONLY from the picker itself — a confirmation dialog already
+    // covering the screen (`designSystemPrompt !== null`) asks about something else entirely, so
+    // `p` must not be read as "publish" while it is up (KeyContext.designSystemPrompt's own doc).
+    if (key.sequence === "p" && context.designSystemPrompt === null) {
+      return { kind: "design-system-publish" };
+    }
     return { kind: "none" };
   }
 

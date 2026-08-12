@@ -10,6 +10,7 @@ import { homeSubmitAllowed } from "ui/home";
 import {
   TEST_NONCE,
   TEST_SHA,
+  TEST_TS,
   createFakeKernel,
   createFakePreviewSession,
   event,
@@ -1438,5 +1439,100 @@ describe("createUiDeps chat viewport and older page", () => {
       event("chat.changed", { activeChatId: CHAT_B, added: [], updated: [], removedChatIds: [] }),
     );
     expect(deps.local.olderPage()).toEqual({ kind: "idle" });
+  });
+});
+
+// P10 task 13: `designSystem.installed`/`published` carry no "close the UI" instruction of their
+// own — `applyEnvelope` is the one place a terminal SUCCESS for the dialog CURRENTLY open becomes
+// a UI-local transition (`UiLocalState.designSystemPrompt`'s own doc comment). Exercised here,
+// not in `intent.test.ts`, because this behaviour lives in the connect-hook-scoped event consumer
+// and `deps.mirror.apply(...)` alone (what `intent.test.ts` uses everywhere else) never reaches it
+// — only `kernel.emit(...)` through a connected `deps.runtime` does.
+describe("design-system prompt auto-close on terminal success (P10 task 13)", () => {
+  test("designSystem.installed closes an open install confirm back to the picker", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    deps.local.overlay.set("design-system");
+    deps.local.designSystemPrompt.set("install");
+
+    kernel.emit(
+      event("designSystem.installed", { operationId: uuidv7(), ref: "local:midnight@1.2.0" }),
+    );
+    await tick();
+
+    expect(deps.local.designSystemPrompt()).toBeNull();
+    expect(deps.local.overlay()).toBe("design-system");
+    unsubscribe();
+  });
+
+  test("designSystem.published closes an open publish confirm back to the picker", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    deps.local.overlay.set("design-system");
+    deps.local.designSystemPrompt.set("publish");
+
+    kernel.emit(
+      event("designSystem.published", {
+        operationId: uuidv7(),
+        ref: "local:midnight@1.2.0",
+        publishedAt: TEST_TS,
+      }),
+    );
+    await tick();
+
+    expect(deps.local.designSystemPrompt()).toBeNull();
+    expect(deps.local.overlay()).toBe("design-system");
+    unsubscribe();
+  });
+
+  test("a terminal success for a DIFFERENT dialog than the one open does not reach in and close it", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    deps.local.overlay.set("design-system");
+    deps.local.designSystemPrompt.set("publish");
+
+    // An install success lands while the PUBLISH confirm is the one actually open.
+    kernel.emit(
+      event("designSystem.installed", { operationId: uuidv7(), ref: "local:midnight@1.2.0" }),
+    );
+    await tick();
+
+    expect(deps.local.designSystemPrompt()).toBe("publish");
+    unsubscribe();
+  });
+
+  test("designSystem.installFailed leaves the confirm open so the failure banner can show", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const unsubscribe = deps.runtime.subscribe(() => undefined);
+    await tick();
+    deps.local.overlay.set("design-system");
+    deps.local.designSystemPrompt.set("install");
+
+    kernel.emit(
+      event("designSystem.installFailed", {
+        operationId: uuidv7(),
+        ref: "local:midnight@1.2.0",
+        failure: {
+          code: "DESIGN_SYSTEM_REJECTED",
+          retryable: false,
+          safeMessage: "midnight could not be installed",
+          details: {},
+        },
+      }),
+    );
+    await tick();
+
+    expect(deps.local.designSystemPrompt()).toBe("install");
+    expect(deps.mirror.designSystems().failure?.safeMessage).toBe(
+      "midnight could not be installed",
+    );
+    unsubscribe();
   });
 });

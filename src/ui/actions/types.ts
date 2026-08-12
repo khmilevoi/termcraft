@@ -7,6 +7,7 @@ export type UiActionExecution =
       readonly effect:
         | "fullscreen"
         | "open-chats"
+        | "open-design-systems"
         | "exit"
         | "compose-repair"
         | "page-prev"

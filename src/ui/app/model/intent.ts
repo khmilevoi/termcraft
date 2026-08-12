@@ -1,10 +1,18 @@
 import { wrap } from "@reatom/core";
 
 import type { CommandResultV1 } from "core/protocol";
+import {
+  formatDesignSystemRef,
+  parseDesignSystemId,
+  parseDesignSystemVersion,
+  parseSourceId,
+} from "entities/design-system-ref";
 import { log, trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
+import { designSystemRows } from "ui/popups";
+import type { DesignSystemRow } from "ui/popups";
 import {
   buildRepairPrompt,
   cancelPendingPin,
@@ -268,6 +276,13 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         cancelPendingPin(deps);
         setPinInput(deps, "");
       }
+      if (local.overlay() === "design-system" && local.designSystemPrompt() !== null) {
+        // A confirmation dismiss returns to the PICKER, not the workspace (task-13 brief) — the
+        // one overlay whose Esc pops an inner layer before the outer one, matching the design's
+        // own layered-Esc discipline (`resolveEsc`) one level down.
+        local.designSystemPrompt.set(null);
+        return;
+      }
       local.overlay.set(null);
       return;
     case "export-dismiss": {
@@ -278,6 +293,74 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       if (exportState.phase === "done" || exportState.phase === "failed") {
         local.exportDismissed.set(exportState.operationId);
       }
+      return;
+    }
+    case "design-system-move": {
+      const rows = designSystemRows(deps.mirror.designSystems().sources);
+      if (rows.length === 0) return;
+      local.designSystemSelection.set(
+        wrapIndex(local.designSystemSelection() + intent.delta, rows.length),
+      );
+      return;
+    }
+    case "design-system-activate": {
+      const state = deps.mirror.designSystems();
+      const prompt = local.designSystemPrompt();
+      if (prompt === "install") {
+        // D6: an install is offered ONLY once a preview has actually landed and its verdict is
+        // not `blocked` — never on the presence of a carried-over `installId` alone (mirror
+        // contract: `previewStarted`/`listed` deliberately do not clear a stale one from an
+        // earlier, unrelated preparation).
+        if (state.phase !== "previewed" || state.installId === null || state.preview === null) {
+          return;
+        }
+        if (state.preview.verdict === "blocked") return;
+        const installId = state.installId;
+        // No `designSystem.installStarted` event exists — the dispatching UI sets this phase
+        // itself; `designSystem.installed`/`installFailed`'s own fold overwrites it (mirror
+        // contract, task-13 brief).
+        deps.mirror.designSystems.set({ ...state, phase: "installing" });
+        dispatchAndReport(
+          dispatcher.dispatch("designSystem.install", { installId }),
+          "designSystem.install",
+        );
+        return;
+      }
+      if (prompt === "publish") {
+        const row = designSystemRows(state.sources)[local.designSystemSelection()];
+        if (row === undefined) return;
+        dispatchAndReport(
+          dispatcher.dispatch("designSystem.publish", { sourceId: row.sourceId }),
+          "designSystem.publish",
+        );
+        return;
+      }
+      // `prompt === null`: activate the selected row. §8.5's update offer dispatches through this
+      // SAME path — the availableRef it names is an ordinary installable row like any other, not
+      // a separate mechanism.
+      const row = designSystemRows(state.sources)[local.designSystemSelection()];
+      if (row === undefined || row.state !== "installable") return;
+      const ref = formatDesignSystemRowRef(row);
+      if (ref === null) return;
+      dispatchAndReport(
+        dispatcher.dispatch("designSystem.preview", { ref }),
+        "designSystem.preview",
+      );
+      // Opens the breakage-preview dialog immediately — D7: `designSystem.previewStarted` (which
+      // folds the mirror's own `phase` to `"checking"`) is published before the Gate runs, but
+      // reaching the UI still costs at least one event-stream hop. Until it lands, the dialog's
+      // own `preview === null` branch paints "checking design/system/…", so opening it here rather
+      // than waiting for that event costs nothing and avoids a one-frame gap with no overlay at all.
+      local.designSystemPrompt.set("install");
+      return;
+    }
+    case "design-system-publish": {
+      const state = deps.mirror.designSystems();
+      const row = designSystemRows(state.sources)[local.designSystemSelection()];
+      if (row === undefined) return;
+      const source = state.sources.find((candidate) => candidate.sourceId === row.sourceId);
+      if (source === undefined || !source.canPublish) return;
+      local.designSystemPrompt.set("publish");
       return;
     }
     case "tab":
@@ -381,6 +464,33 @@ function closeStaleSlash(deps: UiDeps): void {
 
 function wrapIndex(index: number, count: number): number {
   return ((index % count) + count) % count;
+}
+
+/**
+ * The canonical `source:system@version` text for one installable picker row, or `null` when its
+ * parts fail the branded parse — unreachable in practice (every field already crossed the wire
+ * validated by the Kernel's own DTO schemas), but errore's boundary discipline still requires a
+ * real branch rather than an `as` cast, and a failure here is logged rather than silently eaten
+ * (errore rule 21) instead of dispatching a preview for a ref that was never actually formed.
+ */
+function formatDesignSystemRowRef(row: DesignSystemRow): string | null {
+  if (row.systemId === null) return null;
+  const sourceId = parseSourceId(row.sourceId);
+  if (sourceId instanceof Error) {
+    log.warn("UI design-system row carried an unparseable sourceId:", sourceId);
+    return null;
+  }
+  const systemId = parseDesignSystemId(row.systemId);
+  if (systemId instanceof Error) {
+    log.warn("UI design-system row carried an unparseable systemId:", systemId);
+    return null;
+  }
+  const version = parseDesignSystemVersion(row.version);
+  if (version instanceof Error) {
+    log.warn("UI design-system row carried an unparseable version:", version);
+    return null;
+  }
+  return formatDesignSystemRef({ sourceId, systemId, version });
 }
 
 function moveEnabledSelection(
@@ -512,6 +622,17 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     const draft = deps.local.composer();
     setPrimaryInput(deps, draft.length === 0 ? text : `${draft}\n\n${text}`);
     deps.local.focus.set("chat");
+    return;
+  }
+  if (execution.effect === "open-design-systems") {
+    deps.local.overlay.set("design-system");
+    deps.local.designSystemSelection.set(0);
+    deps.local.designSystemPrompt.set(null);
+    // Mirror contract: no `designSystem.listStarted` event exists, so the dispatching UI sets
+    // this phase itself; `designSystem.listed`/`listFailed`'s own fold overwrites it. The picker
+    // must never render an empty list it will not fill (task-13 brief).
+    deps.mirror.designSystems.set({ ...deps.mirror.designSystems(), phase: "listing" });
+    dispatchAndReport(deps.dispatcher.dispatch("designSystem.list", {}), "designSystem.list");
     return;
   }
   const chats = deps.mirror.chats();
