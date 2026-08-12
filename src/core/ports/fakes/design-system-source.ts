@@ -38,6 +38,13 @@ export interface FakeDesignSystemSourceOptions {
   readonly id: string;
   readonly label: string;
   readonly canPublish: boolean;
+  /**
+   * A real, `.unref()`'d delay before `list()` resolves — lets a caller (`core/design-systems`'
+   * `sources.test.ts`) exercise `listGrantedSources`'s bounded timeout against a source that
+   * genuinely does not answer in time. `unref()` means an abandoned (raced-out) delay never
+   * keeps the test process alive.
+   */
+  readonly listDelayMs?: number;
 }
 
 export interface FakeDesignSystemSource extends DesignSystemSource {
@@ -82,6 +89,11 @@ export function createFakeDesignSystemSource(
 
   async function list(): Promise<FailureDtoV1 | readonly DesignSystemSummaryV1[]> {
     calls.push({ method: "list" });
+    if (options.listDelayMs !== undefined) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, options.listDelayMs).unref();
+      });
+    }
     const queued = queues.list.shift();
     if (queued !== undefined) return queued;
     return [...packages.values()].map((entry) => entry.summary);
