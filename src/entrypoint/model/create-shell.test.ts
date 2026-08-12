@@ -8,6 +8,8 @@ import type { PreviewFrameV1, PreviewIdentityV1, RunTreeResultV1 } from "core/po
 import { createFakePreviewSession } from "core/ports/fakes";
 import { FrameAckError, PreviewNoLiveSessionError, createFrameTokenLedger } from "core/preview";
 import type { UUIDv7 } from "core/protocol";
+import { parseDesignSystemId, parseDesignSystemVersion } from "entities/design-system-ref";
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
@@ -16,7 +18,7 @@ import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
 import { systemClock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 import { CURRENT_KIT_API_VERSION } from "runtime";
-import { createStore, designSystemsRoot, nodeStoreDeps } from "store";
+import { createStore, nodeStoreDeps } from "store";
 import type { OpenProject, StoreAdapterDeps } from "store";
 import { PROJECT_MANIFEST_FILENAME, WORKSPACE_STATE_FILENAME } from "store/toml";
 import type { EventEnvelopeV1, UiEnv } from "ui";
@@ -554,26 +556,58 @@ describe("buildDesignSystemDeps (design-system composition root, D9)", () => {
   });
 
   test("the design-system library lives under the SAME userStateRoot as trust and sandboxes", async () => {
-    const scratch = makeScratchDir("termcraft-shell-design-userstate-");
-    const userStateRoot = path.join(scratch, "user-state");
-    const root = path.join(scratch, "project");
+    // FIX ROUND 1 (Important): the original version of this test compared `designSystemsRoot(x)`
+    // against `path.join(x, "design-systems")` — a pure function checked against its own
+    // definition, which would pass even if `buildDesignSystemDeps` were never wired up — plus an
+    // `fs.existsSync(.../trust)` check that is true regardless of this task's changes (the
+    // implicit project-trust grant already creates it). Neither assertion could fail if the
+    // composition were broken. Fixed to observe REAL disk behavior instead: publish an actual
+    // package THROUGH the composed `designSystemSource` and confirm the bytes land where §8.2
+    // says the library lives — `{userStateRoot}/design-systems/local/<id>/` — for this EXACT
+    // `userStateRoot`, never a re-derived path.
+    const userStateRoot = makeScratchDir("termcraft-shell-design-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
 
-    expect(designSystemsRoot(userStateRoot)).toBe(path.join(userStateRoot, "design-systems"));
+      const systemId = parseDesignSystemId("midnight");
+      if (systemId instanceof Error) throw systemId;
+      const version = parseDesignSystemVersion("1.0.0");
+      if (version instanceof Error) throw version;
+      const manifestBytes = new TextEncoder().encode(
+        JSON.stringify({
+          ...validManifestObject(),
+          id: "midnight",
+          version: "1.0.0",
+          components: [],
+        }),
+      );
 
-    const shell = expectFullShell(
-      await createShell("interactive", envFor(root), {
+      const receipt = await designSystemDeps.designSystemSource.publish({
+        systemId,
+        version,
+        files: [{ relPath: "design-system.json", bytes: manifestBytes }],
+      });
+      if ("code" in receipt) throw new Error(`fixture bug: publish failed: ${receipt.safeMessage}`);
+
+      // If `buildDesignSystemDeps` had ever been wired to a DIFFERENT root than the one this
+      // test passed in, this exact path would simply not exist.
+      const publishedManifestPath = path.join(
         userStateRoot,
-        execPath: "bun",
-        srcRoot: "src/main.tsx",
-        spawn: NEVER_SPAWN,
-      }),
-    );
-    // The implicit project trust grant (`store.createProject`) and `buildDesignSystemDeps`'s own
-    // `local`-source grant (D9) both write through `OpenProject.trust`, which `interactiveShell`
-    // builds over the SAME `userStateRoot` this test passed in (never a second, independently
-    // resolved root) — so the trust ledger existing here is proof the two roots agree.
-    expect(fs.existsSync(path.join(userStateRoot, "trust"))).toBe(true);
-    await shell.close();
+        "design-systems",
+        "local",
+        "midnight",
+        "design-system.json",
+      );
+      expect(fs.existsSync(publishedManifestPath)).toBe(true);
+
+      // The library and the trust ledger are colocated under the SAME root (§8.2): the implicit
+      // project trust grant plus `buildDesignSystemDeps`'s own `local`-source grant (D9) both
+      // write through `OpenProject.trust`, built over this identical `userStateRoot`.
+      expect(fs.existsSync(path.join(userStateRoot, "trust"))).toBe(true);
+    } finally {
+      await open.close();
+    }
   });
 
   test("D9: local is granted without a prompt, but the grant is still RECORDED on the ledger", async () => {
