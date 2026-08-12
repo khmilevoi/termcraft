@@ -3,17 +3,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { parseDesignSystemId, parseDesignSystemVersion } from "entities/design-system-ref";
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { systemClock } from "infrastructure/clock";
 
-import type { PackageAdmission, PackageFile } from "../types";
+import type {
+  DesignSystemFsDeps,
+  DesignSystemSummary,
+  PackageAdmission,
+  PackageFile,
+} from "../types";
 import { DuplicatePackageFileError, designSystemContentHash } from "./content-hash";
 import { DesignSystemPackageInvalidError, DesignSystemPackageTooLargeError } from "./errors";
 import { fetchLocalPackage } from "./fetch";
 import { allowAllPackageAdmission, nodeDesignSystemFsDeps } from "./fs-deps";
-import { localSystemDir } from "./layout";
+import { localLibraryDir, localSystemDir } from "./layout";
+import { listLocalSystems } from "./list";
 import { publishLocalPackage } from "./publish";
+import { writeFixturePackage } from "./test-support";
 
 const scratchRoots: string[] = [];
 function freshScratch(): string {
@@ -46,7 +53,13 @@ function manifestFile(id: string, ver: string): PackageFile {
   return {
     relPath: "design-system.json",
     bytes: utf8(
-      JSON.stringify({ ...validManifestObject(), id, name: "Midnight", version: ver, components: [] }),
+      JSON.stringify({
+        ...validManifestObject(),
+        id,
+        name: "Midnight",
+        version: ver,
+        components: [],
+      }),
     ),
   };
 }
@@ -61,6 +74,31 @@ function depsFor(root: string, admission: PackageAdmission = allowAllPackageAdmi
 }
 
 const PKG = { systemId: systemId("midnight"), version: version("1.2.0"), files: FILES };
+
+/**
+ * M11's own fixture: the brief's snippets assume a `createFixtureDeps`/`onFs` helper that does
+ * not exist on this branch (this module's fixtures use real scratch directories over
+ * `nodeDesignSystemFsDeps` instead — see the other tests in this file and `writeFixturePackage`
+ * in `./test-support`). This wraps the real fs deps and records every `renameDir`/`removeDir`
+ * call as `"<op>:<basename of the directory acted on>"`, in call order, against a REAL directory
+ * tree — the same observability `RecordingFsDeps` gives `list`/`read`/`stat` in `test-support.ts`,
+ * narrowed to the two operations M11's swap order is about. For `renameDir` the recorded
+ * basename is the destination, since that is what distinguishes "moved into `.retiring-<id>`"
+ * from "moved into `<id>`" at each step of the swap.
+ */
+function recordSwapCalls(inner: DesignSystemFsDeps, calls: string[]): DesignSystemFsDeps {
+  return {
+    ...inner,
+    removeDir(absDir) {
+      calls.push(`remove:${path.basename(absDir)}`);
+      return inner.removeDir(absDir);
+    },
+    renameDir(from, to) {
+      calls.push(`rename:${path.basename(to)}`);
+      return inner.renameDir(from, to);
+    },
+  };
+}
 
 describe("publishLocalPackage", () => {
   test("writes every file under local/<systemId>/ and returns a receipt at its address", async () => {
@@ -177,5 +215,69 @@ describe("publishLocalPackage", () => {
       }),
     ).toBeInstanceOf(DuplicatePackageFileError);
     expect(fs.existsSync(localSystemDir(root, systemId("midnight")))).toBe(false);
+  });
+
+  test("M11: the existing system is renamed aside, never removed before the replacement lands", async () => {
+    const root = freshScratch();
+    expect(await publishLocalPackage(depsFor(root), PKG)).not.toBeInstanceOf(Error);
+
+    const calls: string[] = [];
+    const deps = { ...depsFor(root), fs: recordSwapCalls(nodeDesignSystemFsDeps, calls) };
+
+    const replacement = {
+      systemId: systemId("midnight"),
+      version: version("1.3.0"),
+      files: [manifestFile("midnight", "1.3.0")],
+    };
+    const receipt = await publishLocalPackage(deps, replacement);
+    expect(receipt).not.toBeInstanceOf(Error);
+
+    // The old system must move ASIDE before the new one moves IN, and only then be removed.
+    expect(calls).toEqual([
+      "remove:.publishing-midnight",
+      "rename:.retiring-midnight",
+      "rename:midnight",
+      "remove:.retiring-midnight",
+    ]);
+  });
+
+  test("M11: a crash between the two renames is repaired by the next publish", async () => {
+    const root = freshScratch();
+    // Simulate the post-crash state directly on disk: the target is gone, `.retiring-<id>` holds
+    // the old bytes.
+    const retiring = path.join(localLibraryDir(root), ".retiring-midnight");
+    writeFixturePackage(retiring, FILES);
+    expect(fs.existsSync(localSystemDir(root, systemId("midnight")))).toBe(false);
+
+    const calls: string[] = [];
+    const deps = { ...depsFor(root), fs: recordSwapCalls(nodeDesignSystemFsDeps, calls) };
+
+    const receipt = await publishLocalPackage(deps, {
+      systemId: systemId("midnight"),
+      version: version("1.3.0"),
+      files: [manifestFile("midnight", "1.3.0")],
+    });
+    expect(receipt).not.toBeInstanceOf(Error);
+
+    // The pre-flight sweep restores the stranded `.retiring-midnight` into the live slot BEFORE
+    // the ordinary swap starts — the very first rename call lands on the live directory, which
+    // could only happen if the sweep ran first (a fresh publish with no stranded directory never
+    // renames into `midnight` before writing the new bytes there).
+    expect(calls[0]).toBe("rename:midnight");
+    // The sweep consumed the stranded directory instead of leaving it as permanent litter.
+    expect(fs.existsSync(retiring)).toBe(false);
+
+    const target = localSystemDir(root, systemId("midnight"));
+    expect(fs.readFileSync(path.join(target, "design-system.json"), "utf8")).toContain("1.3.0");
+  });
+
+  test("M11: `.retiring-` is invisible to `list`", async () => {
+    const root = freshScratch();
+    const retiring = path.join(localLibraryDir(root), ".retiring-midnight");
+    writeFixturePackage(retiring, FILES);
+
+    const listed = await listLocalSystems(depsFor(root));
+    expect(listed).not.toBeInstanceOf(Error);
+    expect((listed as readonly DesignSystemSummary[]).map((s) => s.id)).toEqual([]);
   });
 });
