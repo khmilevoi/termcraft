@@ -27,6 +27,18 @@ describe("designSystemMigrationSeed (design-systems §9)", () => {
   });
 
   test("a single page reads naturally", () => {
-    expect(designSystemMigrationSeed({ pageCount: 1 })).toContain("1 page");
+    const single = designSystemMigrationSeed({ pageCount: 1 });
+    expect(single).toContain("1 page");
+    // "1 page" is a substring of "1 pages" too — a broken pluralization would still pass the
+    // assertion above, so also rule out the plural form explicitly.
+    expect(single).not.toContain("1 pages");
+  });
+
+  test("warns that a moved component's own imports must stay inside design/system/ (Gate §5.1)", () => {
+    // Names the Gate's own fatal (`scanSystemContainment`'s `SYSTEM_IMPORT_ESCAPES`,
+    // `gate/model/design-system.ts`) so an agent that moves a component with an escaping import
+    // understands the failure it is about to hit, rather than discovering it blind.
+    expect(text).toContain("SYSTEM_IMPORT_ESCAPES");
+    expect(text).toContain("design/system/");
   });
 });

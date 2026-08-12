@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { migrationRefactorSeed } from "agent/prompt";
+import { formatOneMigrationSeed, migrationRefactorSeed } from "agent/prompt";
 import type { SpawnFn } from "host/supervisor";
 import type { UiRootAdapters } from "ui";
 
@@ -294,7 +294,7 @@ describe("bootstrap migrates a format-1 project (design-systems §9)", () => {
   );
 
   test(
-    "a format-1 origin also carries the shared-module refactor instruction",
+    "a format-1 origin also carries the shared-module refactor instruction, bridged not just concatenated",
     async () => {
       const root = seedFormatV1Root();
       const driven = migrateThenCaptureComposer();
@@ -310,6 +310,11 @@ describe("bootstrap migrates a format-1 project (design-systems §9)", () => {
       if (!shellHasSeedFields(app.shell)) throw new Error("expected a shell with seed fields");
       // The fixture's own `project.toml` lists exactly two pages (`dashboard`, `calendar`).
       expect(app.shell.seedComposerText).toContain(migrationRefactorSeed({ pageCount: 2 }));
+      // `bootstrap.ts` joins the two seeds through `formatOneMigrationSeed`, not a bare
+      // concatenation — end to end, the real seeded draft must be exactly that function's output,
+      // bridge sentence included (review finding 2: the two seeds contradict each other unjoined).
+      expect(app.shell.seedComposerText).toBe(formatOneMigrationSeed({ pageCount: 2 }));
+      expect(app.shell.seedComposerText).toContain("as ONE move");
       await app.close();
     },
     MIGRATION_TEST_TIMEOUT_MS,

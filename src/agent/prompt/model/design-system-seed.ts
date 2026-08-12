@@ -13,6 +13,13 @@
  *
  * ASSERTED BY SUBSTRING, NOT BYTE-FOR-BYTE (§11): "the migration prompt is a reviewed artifact, not
  * a deterministic test — an agent turn's output is not asserted byte-for-byte."
+ *
+ * INSTRUCTION 2's CONTAINMENT WARNING is not a paraphrase — it names the exact fatal
+ * `gate/model/design-system.ts`'s `scanSystemContainment` raises (`SYSTEM_IMPORT_ESCAPES`, "…
+ * outside \"system/\" — a design system must be self-contained so it can be copied whole; move
+ * what it needs inside the folder", design-systems §5.1). Without the warning, an agent that moves
+ * a component whose own imports still reach outside `design/system/` hits that fatal with no idea
+ * why the turn failed.
  */
 export function designSystemMigrationSeed(input: { readonly pageCount: number }): string {
   const pages = input.pageCount === 1 ? "1 page" : `${input.pageCount} pages`;
@@ -31,6 +38,11 @@ export function designSystemMigrationSeed(input: { readonly pageCount: number })
     `   design/components/), move it into design/system/components/ and declare it in`,
     `   design/system/design-system.json's \`components\` array as`,
     `   { "name": "...", "module": "components/....tsx", "export": "..." }.`,
+    `   design/system/ must stay self-contained: every import a moved component makes must also`,
+    `   resolve inside design/system/ (a sibling in the folder, or "@termcraft/runtime" — never a`,
+    `   path like ../lib/... or ../pages/...). An import that escapes design/system/ is a Gate`,
+    `   fatal (SYSTEM_IMPORT_ESCAPES) that fails the whole turn, so fix or inline what it needs`,
+    `   first, or leave the component where it is rather than move it broken.`,
     `3. Fix every import path that the move changed.`,
     `4. Any component prop typed \`keyof ThemeTokens\` becomes \`Color\` (imported from`,
     `   "@termcraft/runtime").`,

@@ -81,12 +81,19 @@ export async function createShell(
 /**
  * Caller-supplied seeding for the shell this call builds — distinct from {@link ShellDeps}, which
  * overrides the seams `interactiveShell` otherwise computes from the real process. Only
- * `bootstrap.ts`'s post-migration `createShell` call passes this today (design-tree §12.2 track 2):
- * the FIRST `createShell` call in a run never has a migration to seed a refactor turn from.
+ * `bootstrap.ts`'s post-migration `createShell` call passes either field today: the FIRST
+ * `createShell` call in a run never has a migration to seed a draft from.
+ *
+ * `seedTurnText` is retained plumbing, not the live path: `bootstrap.ts` no longer passes it in
+ * production (design-systems §9 / plan P4 decision D8 — an auto-run turn is actively harmful right
+ * after a migration, see {@link ShellWithAgentRegistry.seedTurnText}'s own doc comment). Only
+ * `seedComposerText` is passed by the real post-migration call; `seedTurnText` stays declared and
+ * tested as a still-live protocol path (`project.open`'s own `text` payload), never removed as
+ * churn this plan does not need.
  */
 export interface ShellOptions {
   /** Threaded straight through to {@link ShellWithAgentRegistry.seedTurnText} — see that field's
-   *  own doc comment (`../types.ts`). */
+   *  own doc comment (`../types.ts`) for why nothing in production passes this any more. */
   readonly seedTurnText?: string;
   /** Threaded straight through to {@link ShellWithAgentRegistry.seedComposerText} — see that
    *  field's own doc comment (`../types.ts`). */

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { designSystemMigrationSeed, migrationRefactorSeed } from "agent/prompt";
+import { designSystemMigrationSeed, formatOneMigrationSeed } from "agent/prompt";
 import { EMBEDDED_RUNTIME_DECLARATION } from "host/protocol";
 import type { UiEnv, UiRootAdapters } from "ui";
 
@@ -77,10 +77,15 @@ export async function bootstrap(
   // §9: the code migration is a SEEDED DRAFT, never an automatic turn. `seedTurnText` is
   // deliberately NOT passed any more — see plan P4's decision D8 for why an auto-run turn is
   // actively harmful here (every page is red on the `Color` change until this rewrite lands).
+  //
+  // A format-1 origin gets BOTH tracks joined through `formatOneMigrationSeed`, not a bare
+  // concatenation here — the two seeds contradict each other without its bridge sentence (see
+  // that function's own doc comment). A format-2 origin never carries the refactor seed at all:
+  // it already has the multi-file tree, so only the design-system rewrite applies.
   const second = await createShell(mode, env, deps.shell, {
     seedComposerText:
       first.plan.fromVersion === 1
-        ? `${migrationRefactorSeed({ pageCount: first.plan.pageCount })}\n\n${designSystemMigrationSeed({ pageCount: first.plan.pageCount })}`
+        ? formatOneMigrationSeed({ pageCount: first.plan.pageCount })
         : designSystemMigrationSeed({ pageCount: first.plan.pageCount }),
   });
   if (second instanceof Error) return second;
