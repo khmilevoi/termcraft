@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { migrationRefactorSeed } from "agent/prompt";
+import { EMBEDDED_RUNTIME_DECLARATION } from "host/protocol";
 import type { UiEnv, UiRootAdapters } from "ui";
 
 import type { EntrypointMode, ProcessBoundary, RunningApp } from "../types";
@@ -53,6 +54,9 @@ export async function bootstrap(
   const migrated = await runMigrationPrompt({
     required: first,
     store: createStoreForShell(deps.shell),
+    // `store` must not import `runtime` (D3) — the same routing precedent
+    // `CreateProjectInput.kitApiVersion` set in `create-shell.ts`'s `openOrCreateProject`.
+    kitApiVersion: EMBEDDED_RUNTIME_DECLARATION.currentKitApiVersion,
     adapters: deps.adapters,
   });
   if (migrated instanceof MigrationDeclinedError) return migrated;

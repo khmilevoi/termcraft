@@ -13,7 +13,7 @@ import {
 } from "./project-toml";
 
 const manifest: ProjectManifest = {
-  formatVersion: 2,
+  formatVersion: 3,
   projectId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10",
   name: "Checkout Flow",
   createdAt: "2026-07-19T10:11:12Z",
@@ -33,7 +33,7 @@ describe("encodeProjectManifest", () => {
   test("emits format_version = 2 and exactly the four semantic fields, in order", () => {
     const text = encodeProjectManifest(manifest);
     expect(text.trimEnd().split("\n")).toEqual([
-      "format_version = 2",
+      "format_version = 3",
       `project_id = "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10"`,
       `name = "Checkout Flow"`,
       `created_at = "2026-07-19T10:11:12Z"`,
@@ -93,7 +93,7 @@ describe("decodeProjectManifest", () => {
 
   test("a version-1 manifest is a migration-required refusal, not a shape error, even with otherwise-valid fields", () => {
     const decoded = decodeProjectManifest(
-      encodeProjectManifest(manifest).replace("format_version = 2", "format_version = 1"),
+      encodeProjectManifest(manifest).replace("format_version = 3", "format_version = 1"),
     );
     expect(decoded).toBeInstanceOf(ManifestMigrationRequiredError);
     expect(decoded).not.toBeInstanceOf(ManifestCorruptError);
@@ -107,13 +107,13 @@ describe("decodeProjectManifest", () => {
 
   test("a newer format_version is a hard ManifestTooNewError NAMING the file", () => {
     const decoded = decodeProjectManifest(
-      encodeProjectManifest(manifest).replace("format_version = 2", "format_version = 3"),
+      encodeProjectManifest(manifest).replace("format_version = 3", "format_version = 4"),
     );
     expect(decoded).toBeInstanceOf(ManifestTooNewError);
     const error = decoded as ManifestTooNewError;
     expect(error._tag).toBe("ManifestTooNewError");
     expect(error.file).toBe(PROJECT_MANIFEST_FILENAME);
-    expect(error.found).toBe(3);
+    expect(error.found).toBe(4);
     expect(error.supported).toBe(PROJECT_MANIFEST_FORMAT_VERSION);
     expect(error.message).toContain(PROJECT_MANIFEST_FILENAME);
   });
@@ -195,7 +195,7 @@ describe("decodeProjectManifest", () => {
 // Task 5 brief's own sample, kept verbatim (values, structure) alongside the suite above,
 // which folds the same coverage into the file's established `manifest` fixture style.
 const V2 = [
-  "format_version = 2",
+  "format_version = 3",
   'project_id = "019fa002-5f5b-7000-92e3-9931eebd6c52"',
   'name = "clock"',
   'created_at = "2026-07-26T19:58:57.883Z"',
@@ -203,16 +203,16 @@ const V2 = [
   "",
 ].join("\n");
 
-test("decodes a version-2 manifest with no pages field", () => {
+test("decodes a version-3 manifest with no pages field", () => {
   const decoded = decodeProjectManifest(V2);
   if (decoded instanceof Error) throw decoded;
-  expect(decoded.formatVersion).toBe(2);
+  expect(decoded.formatVersion).toBe(3);
   expect(decoded.name).toBe("clock");
   expect("pages" in decoded).toBe(false);
 });
 
 test("a version-1 manifest is a migration-required refusal, not a shape error", () => {
-  const result = decodeProjectManifest(V2.replace("format_version = 2", "format_version = 1"));
+  const result = decodeProjectManifest(V2.replace("format_version = 3", "format_version = 1"));
   expect(result).toBeInstanceOf(ManifestMigrationRequiredError);
   expect(String(result)).toContain("migrated");
 });
@@ -222,8 +222,8 @@ test("a version-2 manifest carrying `pages` is corrupt — pages.json is the onl
   expect(result).toBeInstanceOf(ManifestCorruptError);
 });
 
-test("a version-3 manifest is still too-new, not migration-required", () => {
-  const result = decodeProjectManifest(V2.replace("format_version = 2", "format_version = 3"));
+test("a version-4 manifest is still too-new, not migration-required", () => {
+  const result = decodeProjectManifest(V2.replace("format_version = 3", "format_version = 4"));
   expect(result).toBeInstanceOf(ManifestTooNewError);
   expect(result).not.toBeInstanceOf(ManifestMigrationRequiredError);
 });

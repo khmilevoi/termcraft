@@ -139,7 +139,7 @@ describe("createProject — new-project creation (storage-identity §14.2)", () 
         path.join(projectRoot, ".termcraft", PROJECT_MANIFEST_FILENAME),
         "utf8",
       );
-      expect(manifestSource).toContain("format_version = 2");
+      expect(manifestSource).toContain("format_version = 3");
       expect(manifestSource).not.toContain("pages");
 
       const pagesJson = fs.readFileSync(

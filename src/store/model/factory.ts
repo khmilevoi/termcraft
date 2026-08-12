@@ -45,13 +45,21 @@ import {
 import type { LeaseStore } from "store/lease";
 import {
   buildV1ToV2Operations,
+  buildV2ToV3Operations,
   createBackupStore,
   migrationRegistry as defaultMigrationRegistry,
   nodeBackupStoreDeps,
   planV1ToV2,
+  planV2ToV3,
+  scanFormatTwoProject,
   scanLegacyProject,
 } from "store/migration";
-import type { BackupStore, DataFormatTooNewError, MigrationPlanV1 } from "store/migration";
+import type {
+  BackupFileInput,
+  BackupStore,
+  DataFormatTooNewError,
+  MigrationPlanV1,
+} from "store/migration";
 import {
   createDiagnosticsStore,
   createPageMetaCache,
@@ -1863,43 +1871,133 @@ function openMigrationReadFs(deps: StoreDeps, root: AbsPath): Error | SafeProjec
   return createSafeProjectFs(managedRoot, safeFsDeps);
 }
 
+/**
+ * Which migration a project on disk needs, read from `project.toml`'s `format_version` alone —
+ * the outermost gate, before any field schema, exactly as `decodeProjectManifest` orders its own
+ * (design-systems §9 Step 7). `1` routes to `scanLegacyProject`/`buildV1ToV2Operations` (which now
+ * emits `format_version` 3 in one transaction — ruling 1); `2` routes to
+ * `scanFormatTwoProject`/`buildV2ToV3Operations`. Any other value — including the current format,
+ * which needs no migration at all — is not a migratable origin.
+ */
+function readMigrationOrigin(safeFs: SafeProjectFs): Error | 1 | 2 {
+  const bytes = safeFs.readFile(PROJECT_MANIFEST_FILENAME);
+  if (bytes instanceof Error) return bytes;
+
+  const parsed = parseToml(new TextDecoder().decode(bytes));
+  if (parsed instanceof Error) return parsed;
+
+  const version = readFormatVersion(parsed.value);
+  if (version === 1) return 1;
+  if (version === 2) return 2;
+  return new Error(
+    `${PROJECT_MANIFEST_FILENAME} declares format_version ${version ?? "missing or non-integer"}, which is not a migratable origin`,
+  );
+}
+
 /** `Store.planMigration` — see that method's own doc comment. */
 async function planMigration(deps: StoreDeps, root: AbsPath): Promise<Error | MigrationPlanV1> {
   const safeFs = openMigrationReadFs(deps, root);
   if (safeFs instanceof Error) return safeFs;
 
-  const scanned = scanLegacyProject(safeFs);
-  if (scanned instanceof Error) return scanned;
+  const origin = readMigrationOrigin(safeFs);
+  if (origin instanceof Error) return origin;
 
-  return planV1ToV2({
+  if (origin === 1) {
+    const scanned = scanLegacyProject(safeFs);
+    if (scanned instanceof Error) return scanned;
+    return planV1ToV2({
+      scan: scanned,
+      userStateRoot: deps.userStateRoot,
+      migrationPlanId: deps.uuidv7(),
+    });
+  }
+
+  const scanned = scanFormatTwoProject(safeFs);
+  if (scanned instanceof Error) return scanned;
+  return planV2ToV3({
     scan: scanned,
     userStateRoot: deps.userStateRoot,
     migrationPlanId: deps.uuidv7(),
   });
 }
 
+/**
+ * One migration's staged write, however its origin scanned: the projectId the backup is filed
+ * under, plus the operations/payloads/backupFiles the engine and the backup store both need.
+ * `V1ToV2OperationsV1` and `V2ToV3OperationsV1` share this exact field shape by construction —
+ * only the scan+build pair that produced it differs.
+ */
+interface StagedMigrationV1 {
+  readonly projectId: string;
+  readonly built: {
+    readonly operations: readonly TransactionOperation[];
+    readonly payloads: ReadonlyMap<string, Uint8Array>;
+    readonly backupFiles: readonly BackupFileInput[];
+  };
+}
+
+function stageV1ToV3(
+  safeFs: SafeProjectFs,
+  wrapperDeps: TransactionWrapperDeps,
+  deps: StoreDeps,
+  kitApiVersion: number,
+): Error | StagedMigrationV1 {
+  const scanned = scanLegacyProject(safeFs);
+  if (scanned instanceof Error) return scanned;
+  const built = buildV1ToV2Operations(wrapperDeps, {
+    scan: scanned,
+    kitApiVersion,
+    newPayloadId: deps.uuidv7,
+  });
+  if (built instanceof Error) return built;
+  return { projectId: scanned.projectId, built };
+}
+
+function stageV2ToV3(
+  safeFs: SafeProjectFs,
+  wrapperDeps: TransactionWrapperDeps,
+  deps: StoreDeps,
+  kitApiVersion: number,
+): Error | StagedMigrationV1 {
+  const scanned = scanFormatTwoProject(safeFs);
+  if (scanned instanceof Error) return scanned;
+  const built = buildV2ToV3Operations(wrapperDeps, {
+    scan: scanned,
+    kitApiVersion,
+    newPayloadId: deps.uuidv7,
+  });
+  if (built instanceof Error) return built;
+  return { projectId: scanned.projectId, built };
+}
+
 /** `Store.migrateProject` — see that method's own doc comment. */
-async function migrateProject(deps: StoreDeps, root: AbsPath): Promise<Error | MigrationOutcomeV1> {
+async function migrateProject(
+  deps: StoreDeps,
+  root: AbsPath,
+  input: { readonly kitApiVersion: number },
+): Promise<Error | MigrationOutcomeV1> {
   const context = await openMigrationContext(deps, root);
   if (context instanceof Error) return context;
 
-  const scanned = scanLegacyProject(context.safeFs);
-  if (scanned instanceof Error) {
+  const origin = readMigrationOrigin(context.safeFs);
+  if (origin instanceof Error) {
     await context.release();
-    return scanned;
+    return origin;
   }
 
   const wrapperDeps: TransactionWrapperDeps = {
     fs: buildTransactionFsDeps(context.safeFs, deps),
     append: { newPayloadId: deps.uuidv7 },
   };
-  const built = buildV1ToV2Operations(wrapperDeps, {
-    scan: scanned,
-    newPayloadId: deps.uuidv7,
-  });
-  if (built instanceof Error) {
+  // Both origins build their operations here — ONE `runMigration` call below either way (§9
+  // requires one recoverable transaction; a second `runMigration` call is never introduced).
+  const staged =
+    origin === 1
+      ? stageV1ToV3(context.safeFs, wrapperDeps, deps, input.kitApiVersion)
+      : stageV2ToV3(context.safeFs, wrapperDeps, deps, input.kitApiVersion);
+  if (staged instanceof Error) {
     await context.release();
-    return built;
+    return staged;
   }
 
   // THE ORDER §12 REQUIRES: a complete, VERIFIED backup exists before the first target byte is
@@ -1909,11 +2007,11 @@ async function migrateProject(deps: StoreDeps, root: AbsPath): Promise<Error | M
   const migrationPlanId = deps.uuidv7();
   const migrationActionId = deps.uuidv7();
   const backup = await makeBackupStore(deps).createBackup({
-    projectId: scanned.projectId,
+    projectId: staged.projectId,
     migrationActionId,
     canonicalProjectPath: root,
     termcraftVersion: TERMCRAFT_VERSION,
-    files: built.backupFiles,
+    files: staged.built.backupFiles,
   });
   if (backup instanceof Error) {
     await context.release();
@@ -1924,8 +2022,8 @@ async function migrateProject(deps: StoreDeps, root: AbsPath): Promise<Error | M
     migrationPlanId,
     migrationActionId,
     backupManifestDigest: backup.manifestDigest,
-    operations: built.operations,
-    payloads: built.payloads,
+    operations: staged.built.operations,
+    payloads: staged.built.payloads,
   });
   await context.release();
   if (committed instanceof Error) return committed;
@@ -1940,6 +2038,6 @@ export function createStore(deps: StoreDeps): Store {
     openProject: (root) => openProject(deps, root),
     createProject: (input) => createProject(deps, input),
     planMigration: (root) => planMigration(deps, root),
-    migrateProject: (root) => migrateProject(deps, root),
+    migrateProject: (root, input) => migrateProject(deps, root, input),
   };
 }

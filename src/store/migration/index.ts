@@ -66,3 +66,18 @@ export { migratedPinsPath, migratedSourcePath, planV1ToV2 } from "./model/v1-to-
 
 export type { V1ToV2OperationsV1 } from "./model/v1-to-v2";
 export { buildV1ToV2Operations } from "./model/v1-to-v2";
+
+// The version-2 -> version-3 migration (design-systems §9): `model/format-two-scan.ts` is the
+// system's ONLY reader of the retired format-2 manifest schema, `model/v2-to-v3.ts` turns that
+// reading into one transaction's operations that seed `design/system/`, and `MIGRATION_CHAIN`
+// (`model/registry.ts`) names the step.
+export type { FormatTwoProjectV1 } from "./types";
+export {
+  FORMAT_TWO_PROJECT_VERSION,
+  FormatTwoScanError,
+  scanFormatTwoProject,
+} from "./model/format-two-scan";
+export type { FormatTwoScanCodeV1 } from "./model/format-two-scan";
+
+export type { V2ToV3OperationsV1 } from "./model/v2-to-v3";
+export { buildV2ToV3Operations, planV2ToV3 } from "./model/v2-to-v3";

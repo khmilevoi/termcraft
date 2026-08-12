@@ -8,11 +8,12 @@ import { MigrationDeclinedError, runMigrationPrompt } from "./run-migration";
 const PLAN: MigrationPlanV1 = {
   migrationPlanId: "019fb111-0000-7000-8000-000000000001",
   fromVersion: 1,
-  toVersion: 2,
+  toVersion: 3,
   projectId: "019fa002-5f5b-7000-92e3-9931eebd6c52",
   moves: [],
   pageCount: 2,
   pinLogCount: 0,
+  seedsDesignSystem: true,
   backupsDir: "C:\\state\\backups\\019fa002",
 };
 
@@ -65,6 +66,7 @@ describe("runMigrationPrompt (design-tree §12.1's two keys)", () => {
     const driven = answeringAdapters("later");
     const outcome = await runMigrationPrompt({
       required: { kind: "needs-migration", root: "C:\\p", plan: PLAN },
+      kitApiVersion: 1,
       store: fakeStore(async () => {
         called += 1;
         return OUTCOME;
@@ -80,6 +82,7 @@ describe("runMigrationPrompt (design-tree §12.1's two keys)", () => {
     const driven = answeringAdapters("migrate");
     const outcome = await runMigrationPrompt({
       required: { kind: "needs-migration", root: "C:\\p", plan: PLAN },
+      kitApiVersion: 1,
       store: fakeStore(async () => OUTCOME),
       adapters: driven.adapters,
     });
@@ -91,6 +94,7 @@ describe("runMigrationPrompt (design-tree §12.1's two keys)", () => {
     const driven = answeringAdapters("migrate");
     const outcome = await runMigrationPrompt({
       required: { kind: "needs-migration", root: "C:\\p", plan: PLAN },
+      kitApiVersion: 1,
       store: fakeStore(async () => failure),
       adapters: driven.adapters,
     });
@@ -102,6 +106,7 @@ describe("runMigrationPrompt (design-tree §12.1's two keys)", () => {
     const driven = answeringAdapters("later");
     await runMigrationPrompt({
       required: { kind: "needs-migration", root: "C:\\p", plan: PLAN },
+      kitApiVersion: 1,
       store: fakeStore(async () => OUTCOME),
       adapters: driven.adapters,
     });
@@ -112,6 +117,7 @@ describe("runMigrationPrompt (design-tree §12.1's two keys)", () => {
     const driven = answeringAdapters("migrate");
     await runMigrationPrompt({
       required: { kind: "needs-migration", root: "C:\\p", plan: PLAN },
+      kitApiVersion: 1,
       store: fakeStore(async () => new Error("boom")),
       adapters: driven.adapters,
     });

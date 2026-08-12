@@ -304,7 +304,7 @@ describe("loadWorkspaceLocalState (§6.1 missing / corrupt behavior)", () => {
 describe("the portable/local split is airtight (§16.1)", () => {
   test("no local field name appears in a portable manifest, and no portable field leaks into local state", () => {
     const manifestText = encodeProjectManifest({
-      formatVersion: 2,
+      formatVersion: 3,
       projectId: "0190fc4a-8b5c-7d3e-8a91-6f2e4c7b5d10",
       name: "Checkout Flow",
       createdAt: "2026-07-19T10:11:12Z",

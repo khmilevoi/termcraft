@@ -178,6 +178,28 @@ export interface LegacyProjectV1 {
   readonly pages: readonly LegacyPageV1[];
 }
 
+// ---- the retired format-2 layout (design-systems §9) -----------------------------------
+
+/**
+ * A version-2 project's portable facts, read by `model/format-two-scan.ts`'s
+ * `scanFormatTwoProject`. Unlike {@link LegacyProjectV1}, format 2 already has the multi-file
+ * design tree — the 2 -> 3 step relocates nothing, it only seeds `design/system/`.
+ */
+export interface FormatTwoProjectV1 {
+  readonly formatVersion: 2;
+  readonly projectId: string;
+  readonly name: string;
+  /** UTC RFC 3339, carried forward verbatim — a migration never restamps creation time. */
+  readonly createdAt: string;
+  readonly targetStack: TargetStack;
+  /** `design/pages.json`'s entry count — the dialog and the seeded prompt both quote it. */
+  readonly pageCount: number;
+  /** Whether `design/system/design-system.json` already exists — ruling 4: a project that
+   *  installed one before its `format_version` moved keeps it; the seed is written only when
+   *  this is `false`. */
+  readonly hasDesignSystem: boolean;
+}
+
 /** One file the mechanical track relocates, and what kind of file it is. */
 export interface MigrationMoveV1 {
   readonly from: string;
@@ -189,15 +211,23 @@ export interface MigrationMoveV1 {
  * The immutable migration plan (kernel-command-contract §7.7: "an immutable migration plan has one
  * UUIDv7 `migrationPlanId`"). Computed before the offer is drawn and never mutated; confirm-time
  * re-derivation produces an equal value from a fresh scan.
+ *
+ * `fromVersion` is `1 | 2` and `toVersion` is always `3` (design-systems §9 ruling 1): a
+ * format-1 project migrates STRAIGHT to 3 in one transaction — `project.toml` is written exactly
+ * once — so the plan the dialog draws from never claims an intermediate format 2.
  */
 export interface MigrationPlanV1 {
   readonly migrationPlanId: string;
-  readonly fromVersion: 1;
-  readonly toVersion: 2;
+  readonly fromVersion: 1 | 2;
+  readonly toVersion: 3;
   readonly projectId: string;
   readonly moves: readonly MigrationMoveV1[];
   readonly pageCount: number;
   readonly pinLogCount: number;
+  /** Whether this transaction writes `design/system/` — always `true` today (ruling 1: a
+   *  version-1 project never has one; a version-2 project has one only if it installed it
+   *  early). The dialog draws its design-system bullet from this, not from a version check. */
+  readonly seedsDesignSystem: boolean;
   /** `{userStateRoot}/backups/<projectId>` — the real location, shown verbatim in the dialog. */
   readonly backupsDir: AbsPath;
 }

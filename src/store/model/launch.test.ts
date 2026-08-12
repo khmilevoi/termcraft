@@ -201,7 +201,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
     const manifestPath = absOf(termcraftDir, PROJECT_MANIFEST_FILENAME);
     const bumped = fs
       .readFileSync(manifestPath, "utf8")
-      .replace("format_version = 2", "format_version = 3");
+      .replace("format_version = 3", "format_version = 4");
     fs.writeFileSync(manifestPath, bumped);
 
     const reopened = await store.openProject(projectRoot);
@@ -429,6 +429,7 @@ describe("openProject — existing-project launch ordering (storage-identity §1
       ).toBeNull();
       expect(reopened.migrations.chain).toEqual([
         { kind: "project.toml", fromVersion: 1, toVersion: 2 },
+        { kind: "project.toml", fromVersion: 2, toVersion: 3 },
       ]);
     } finally {
       await reopened.close();
@@ -953,7 +954,7 @@ interface PlanFixture {
 function oneFileReplacePlan(termcraftDir: string, transactionId: string): PlanFixture {
   const oldBytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 2,
+      formatVersion: 3,
       projectId: uuidv7(),
       name: "Old",
       createdAt: TS,
@@ -963,7 +964,7 @@ function oneFileReplacePlan(termcraftDir: string, transactionId: string): PlanFi
   writeManaged(termcraftDir, PROJECT_MANIFEST_FILENAME, oldBytes);
   const newBytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 2,
+      formatVersion: 3,
       projectId: uuidv7(),
       name: "New",
       createdAt: TS,
@@ -1238,7 +1239,7 @@ function exportPublishPlan(transactionId: string): PlanFixture {
 function migrationPlan(transactionId: string): PlanFixture {
   const bytes = bytesOf(
     encodeProjectManifest({
-      formatVersion: 2,
+      formatVersion: 3,
       projectId: uuidv7(),
       name: "Migrated",
       createdAt: TS,

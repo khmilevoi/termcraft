@@ -12,9 +12,12 @@ import {
   readFormatCounter,
 } from "./registry";
 
-describe("MIGRATION_CHAIN (design-tree §12.3: the first shipped migration)", () => {
-  test("the shipped chain is exactly the project.toml 1 -> 2 step", () => {
-    expect(MIGRATION_CHAIN).toEqual([{ kind: "project.toml", fromVersion: 1, toVersion: 2 }]);
+describe("MIGRATION_CHAIN (design-tree §12.3 / design-systems §9: the shipped migrations)", () => {
+  test("the shipped chain is exactly the project.toml 1 -> 2 -> 3 steps", () => {
+    expect(MIGRATION_CHAIN).toEqual([
+      { kind: "project.toml", fromVersion: 1, toVersion: 2 },
+      { kind: "project.toml", fromVersion: 2, toVersion: 3 },
+    ]);
   });
 
   test("the live default registry wires that same chain", () => {
@@ -29,6 +32,16 @@ describe("MIGRATION_CHAIN (design-tree §12.3: the first shipped migration)", ()
     });
     expect(steps).not.toBeInstanceOf(Error);
     expect(steps).toHaveLength(1);
+  });
+
+  test("the live registry resolves a real path from 1 to 3, through both steps", () => {
+    const steps = migrationRegistry.findSteps({
+      kind: "project.toml",
+      fromVersion: 1,
+      toVersion: 3,
+    });
+    expect(steps).not.toBeInstanceOf(Error);
+    expect(steps).toHaveLength(2);
   });
 
   test("the live registry still refuses a kind it has no step for", () => {
@@ -108,7 +121,10 @@ describe("findMigrationSteps", () => {
       { kind: "widget", fromVersion: 1, toVersion: 2 },
       { kind: "widget", fromVersion: 2, toVersion: 3 },
     ]);
-    expect(MIGRATION_CHAIN).toEqual([{ kind: "project.toml", fromVersion: 1, toVersion: 2 }]); // the shipped constant is untouched by the synthetic chain
+    expect(MIGRATION_CHAIN).toEqual([
+      { kind: "project.toml", fromVersion: 1, toVersion: 2 },
+      { kind: "project.toml", fromVersion: 2, toVersion: 3 },
+    ]); // the shipped constant is untouched by the synthetic chain
   });
 
   test("a broken synthetic chain (missing intermediate step) has no path", () => {

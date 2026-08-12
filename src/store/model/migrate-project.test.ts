@@ -58,11 +58,12 @@ describe("Store.planMigration (design-tree §12.1's offer)", () => {
     expect(plan.pageCount).toBe(2);
     expect(plan.pinLogCount).toBe(0);
     expect(plan.fromVersion).toBe(1);
-    expect(plan.toVersion).toBe(2);
+    expect(plan.toVersion).toBe(3);
+    expect(plan.seedsDesignSystem).toBe(true);
     expect(fs.readdirSync(seeded.termcraftDir).sort()).toEqual(before);
   });
 
-  test("refuses a project that is already format 2", async () => {
+  test("a format-2 project is a legitimate origin too — the 2 -> 3 seed offer", async () => {
     const seeded = seedV1Project([]);
     fs.writeFileSync(
       path.join(seeded.termcraftDir, "project.toml"),
@@ -71,15 +72,36 @@ describe("Store.planMigration (design-tree §12.1's offer)", () => {
         .replace("format_version = 1", "format_version = 2")
         .replace("pages = []\n", ""),
     );
+    const plan = await seeded.store.planMigration(seeded.root);
+    if (plan instanceof Error) throw plan;
+    expect(plan.fromVersion).toBe(2);
+    expect(plan.toVersion).toBe(3);
+    expect(plan.moves).toEqual([]);
+    expect(plan.seedsDesignSystem).toBe(true);
+  });
+
+  test("refuses a project that is already current (format 3)", async () => {
+    const seeded = seedV1Project([]);
+    fs.writeFileSync(
+      path.join(seeded.termcraftDir, "project.toml"),
+      fs
+        .readFileSync(path.join(seeded.termcraftDir, "project.toml"), "utf8")
+        .replace("format_version = 1", "format_version = 3")
+        .replace("pages = []\n", ""),
+    );
     expect(await seeded.store.planMigration(seeded.root)).toBeInstanceOf(Error);
   });
 });
 
 describe("Store.migrateProject (design-tree §12.2 track 1)", () => {
-  test("leaves a project openable on format 2", async () => {
+  test("leaves a project openable on the current format, with a seeded design system", async () => {
     const seeded = seedV1Project();
-    const outcome = await seeded.store.migrateProject(seeded.root);
+    const outcome = await seeded.store.migrateProject(seeded.root, { kitApiVersion: 1 });
     if (outcome instanceof Error) throw outcome;
+
+    expect(
+      fs.existsSync(path.join(seeded.termcraftDir, "design", "system", "design-system.json")),
+    ).toBe(true);
 
     const opened = await seeded.store.openProject(seeded.root);
     if (opened instanceof Error) throw opened;
@@ -88,7 +110,7 @@ describe("Store.migrateProject (design-tree §12.2 track 1)", () => {
 
   test("moves every page into the design tree and retires the old directory", async () => {
     const seeded = seedV1Project();
-    const outcome = await seeded.store.migrateProject(seeded.root);
+    const outcome = await seeded.store.migrateProject(seeded.root, { kitApiVersion: 1 });
     if (outcome instanceof Error) throw outcome;
 
     expect(fs.existsSync(path.join(seeded.termcraftDir, "design", "pages", "dashboard.tsx"))).toBe(
@@ -102,7 +124,7 @@ describe("Store.migrateProject (design-tree §12.2 track 1)", () => {
 
   test("writes a VERIFIED backup outside .termcraft before rewriting anything", async () => {
     const seeded = seedV1Project();
-    const outcome = await seeded.store.migrateProject(seeded.root);
+    const outcome = await seeded.store.migrateProject(seeded.root, { kitApiVersion: 1 });
     if (outcome instanceof Error) throw outcome;
 
     expect(outcome.backupDir.startsWith(seeded.userStateRoot)).toBe(true);
@@ -120,7 +142,7 @@ describe("Store.migrateProject (design-tree §12.2 track 1)", () => {
     const before = fs.readFileSync(
       path.join(seeded.termcraftDir, "pages", "dashboard", "page.tsx"),
     );
-    const outcome = await seeded.store.migrateProject(seeded.root);
+    const outcome = await seeded.store.migrateProject(seeded.root, { kitApiVersion: 1 });
     if (outcome instanceof Error) throw outcome;
     const after = fs.readFileSync(
       path.join(seeded.termcraftDir, "design", "pages", "dashboard.tsx"),
@@ -130,9 +152,11 @@ describe("Store.migrateProject (design-tree §12.2 track 1)", () => {
 
   test("a second migrateProject on an already-migrated project refuses", async () => {
     const seeded = seedV1Project(["dashboard"]);
-    const first = await seeded.store.migrateProject(seeded.root);
+    const first = await seeded.store.migrateProject(seeded.root, { kitApiVersion: 1 });
     if (first instanceof Error) throw first;
-    expect(await seeded.store.migrateProject(seeded.root)).toBeInstanceOf(Error);
+    expect(await seeded.store.migrateProject(seeded.root, { kitApiVersion: 1 })).toBeInstanceOf(
+      Error,
+    );
   });
 
   test("migrates a pin log to pins/<slug>.jsonl", async () => {
@@ -141,7 +165,7 @@ describe("Store.migrateProject (design-tree §12.2 track 1)", () => {
       path.join(seeded.termcraftDir, "pages", "dashboard", "comments.jsonl"),
       '{"kind":"header"}\n',
     );
-    const outcome = await seeded.store.migrateProject(seeded.root);
+    const outcome = await seeded.store.migrateProject(seeded.root, { kitApiVersion: 1 });
     if (outcome instanceof Error) throw outcome;
     expect(fs.readFileSync(path.join(seeded.termcraftDir, "pins", "dashboard.jsonl"), "utf8")).toBe(
       '{"kind":"header"}\n',

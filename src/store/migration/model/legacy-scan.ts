@@ -64,8 +64,14 @@ export function legacyPinsPath(slug: PageSlug): string {
   return `pages/${slug}/comments.jsonl`;
 }
 
-/** Whether a managed leaf exists, distinguishing "absent" from "could not tell". */
-function probeLeaf(safeFs: SafeProjectFs, relPath: string): LegacyScanError | boolean {
+/**
+ * Whether a managed leaf exists, distinguishing "absent" from "could not tell". Exported so
+ * `format-two-scan.ts` reuses this exact three-way check for its own `hasDesignSystem` probe
+ * rather than writing a second copy that could disagree about what "absent" means; on a real
+ * stat failure the returned {@link LegacyScanError} is a generic carrier (`.message`/`.cause`)
+ * — a caller outside this module reads those two fields and wraps them in its own error type.
+ */
+export function probeLeaf(safeFs: SafeProjectFs, relPath: string): LegacyScanError | boolean {
   const stat = safeFs.stat(relPath);
   if (!(stat instanceof Error)) return true;
   if (stat instanceof FsAccessError && isNotFound(stat)) return false;
