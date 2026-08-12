@@ -403,11 +403,12 @@ async function openOrCreateProject(
     const plan = await store.planMigration(root);
     // A project that says "migrate me" but cannot say what migrating would change is a genuine
     // failure — the offer would have nothing honest to draw. Reported, not silently downgraded to
-    // the create path.
+    // the create path. The concrete origin (1 or 2) lives in the plan `planMigration` just failed
+    // to produce, so it is not in scope here — "an older format" is what is actually known.
     if (plan instanceof Error)
       return new ShellCompositionError({
         root,
-        reason: `the project is on format 1 but its migration plan could not be read (${plan.message})`,
+        reason: `the project is on an older format but its migration plan could not be read (${plan.message})`,
         cause: plan,
       });
     return { kind: "needs-migration", root, plan };

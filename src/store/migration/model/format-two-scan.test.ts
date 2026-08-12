@@ -83,7 +83,8 @@ describe("scanFormatTwoProject (design-systems §9's version-2 reader)", () => {
       seedFormatTwoProject({ manifest: V2_MANIFEST.replace("= 2", "= 1") }),
     );
     expect(scanned).toBeInstanceOf(FormatTwoScanError);
-    expect((scanned as FormatTwoScanError).code).toBe("NOT_VERSION_2");
+    if (!(scanned instanceof Error)) throw new Error("expected a FormatTwoScanError");
+    expect(scanned.code).toBe("NOT_VERSION_2");
   });
 
   test("a format-3 project is NOT_VERSION_2", () => {
@@ -91,7 +92,8 @@ describe("scanFormatTwoProject (design-systems §9's version-2 reader)", () => {
       seedFormatTwoProject({ manifest: V2_MANIFEST.replace("= 2", "= 3") }),
     );
     expect(scanned).toBeInstanceOf(FormatTwoScanError);
-    expect((scanned as FormatTwoScanError).code).toBe("NOT_VERSION_2");
+    if (!(scanned instanceof Error)) throw new Error("expected a FormatTwoScanError");
+    expect(scanned.code).toBe("NOT_VERSION_2");
   });
 
   test("a lingering `pages` key in project.toml is MANIFEST_SHAPE", () => {
@@ -99,7 +101,8 @@ describe("scanFormatTwoProject (design-systems §9's version-2 reader)", () => {
       seedFormatTwoProject({ manifest: `${V2_MANIFEST}pages = ["a"]\n` }),
     );
     expect(scanned).toBeInstanceOf(FormatTwoScanError);
-    expect((scanned as FormatTwoScanError).code).toBe("MANIFEST_SHAPE");
+    if (!(scanned instanceof Error)) throw new Error("expected a FormatTwoScanError");
+    expect(scanned.code).toBe("MANIFEST_SHAPE");
   });
 
   test("an absent design/pages.json is pageCount 0, not a failure", () => {
@@ -114,7 +117,8 @@ describe("scanFormatTwoProject (design-systems §9's version-2 reader)", () => {
       seedFormatTwoProject({ manifest: V2_MANIFEST, pagesJson: "not json" }),
     );
     expect(scanned).toBeInstanceOf(FormatTwoScanError);
-    expect((scanned as FormatTwoScanError).code).toBe("PAGES_MANIFEST_UNREADABLE");
+    if (!(scanned instanceof Error)) throw new Error("expected a FormatTwoScanError");
+    expect(scanned.code).toBe("PAGES_MANIFEST_UNREADABLE");
   });
 
   test("an existing design/system/design-system.json is reported as hasDesignSystem", () => {

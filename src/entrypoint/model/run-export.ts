@@ -369,11 +369,17 @@ export async function runHeadlessExport(
   const shell = await createShell("interactive", deps.env, deps.shell);
   if (shell instanceof Error) return shell;
   // Same temporary refusal as `bootstrap.ts` (design-tree phase-1b Task 6): this headless driver
-  // has no migration surface either, and wiring one is out of this task's scope.
+  // has no migration surface either, and wiring one is out of this task's scope. `shell.plan` is
+  // read-only at this point (never an `Error`: `createShell` already resolved it), so the real
+  // origin format is always in scope here — never hard-code "format 1" now that plan P4 made
+  // format 2 migratable too (design-systems §9).
   if ("kind" in shell)
     return new ShellCompositionError({
       root: shell.root,
-      reason: "the project is on format 1 and the migration surface is not wired yet",
+      reason:
+        `the project is on format ${shell.plan.fromVersion} and the migration surface is not ` +
+        "wired here; run interactive `termcraft` (no arguments) in this directory once and " +
+        "accept the migration offer, then export again",
     });
 
   return runHeadlessExportOverShell({ shell, root: deps.env.root, timeoutMs: deps.timeoutMs });

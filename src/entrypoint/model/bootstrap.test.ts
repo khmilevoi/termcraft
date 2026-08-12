@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { formatOneMigrationSeed, migrationRefactorSeed } from "agent/prompt";
+import {
+  designSystemMigrationSeed,
+  formatOneMigrationSeed,
+  migrationRefactorSeed,
+} from "agent/prompt";
 import type { SpawnFn } from "host/supervisor";
 import type { UiRootAdapters } from "ui";
 
@@ -188,6 +192,44 @@ function shellDepsForExistingLaunch(scratch: string): ShellDeps {
   return { ...shellDepsFor(scratch), spawn: stubHostSpawn() };
 }
 
+/**
+ * A hand-built format-2 `.termcraft` root — the multi-file design tree already in place,
+ * `design/system/` absent so the migration has something to seed. Mirrors
+ * `store/model/migration-fixture.test.ts`'s own `seedFormatTwoProject` byte-for-byte rather than
+ * importing it: importing a `*.test.ts` module re-registers its `describe`/`test` blocks under
+ * THIS file's run too, which is not a seam this suite should reach through.
+ */
+function seedFormatTwoRoot(slugs: readonly string[] = ["dashboard"]): string {
+  const root = makeScratchDir("termcraft-bootstrap-migrate-v2-");
+  const termcraftDir = path.join(root, ".termcraft");
+  fs.mkdirSync(path.join(termcraftDir, "design", "pages"), { recursive: true });
+  fs.writeFileSync(
+    path.join(termcraftDir, "project.toml"),
+    [
+      "format_version = 2",
+      'project_id = "019fa002-5f5b-7000-92e3-9931eebd6c54"',
+      'name = "seeded-v2-bootstrap"',
+      'created_at = "2026-07-26T19:58:57.883Z"',
+      'target_stack = "js-opentui"',
+      "",
+    ].join("\n"),
+  );
+  fs.writeFileSync(
+    path.join(termcraftDir, "design", "pages.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      pages: slugs.map((slug) => ({ slug, entry: `pages/${slug}.tsx` })),
+    }),
+  );
+  for (const slug of slugs) {
+    fs.writeFileSync(
+      path.join(termcraftDir, "design", "pages", `${slug}.tsx`),
+      `export const meta = { title: "${slug}" };\n`,
+    );
+  }
+  return root;
+}
+
 /** Real host composition, backup and reopen against the fixture take real wall-clock time
  *  (including the ~1s host-reap timeout above) — longer than bun's 5s default. */
 const MIGRATION_TEST_TIMEOUT_MS = 30_000;
@@ -315,6 +357,42 @@ describe("bootstrap migrates a format-1 project (design-systems §9)", () => {
       // bridge sentence included (review finding 2: the two seeds contradict each other unjoined).
       expect(app.shell.seedComposerText).toBe(formatOneMigrationSeed({ pageCount: 2 }));
       expect(app.shell.seedComposerText).toContain("as ONE move");
+      await app.close();
+    },
+    MIGRATION_TEST_TIMEOUT_MS,
+  );
+});
+
+// Review finding 2 (P4 final fix wave): every project on disk today is format 2, so this is the
+// branch nearly every real user hits — yet before this test it was the ONLY untested one of the
+// two `bootstrap.ts:86-89` seed branches.
+describe("bootstrap migrates a format-2 project (design-systems §9)", () => {
+  test(
+    "pre-fills the composer with ONLY the design-system seed — no format-1 bridge text",
+    async () => {
+      const root = seedFormatTwoRoot();
+      const driven = migrateThenCaptureComposer();
+      const app = await bootstrap("interactive", {
+        argv: [],
+        cwd: () => root,
+        adapters: driven.adapters,
+        process: silentBoundary(),
+        shell: shellDepsForExistingLaunch(root),
+      });
+
+      if (app instanceof Error) throw app;
+      if (!shellHasSeedFields(app.shell)) throw new Error("expected a shell with seed fields");
+      expect(app.shell.seedTurnText).toBe(null);
+      // The fixture's own `design/pages.json` lists exactly one page (`dashboard`). A format-2
+      // origin never carries `formatOneMigrationSeed`'s refactor track or bridge sentence
+      // (`bootstrap.ts`'s `fromVersion === 1` branch) — it already has the multi-file tree, so
+      // only the design-system rewrite applies.
+      expect(app.shell.seedComposerText).toBe(designSystemMigrationSeed({ pageCount: 1 }));
+      expect(app.shell.seedComposerText).not.toContain("as ONE move");
+      expect(app.shell.seedComposerText).not.toContain(
+        "Do the sharing above and the design-system rewrite below",
+      );
+      expect(driven.composerText()).toBe(app.shell.seedComposerText);
       await app.close();
     },
     MIGRATION_TEST_TIMEOUT_MS,

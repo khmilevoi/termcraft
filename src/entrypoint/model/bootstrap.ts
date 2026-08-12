@@ -90,9 +90,13 @@ export async function bootstrap(
   });
   if (second instanceof Error) return second;
   if ("kind" in second)
+    // `second.plan.fromVersion` is the format this SECOND `createShell` just re-read — the real
+    // post-migration origin, whichever of the two migratable formats (1 or 2) it turns out to be
+    // (design-systems §9) — never hard-coded, since a format-2 project hitting this branch would
+    // otherwise be told a false fact about its own manifest.
     return new ShellCompositionError({
       root: env.root,
-      reason: "the migration reported success but the project still reads as format 1",
+      reason: `the migration reported success but the project still reads as format ${second.plan.fromVersion}`,
     });
 
   return runApp({ shell: second, process: deps.process, adapters: deps.adapters, exit: deps.exit });

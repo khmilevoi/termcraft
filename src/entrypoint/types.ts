@@ -85,10 +85,12 @@ export interface ShellWithAgentRegistry extends AppShell {
 }
 
 /**
- * A project the composition root refuses to open because it is on format 1 (design-tree §12.1: "a
- * version-1 project never opens"). Carries the read-only plan the `migrate-80` dialog is drawn
- * from. NOT an `Error`: nothing is broken — the user has a project and a choice, and reporting
- * this through the fatal path is exactly the defect this outcome removes.
+ * A project the composition root refuses to open because it is on an older manifest format
+ * (design-tree §12.1's original wording: "a version-1 project never opens"; design-systems §9 /
+ * plan P4 decision D8 added format 2 as a SECOND migratable origin, so `plan.fromVersion` is now
+ * `1 | 2`, not always 1). Carries the read-only plan the `migrate-80` dialog is drawn from. NOT
+ * an `Error`: nothing is broken — the user has a project and a choice, and reporting this through
+ * the fatal path is exactly the defect this outcome removes.
  */
 export interface MigrationRequiredV1 {
   readonly kind: "needs-migration";
