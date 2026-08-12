@@ -22,6 +22,15 @@ export {
   visibleSwatches,
 } from "./model/design-system-picker";
 export { DesignSystemPicker } from "./ui/DesignSystemPicker";
+export type {
+  DesignSystemInstallPromptProps,
+  DesignSystemPromptKind,
+} from "./ui/DesignSystemInstallPrompt";
+export {
+  MAX_RENDERED_BULLETS,
+  breakageBullets,
+  DesignSystemInstallPrompt,
+} from "./ui/DesignSystemInstallPrompt";
 export type { PinInputPopupProps } from "./ui/PinInputPopup";
 export { PIN_INPUT_POPUP_SIZE, PinInputPopup } from "./ui/PinInputPopup";
 export type { ExportFailurePopupProps, ExportPopupProps } from "./ui/ExportPopup";
