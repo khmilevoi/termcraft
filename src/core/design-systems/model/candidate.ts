@@ -1,7 +1,11 @@
 import * as errore from "errore";
 
 import type { GateErrorV1, GateWarningV1, PackageFileV1, RunTreeResultV1 } from "core/ports";
-import { DESIGN_SYSTEM_DIRNAME, isInsideDesignSystem } from "entities/design-system";
+import {
+  DESIGN_SYSTEM_DIRNAME,
+  DESIGN_SYSTEM_MANIFEST_RELPATH,
+  isInsideDesignSystem,
+} from "entities/design-system";
 
 import type {
   DesignSystemBreakageItemV1,
@@ -28,8 +32,16 @@ import type {
  * unit that moves between projects is the folder (§3.1).
  */
 
-/** The package-relative path every design-system package must carry. */
-const MANIFEST_PACKAGE_RELPATH = "design-system.json";
+/**
+ * PACKAGE-relative, derived from the TREE-relative `DESIGN_SYSTEM_MANIFEST_RELPATH`
+ * (`"system/design-system.json"`) by stripping the `system/` prefix (`DESIGN_SYSTEM_DIRNAME` +
+ * `"/"`), so the manifest filename can never drift from the entity's own constant — no fourth
+ * copy of the literal alongside `entities/design-system`'s and `store/design-systems`'
+ * `MANIFEST_FILENAME` (which `core` may not import: `core` never imports `store`).
+ */
+const MANIFEST_PACKAGE_RELPATH = DESIGN_SYSTEM_MANIFEST_RELPATH.slice(
+  DESIGN_SYSTEM_DIRNAME.length + 1,
+);
 
 /** The preview's diagnostic lists are bounded plain text (Global Constraints), never streamed. */
 export const MAX_PREVIEW_ITEMS = 40;
