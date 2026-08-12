@@ -200,8 +200,7 @@ function designSystemInstallPlans(opened: OpenProject): readonly TransactionPlan
     if (plan instanceof Error) throw new Error(`fixture bug: ${plan.message}`);
     if (plan === null) continue;
     if (plan.kind !== "project-mutation") continue;
-    if ((plan.domain as { mutationKind?: unknown }).mutationKind !== "design-system-install")
-      continue;
+    if (plan.domain.mutationKind !== "design-system-install") continue;
     plans.push(plan);
   }
   return plans;
@@ -254,9 +253,12 @@ describe("TransactionEngine.installDesignSystem — one recoverable transaction 
       });
       if (built instanceof Error) throw built;
 
+      // `designSystemInstallPlans` already filters on `domain.mutationKind ===
+      // "design-system-install"`, so `toHaveLength(1)` alone is the whole assertion: exactly one
+      // journal plan of that kind exists, not two (a system-files plan plus a separate
+      // provenance plan).
       const plans = designSystemInstallPlans(opened);
       expect(plans).toHaveLength(1);
-      expect(plans[0]?.domain).toMatchObject({ mutationKind: "design-system-install" });
     } finally {
       await opened.close();
     }
