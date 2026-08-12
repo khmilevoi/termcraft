@@ -357,11 +357,17 @@ export interface DesignSystemKernelDeps {
 /**
  * Builds the design-system-facing slice of `KernelDeps` (plan P10 Task 14): the local source
  * wrapped through the port adapter with the REAL admission budget
- * (`createDesignSourceAdmission()`, never `allowAllPackageAdmission` — that is tests-only and
- * P3's `LocalDesignSystemSourceDeps.admission` is required precisely so this cannot be
- * forgotten), the quarantine adapter (Task 4's `store/design-systems` quarantine under this
- * SAME `userStateRoot`), the install adapter (Task 5's `TransactionEngine.installDesignSystem`
- * over the caller's already-open project), and the `local`-source trust grant (decision D9).
+ * (`createDesignSourceAdmission`, never `allowAllPackageAdmission` — that is tests-only and P3's
+ * `LocalDesignSystemSourceDeps.admission` is required precisely so this cannot be forgotten), the
+ * quarantine adapter (Task 4's `store/design-systems` quarantine under this SAME `userStateRoot`),
+ * the install adapter (Task 5's `TransactionEngine.installDesignSystem` over the caller's already-
+ * open project), and the `local`-source trust grant (decision D9).
+ *
+ * `admission` is handed the FACTORY, `createDesignSourceAdmission` itself, never a called
+ * instance (fix for the I1 review finding): `LocalDesignSystemSourceDeps.admission` is a
+ * `() => PackageAdmission` precisely so `fetch`/`publish` each mint their own fresh budget per
+ * call, rather than this composition binding ONE instance for the shell's entire lifetime and
+ * silently making every fetch/publish in the session share its cumulative counters.
  *
  * DECISION D9. `local` is the user's own directory under their own `userStateRoot`, so it is
  * granted WITHOUT A PROMPT on first use — but the grant is still RECORDED through
@@ -396,8 +402,9 @@ export async function buildDesignSystemDeps(
     createLocalDesignSystemSource({
       userStateRoot,
       fs: nodeDesignSystemFsDeps,
-      // REQUIRED and defaultless by P3's design, so an unbudgeted fetch does not compile.
-      admission: createDesignSourceAdmission(),
+      // REQUIRED and defaultless by P3's design, so an unbudgeted fetch does not compile. The
+      // FACTORY itself, not a called instance (I1 fix) — see this function's own doc comment.
+      admission: createDesignSourceAdmission,
       clock: systemClock,
     }),
   );

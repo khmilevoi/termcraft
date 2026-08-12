@@ -633,6 +633,62 @@ describe("buildDesignSystemDeps (design-system composition root, D9)", () => {
       await open.close();
     }
   });
+
+  test("I1: fetch/publish never share an admission budget — sequential composed calls all stay admissible", async () => {
+    // Design-source budget: 512 files, §8.3/§13. Regression scenario (finding I1): a single
+    // `createDesignSourceAdmission()` bound into the composition for the shell's LIFETIME would
+    // accumulate across every fetch/publish call — the review's own account is ~42 operations
+    // before a perfectly valid, in-budget preview is refused. A fresh budget per call (the fix)
+    // never accumulates across calls, so this stays admissible no matter how many operations run
+    // in one session.
+    const userStateRoot = makeScratchDir("termcraft-shell-design-source-budget-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
+
+      const systemId = parseDesignSystemId("midnight");
+      if (systemId instanceof Error) throw systemId;
+      const version = parseDesignSystemVersion("1.0.0");
+      if (version instanceof Error) throw version;
+
+      // 30 files per package — well under the 512-file cap for ONE operation — but 20 fetches of
+      // it sum to 600 admitFile calls across the session, past 512. A shared cumulative budget
+      // (the bug) refuses partway through; a fresh budget per call (the fix) admits every one.
+      const manifestBytes = new TextEncoder().encode(
+        JSON.stringify({
+          ...validManifestObject(),
+          id: "midnight",
+          version: "1.0.0",
+          components: [],
+        }),
+      );
+      const files = [
+        { relPath: "design-system.json", bytes: manifestBytes },
+        ...Array.from({ length: 29 }, (_unused, index) => ({
+          relPath: `tokens-${index}.ts`,
+          bytes: new TextEncoder().encode("export {}\n"),
+        })),
+      ];
+
+      const receipt = await designSystemDeps.designSystemSource.publish({
+        systemId,
+        version,
+        files,
+      });
+      if ("code" in receipt) throw new Error(`fixture bug: publish failed: ${receipt.safeMessage}`);
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const fetched = await designSystemDeps.designSystemSource.fetch(receipt.ref);
+        if ("code" in fetched) {
+          throw new Error(
+            `fetch #${attempt} was refused (${fetched.code}: ${fetched.safeMessage}) — the admission budget is being shared across calls`,
+          );
+        }
+      }
+    } finally {
+      await open.close();
+    }
+  });
 });
 
 /**

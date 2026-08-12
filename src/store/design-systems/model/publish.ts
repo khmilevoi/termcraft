@@ -72,6 +72,11 @@ export async function publishLocalPackage(
     bytes: file.bytes,
   }));
 
+  // Fresh budget for THIS publish (I1 fix) — one instance for the whole file loop below, so its
+  // aggregate counters track only this package, but never carried into a LATER publish/fetch:
+  // `deps.admission` is a factory precisely so a second call in the same session never inherits
+  // this one's counters.
+  const admission = deps.admission();
   for (const file of normalized) {
     const segments = file.relPath.split("/");
     if (
@@ -85,7 +90,7 @@ export async function publishLocalPackage(
         reason: "package paths must stay inside the package root",
       });
     }
-    const admitted = deps.admission.admitFile({
+    const admitted = admission.admitFile({
       relPath: file.relPath,
       declaredSize: file.bytes.byteLength,
       depth: segments.length,
@@ -97,7 +102,7 @@ export async function publishLocalPackage(
         cause: admitted,
       });
     }
-    const observed = deps.admission.observeBytes({
+    const observed = admission.observeBytes({
       relPath: file.relPath,
       bytesRead: file.bytes.byteLength,
     });

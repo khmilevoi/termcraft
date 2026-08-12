@@ -63,7 +63,7 @@ function refOf(text: string) {
 }
 
 function depsFor(root: string, admission: PackageAdmission = allowAllPackageAdmission) {
-  return { userStateRoot: root, fs: nodeDesignSystemFsDeps, admission, clock: systemClock };
+  return { userStateRoot: root, fs: nodeDesignSystemFsDeps, admission: () => admission, clock: systemClock };
 }
 
 function seed(root: string, files: readonly PackageFile[] = PACKAGE): void {

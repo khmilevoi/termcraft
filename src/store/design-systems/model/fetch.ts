@@ -75,7 +75,9 @@ export async function fetchLocalPackage(
     });
   }
 
-  const files = readPackageDirectory(deps.fs, deps.admission, packageRoot);
+  // Fresh budget for THIS fetch (I1 fix) — `deps.admission` is a factory precisely so a second
+  // fetch in the same session never inherits the first one's aggregate counters.
+  const files = readPackageDirectory(deps.fs, deps.admission(), packageRoot);
   if (files instanceof Error) return files;
 
   const manifest = files.find((file) => file.relPath === MANIFEST_FILENAME);

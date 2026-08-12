@@ -70,7 +70,7 @@ const FILES: readonly PackageFile[] = [
 ];
 
 function depsFor(root: string, admission: PackageAdmission = allowAllPackageAdmission) {
-  return { userStateRoot: root, fs: nodeDesignSystemFsDeps, admission, clock: systemClock };
+  return { userStateRoot: root, fs: nodeDesignSystemFsDeps, admission: () => admission, clock: systemClock };
 }
 
 const PKG = { systemId: systemId("midnight"), version: version("1.2.0"), files: FILES };

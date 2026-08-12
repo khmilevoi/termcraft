@@ -38,7 +38,7 @@ function sourceFor(root: string) {
   return createLocalDesignSystemSource({
     userStateRoot: root,
     fs: nodeDesignSystemFsDeps,
-    admission: allowAllPackageAdmission,
+    admission: () => allowAllPackageAdmission,
     clock: systemClock,
   });
 }
