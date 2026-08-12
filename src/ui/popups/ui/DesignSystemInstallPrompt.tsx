@@ -12,6 +12,20 @@ const RULE_WIDTH = 60;
 
 export type DesignSystemPromptKind = "install" | "publish";
 
+/**
+ * What is in flight, or `null` while nothing is. A single `busy: boolean` (this prop's shape
+ * before task-13 fix round 1) could not tell D7's Gate-check freeze (`"checking"`) apart from a
+ * confirmed `designSystem.install` dispatch (`"installing"`) — both are `kind === "install"`, so
+ * the dialog read "⠹ installing…" during the CHECK, before the user had even confirmed anything,
+ * which is factually wrong at that moment. The caller (`App.tsx`) now passes the exact verb
+ * straight off the mirror's own phase rather than a bare flag this component would have to
+ * re-derive a verb for. `"publishing"` exists for the symmetrical future case — no `Design
+ * SystemPhase` currently represents "a publish is in flight" (`core/protocol`'s union has no
+ * `"publishing"` member), so no caller passes it today; kept in the union rather than added later
+ * so the render branch below never needs a second shape change to grow it.
+ */
+export type DesignSystemBusyPhase = "checking" | "installing" | "publishing";
+
 export interface DesignSystemInstallPromptProps {
   readonly id: string;
   readonly kind: DesignSystemPromptKind;
@@ -19,7 +33,7 @@ export interface DesignSystemInstallPromptProps {
   readonly summary: DesignSystemSummaryDtoV1 | null;
   readonly preview: DesignSystemPreviewDtoV1 | null;
   readonly failure: FailureDtoV1 | null;
-  readonly busy: boolean;
+  readonly busyPhase: DesignSystemBusyPhase | null;
 }
 
 /** One `• ` bullet's diagnostic attribution: the file it names, or "the whole tree" when the Gate
@@ -82,11 +96,12 @@ function dialogTitle(kind: DesignSystemPromptKind): string {
  * `pal` — none is invented.
  *
  * DIVERGENCE 1 — two extra states the mock's single dialog never had to represent: `failure`
- * (a terminal operation error) and `busy` (a command in flight, D7's "the picker has already
- * painted 'checking…' when the thread freezes" applied to THIS dialog's own submit). Both borrow
+ * (a terminal operation error) and `busyPhase` (a command in flight, D7's "the picker has already
+ * painted 'checking…' when the thread freezes" applied to THIS dialog's own submit — see {@link
+ * DesignSystemBusyPhase}'s own doc comment for why this is a verb, not a bare flag). Both borrow
  * established vocabulary rather than inventing new colour or glyph rules: the failure band is the
  * same `SHELL_PALETTE.red` bold headline `ExportFailurePopup` uses, and the busy line is the same
- * `⠹ <verb>ing…` static-spinner pattern `MigratePrompt`'s own `working` divergence uses for the
+ * `⠹ <verb>…` static-spinner pattern `MigratePrompt`'s own `working` divergence uses for the
  * identical reason — leaving the `⏎` key on screen while the thread is frozen would present a key
  * that does nothing.
  *
@@ -101,7 +116,7 @@ function dialogTitle(kind: DesignSystemPromptKind): string {
  * choice, not a fresh one).
  */
 export function DesignSystemInstallPrompt(props: DesignSystemInstallPromptProps) {
-  if (props.busy) {
+  if (props.busyPhase !== null) {
     return (
       <box
         id={props.id}
@@ -114,8 +129,12 @@ export function DesignSystemInstallPrompt(props: DesignSystemInstallPromptProps)
         flexDirection="column"
         padding={0}
       >
+        {/* The verb IS the phase — no `kind`-keyed ternary to keep in sync with it. `"checking"`
+            (D7's Gate-freeze window, BEFORE the user has confirmed anything) and `"installing"`
+            (after the confirm dispatched `designSystem.install`) are both `kind === "install"`,
+            which a `kind`-only ternary could not tell apart (fix round 1, Important 1). */}
         <text id={`${props.id}-working`} fg={SHELL_PALETTE.amber} attributes={BOLD}>
-          {props.kind === "install" ? "⠹ installing…" : "⠹ publishing…"}
+          {`⠹ ${props.busyPhase}…`}
         </text>
       </box>
     );

@@ -1245,6 +1245,104 @@ describe("applyIntent — design-system picker (P10 task 13)", () => {
     expect(deps.mirror.designSystems().phase).toBe("listing");
   });
 
+  // Fix round 1, Important 2: a rejection at the DISPATCHER'S OWN guard layer (a stale revision,
+  // an unavailable capability) publishes no event at all — `launchOperation`'s "every outcome gets
+  // a terminal event" guarantee only holds for an operation that actually launched. Without a
+  // correction, the optimistic phase this same intent just set would strand the picker on
+  // "listing…" forever.
+  test("a rejected designSystem.list dispatch reverts the optimistic 'listing' phase back to what it was", async () => {
+    const kernel = createFakeKernel();
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7() as never,
+      status: "rejected",
+      currentRevision: "0",
+      code: "CAPABILITY_UNAVAILABLE",
+      reasons: [{ code: "CAPABILITY_UNAVAILABLE" }],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    // A prior, unrelated failure — the phase this MUST revert to, not a fabricated "idle".
+    deps.mirror.designSystems.set({ ...EMPTY_DESIGN_SYSTEM_MIRROR, phase: "failed" });
+
+    applyIntent({ kind: "action-execute", actionId: "design-system.open" }, deps);
+    expect(deps.mirror.designSystems().phase).toBe("listing");
+    await tick();
+
+    expect(deps.mirror.designSystems().phase).toBe("failed");
+  });
+
+  test("a rejected designSystem.install dispatch reverts the optimistic 'installing' phase back to 'previewed'", async () => {
+    const kernel = createFakeKernel();
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7() as never,
+      status: "rejected",
+      currentRevision: "0",
+      code: "STALE_REVISION",
+      reasons: [{ code: "STALE_REVISION", requiredRevision: "1" }],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const installId = uuidv7();
+    deps.mirror.designSystems.set({
+      ...EMPTY_DESIGN_SYSTEM_MIRROR,
+      phase: "previewed",
+      installId,
+      preview: BREAKS_PAGES_PREVIEW,
+    });
+    deps.local.designSystemPrompt.set("install");
+
+    applyIntent({ kind: "design-system-activate" }, deps);
+    expect(deps.mirror.designSystems().phase).toBe("installing");
+    await tick();
+
+    // Back to "previewed", not stuck on "installing" — and the preparation is still intact
+    // (`installId`/`preview` untouched), so the user can simply press Enter again.
+    expect(deps.mirror.designSystems().phase).toBe("previewed");
+    expect(deps.mirror.designSystems().installId).toBe(installId);
+  });
+
+  // The OTHER failure shape the same helper must correct: the dispatch promise itself resolving
+  // to an `Error` (never reaching the Kernel at all), not merely a `status: "rejected"` result.
+  test("a dispatch Error (never reached the Kernel) also reverts the optimistic phase", async () => {
+    const kernel = createFakeKernel();
+    kernel.setDispatchResult(new Error("port closed"));
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    deps.mirror.designSystems.set({ ...EMPTY_DESIGN_SYSTEM_MIRROR, phase: "listed" });
+
+    applyIntent({ kind: "action-execute", actionId: "design-system.open" }, deps);
+    expect(deps.mirror.designSystems().phase).toBe("listing");
+    await tick();
+
+    expect(deps.mirror.designSystems().phase).toBe("listed");
+  });
+
+  // The revert must not clobber a NEWER fact: a terminal event that DID land (moving the phase
+  // off the optimistic one) races ahead of a slow-resolving rejection continuation.
+  test("the revert is a no-op once a real terminal event already moved the phase on", async () => {
+    const kernel = createFakeKernel();
+    kernel.setDispatchResult({
+      protocolVersion: 1,
+      commandId: uuidv7() as never,
+      status: "rejected",
+      currentRevision: "0",
+      code: "CAPABILITY_UNAVAILABLE",
+      reasons: [{ code: "CAPABILITY_UNAVAILABLE" }],
+    });
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+
+    applyIntent({ kind: "action-execute", actionId: "design-system.open" }, deps);
+    expect(deps.mirror.designSystems().phase).toBe("listing");
+    // A real fold (e.g. a LATER, unrelated list this same session already resolved) moves the
+    // phase on before the rejection continuation below gets to run.
+    deps.mirror.apply(
+      event("designSystem.listed", { operationId: uuidv7(), sources: [], update: null }),
+    );
+    expect(deps.mirror.designSystems().phase).toBe("listed");
+    await tick();
+
+    expect(deps.mirror.designSystems().phase).toBe("listed");
+  });
+
   // The `designSystem.installed`/`published` auto-close behaviour lives in `deps.ts`'s
   // `applyEnvelope` (the connect-hook-scoped event consumer), not in `applyIntent` — it is
   // exercised through `deps.mirror.apply(...)` alone, which is EXACTLY the gap `applyEnvelope`

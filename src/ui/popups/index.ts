@@ -23,6 +23,7 @@ export {
 } from "./model/design-system-picker";
 export { DesignSystemPicker } from "./ui/DesignSystemPicker";
 export type {
+  DesignSystemBusyPhase,
   DesignSystemInstallPromptProps,
   DesignSystemPromptKind,
 } from "./ui/DesignSystemInstallPrompt";

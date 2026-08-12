@@ -106,7 +106,7 @@ const base: DesignSystemInstallPromptProps = {
   summary: SUMMARY,
   preview: null,
   failure: null,
-  busy: false,
+  busyPhase: null,
 };
 
 async function draw(element: unknown) {
@@ -198,8 +198,24 @@ describe("DesignSystemInstallPrompt (design/16-wizard-migration.dc.html)", () =>
   });
 
   test("busy replaces the action hint so a frozen thread never looks like a dead key", async () => {
-    const frame = await draw(<DesignSystemInstallPrompt {...base} busy={true} />);
+    const frame = await draw(<DesignSystemInstallPrompt {...base} busyPhase="installing" />);
     expect(findRun(frame, "installing")).toBeDefined();
     expect(findRun(frame, "⏎ install")).toBeUndefined();
+  });
+
+  // Fix round 1, Important 1: `"checking"` (D7's Gate-freeze window, BEFORE the user has
+  // confirmed anything) and `"installing"` (after the confirm dispatched `designSystem.install`)
+  // are both `kind === "install"` — a single boolean `busy` flag could not tell them apart, so the
+  // dialog used to read "⠹ installing…" during the CHECK, which is factually wrong at that moment.
+  test("checking and installing read as different verbs, even though both are kind: install", async () => {
+    const checkingFrame = await draw(<DesignSystemInstallPrompt {...base} busyPhase="checking" />);
+    expect(findRun(checkingFrame, "⠹ checking…")).toBeDefined();
+    expect(findRun(checkingFrame, "installing")).toBeUndefined();
+
+    const installingFrame = await draw(
+      <DesignSystemInstallPrompt {...base} busyPhase="installing" />,
+    );
+    expect(findRun(installingFrame, "⠹ installing…")).toBeDefined();
+    expect(findRun(installingFrame, "checking")).toBeUndefined();
   });
 });

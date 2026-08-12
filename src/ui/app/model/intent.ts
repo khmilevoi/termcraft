@@ -1,6 +1,6 @@
 import { wrap } from "@reatom/core";
 
-import type { CommandResultV1 } from "core/protocol";
+import type { CommandPayloadByKindV1, CommandResultV1 } from "core/protocol";
 import {
   formatDesignSystemRef,
   parseDesignSystemId,
@@ -10,6 +10,7 @@ import {
 import { log, trace } from "infrastructure/debug-log";
 import { filterSlashRows, resolveSlashAction, resolveUiAction } from "ui/actions";
 import type { UiActionEntry } from "ui/actions";
+import type { DesignSystemPhase } from "ui/mirror";
 import { sortChatSummariesNewestFirst } from "ui/mirror";
 import { designSystemRows } from "ui/popups";
 import type { DesignSystemRow } from "ui/popups";
@@ -318,11 +319,16 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
         const installId = state.installId;
         // No `designSystem.installStarted` event exists — the dispatching UI sets this phase
         // itself; `designSystem.installed`/`installFailed`'s own fold overwrites it (mirror
-        // contract, task-13 brief).
+        // contract, task-13 brief). `dispatchOptimisticDesignSystemCommand` is what corrects it
+        // back to `state.phase` ("previewed") if the dispatch is refused before that fold can
+        // ever run at all (fix round 1, Important 2).
         deps.mirror.designSystems.set({ ...state, phase: "installing" });
-        dispatchAndReport(
-          dispatcher.dispatch("designSystem.install", { installId }),
+        dispatchOptimisticDesignSystemCommand(
+          deps,
           "designSystem.install",
+          { installId },
+          "installing",
+          state.phase,
         );
         return;
       }
@@ -339,6 +345,13 @@ export function applyIntent(intent: KeyIntent, deps: UiDeps): void {
       // SAME path — the availableRef it names is an ordinary installable row like any other, not
       // a separate mechanism.
       const row = designSystemRows(state.sources)[local.designSystemSelection()];
+      // KNOWN GAP (accepted, fix round 1 Minor): an `"ungranted"` row's own footer hint reads
+      // "⏎ add source" (`DesignSystemPicker.tsx`'s `actionHintFor`), but no gesture for it is
+      // wired here — this plan's four Kernel commands (`list`/`preview`/`install`/`publish`) have
+      // no "grant a source" command to dispatch, and D9's "the picker … offers to grant" describes
+      // a mechanism no task in this plan actually builds. Unreachable today (only `local` is
+      // configured, and the composition root auto-grants it without a prompt — D9), but a real,
+      // visible dead affordance the moment a second source is ever configured.
       if (row === undefined || row.state !== "installable") return;
       const ref = formatDesignSystemRowRef(row);
       if (ref === null) return;
@@ -392,6 +405,62 @@ function dispatchAndReport(promise: Promise<CommandResultV1 | Error>, kind: stri
     // every outcome, accepted or refused.
     trace("ui.dispatch.result", { kind, result });
   });
+}
+
+/**
+ * Reverses ONE optimistic `DesignSystemPhase` write — see {@link dispatchOptimisticDesignSystemCommand}
+ * for why this exists (fix round 1, Important 2). Guarded on the phase STILL being the optimistic
+ * one: a `launchOperation` handler that DID admit the command publishes its own terminal event
+ * (`designSystem.listed`/`listFailed`/`installed`/`installFailed`) through the ordinary mirror
+ * fold, which may already have moved the phase on by the time this continuation runs — that newer
+ * fact must win, never be clobbered by a stale correction racing behind it.
+ */
+function revertOptimisticDesignSystemPhase(
+  deps: UiDeps,
+  optimisticPhase: "listing" | "installing",
+  previousPhase: DesignSystemPhase,
+): void {
+  const current = deps.mirror.designSystems();
+  if (current.phase !== optimisticPhase) return;
+  deps.mirror.designSystems.set({ ...current, phase: previousPhase });
+}
+
+/**
+ * `designSystem.list`/`designSystem.install`'s own dispatch continuation (fix round 1,
+ * Important 2). Both commands set a `DesignSystemPhase` optimistically at the call site, because
+ * no `designSystem.listStarted`/`installStarted` event exists for a real terminal fold to arrive
+ * from — but `launchOperation`'s "every outcome gets a terminal event" guarantee only holds for an
+ * operation that actually LAUNCHED. A rejection at the dispatcher's OWN guard layer (a stale
+ * revision, an unavailable capability — `CommandResultV1`'s `status: "rejected"`) or a dispatch
+ * that never reached the Kernel at all (`result instanceof Error`) publishes no event whatsoever,
+ * so without this correction the optimistic phase would strand the picker/dialog on
+ * "listing…"/"installing…" forever. `wrap` (RTM-A04) around the continuation — it touches
+ * `deps.mirror.designSystems`, a Reatom atom, after the dispatch's own `.then()` boundary.
+ */
+function dispatchOptimisticDesignSystemCommand<
+  K extends "designSystem.list" | "designSystem.install",
+>(
+  deps: UiDeps,
+  kind: K,
+  payload: CommandPayloadByKindV1[K],
+  optimisticPhase: "listing" | "installing",
+  previousPhase: DesignSystemPhase,
+): void {
+  void deps.dispatcher.dispatch(kind, payload).then(
+    wrap((result) => {
+      if (result instanceof Error) {
+        log.error("UI command dispatch failed:", result);
+        trace("ui.dispatch.result", { kind, result });
+        revertOptimisticDesignSystemPhase(deps, optimisticPhase, previousPhase);
+        return;
+      }
+      trace("ui.dispatch.result", { kind, result });
+      if (result.status === "rejected") {
+        log.warn(`UI ${kind} was rejected (${result.code})`);
+        revertOptimisticDesignSystemPhase(deps, optimisticPhase, previousPhase);
+      }
+    }),
+  );
 }
 
 /**
@@ -631,8 +700,11 @@ function executeAction(entry: UiActionEntry, deps: UiDeps): void {
     // Mirror contract: no `designSystem.listStarted` event exists, so the dispatching UI sets
     // this phase itself; `designSystem.listed`/`listFailed`'s own fold overwrites it. The picker
     // must never render an empty list it will not fill (task-13 brief).
+    // `dispatchOptimisticDesignSystemCommand` is what corrects the phase back if the dispatch is
+    // refused before either fold can ever run at all (fix round 1, Important 2).
+    const previousPhase = deps.mirror.designSystems().phase;
     deps.mirror.designSystems.set({ ...deps.mirror.designSystems(), phase: "listing" });
-    dispatchAndReport(deps.dispatcher.dispatch("designSystem.list", {}), "designSystem.list");
+    dispatchOptimisticDesignSystemCommand(deps, "designSystem.list", {}, "listing", previousPhase);
     return;
   }
   const chats = deps.mirror.chats();

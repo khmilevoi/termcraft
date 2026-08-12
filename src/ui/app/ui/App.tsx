@@ -6,7 +6,9 @@ import { trace } from "infrastructure/debug-log";
 import { filterSlashRows } from "ui/actions";
 import { Home } from "ui/home";
 import type { HomeAgentSelection, HomeCombo } from "ui/home";
+import type { DesignSystemPhase } from "ui/mirror";
 import { MIN_FRAME, sortChatSummariesNewestFirst } from "ui/mirror";
+import type { DesignSystemBusyPhase, DesignSystemPromptKind } from "ui/popups";
 import {
   ChatListPopup,
   DesignSystemInstallPrompt,
@@ -59,6 +61,30 @@ function exportPopupShowing(deps: UiDeps): boolean {
   const exportState = deps.mirror.export();
   if (exportState.phase !== "done" && exportState.phase !== "failed") return false;
   return exportState.operationId !== deps.local.exportDismissed();
+}
+
+/**
+ * The verb `DesignSystemInstallPrompt` shows while something is in flight, or `null` while
+ * nothing is — fix round 1, Important 1. `"checking"` (D7's Gate-freeze window, BEFORE the user
+ * has confirmed anything) and `"installing"` (after the confirm dispatched `designSystem.install`)
+ * are both `kind === "install"`; a single boolean could not tell them apart, so the dialog used to
+ * read "⠹ installing…" during the CHECK, which is factually wrong at that moment. Computed here,
+ * off the phase directly, rather than left for the component to re-derive from a flag.
+ *
+ * `"publish"` always reads `null`: no `DesignSystemPhase` member represents "a publish is in
+ * flight" (the mirror contract only gives `designSystem.list`/`install` an optimistic phase —
+ * `designSystem.publish` is a quick local-library write with no Gate pass to freeze the thread),
+ * so `DesignSystemInstallPrompt`'s own `"publishing"` verb is unreachable through this wiring.
+ * Recorded rather than invented a new UI-local flag no task before this one specified.
+ */
+function designSystemBusyPhaseFor(
+  kind: DesignSystemPromptKind,
+  phase: DesignSystemPhase,
+): DesignSystemBusyPhase | null {
+  if (kind !== "install") return null;
+  if (phase === "checking") return "checking";
+  if (phase === "installing") return "installing";
+  return null;
 }
 
 /**
@@ -138,14 +164,7 @@ function renderOverlay(deps: UiDeps, nowMs: number, overlay: OverlayKind | null)
         summary={state.previewSummary}
         preview={state.preview}
         failure={state.failure}
-        // DIVERGENCE: `checking`/`installing` are the only two Kernel-driven busy phases this
-        // dialog can be in — there is no mirror phase for "a publish is in flight" (`designSystem
-        // .publish` has no optimistic phase per the mirror contract, only list/install do, since
-        // publish is a quick local-library write with no Gate pass to freeze the thread), so the
-        // `kind === "publish"` confirm never shows `DesignSystemInstallPrompt`'s own "⠹
-        // publishing…" divergence text. Recorded here rather than invented a new UI-local flag no
-        // task before this one specified.
-        busy={state.phase === "checking" || state.phase === "installing"}
+        busyPhase={designSystemBusyPhaseFor(prompt, state.phase)}
       />
     );
   }
