@@ -6,6 +6,7 @@ import {
   DESIGN_SYSTEM_VIEWPORT_CAP,
   SWATCH_GLYPH,
   formatContents,
+  truncateColumn,
   visibleSwatches,
 } from "../model/design-system-picker";
 
@@ -95,10 +96,10 @@ export function DesignSystemPicker(props: DesignSystemPickerProps) {
               {row.state === "installable" ? (selected ? "● " : "○ ") : "  "}
             </text>
             <text id={`${rowId}-name`} fg={nameFg} attributes={shellAttrs({ bold: selected })}>
-              {row.name.padEnd(NAME_WIDTH, " ")}
+              {truncateColumn(row.name, NAME_WIDTH).padEnd(NAME_WIDTH, " ")}
             </text>
             <text id={`${rowId}-version`} fg={dimFg}>
-              {row.version.padEnd(VERSION_WIDTH, " ")}
+              {truncateColumn(row.version, VERSION_WIDTH).padEnd(VERSION_WIDTH, " ")}
             </text>
             {visibleSwatches(row.swatches, SWATCH_CELLS).map((swatch, swatchIndex) => (
               <text
@@ -154,6 +155,14 @@ export function DesignSystemPicker(props: DesignSystemPickerProps) {
             </>
           )
         )}
+        {/* SUPPRESSED WHILE BUSY (fix round 1, Minor 1): the brief states "p publish only when
+            canPublishSelected" and, separately, "checking… in place of the action hint when
+            busy" — it does not say what publish does during a check. Busy means a Gate pass is
+            in flight (D7): the row's own installability is not yet re-confirmed, so offering to
+            publish a system whose OWN check has not settled would advertise an action the shell
+            cannot honestly promise is safe right now. Suppressing it keeps the busy footer to
+            exactly the vocabulary D7 licenses ("checking…" in place of the action hint) rather
+            than a mix of "still deciding" and "go ahead, publish". */}
         {props.canPublishSelected && !props.busy && (
           <>
             <text id={`${props.id}-footer-publish-key`} fg={SHELL_PALETTE.amber} attributes={BOLD}>

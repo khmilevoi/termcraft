@@ -141,6 +141,22 @@ export function formatContents(componentNames: readonly string[], width: number)
   return remaining > 0 ? `${componentNames[0]} +${remaining}` : (componentNames[0] ?? "");
 }
 
+/**
+ * Truncates a fixed-width column value with a trailing `…` when it does not fit, rather than
+ * letting it overflow into the next column — the same truncate-with-ellipsis idiom
+ * `ChatListPopup.tsx`'s own `formatLabel` uses for its CHAT column, and the one
+ * {@link formatContents} above already applies to the CONTENTS column. NAME/VERSION need it too:
+ * `String.padEnd` alone never truncates, so an over-long system name used to overflow into the
+ * swatch/contents columns instead of clipping (fix round 1, Minor 2 — a real rendering defect,
+ * not a cosmetic one, on plausible input).
+ */
+export function truncateColumn(value: string, width: number): string {
+  if (width <= 0) return "";
+  if (value.length <= width) return value;
+  if (width === 1) return "…";
+  return `${value.slice(0, width - 1)}…`;
+}
+
 /** Props for the design-system picker overlay (task 9's DTOs feed this through the mirror, task 13). */
 export interface DesignSystemPickerProps {
   readonly id: string;

@@ -7,6 +7,7 @@ import {
   DESIGN_SYSTEM_VIEWPORT_CAP,
   designSystemRows,
   formatContents,
+  truncateColumn,
   visibleSwatches,
 } from "./design-system-picker";
 
@@ -111,6 +112,16 @@ test("contents lists component names and says how many were elided", () => {
   expect(formatContents(["Button", "PageShell", "Card"], 40)).toBe("Button · PageShell · Card");
   expect(formatContents(["Button", "PageShell", "Card"], 12)).toBe("Button +2");
   expect(formatContents([], 40)).toBe("no components");
+});
+
+test("truncateColumn clips an over-long value with a trailing ellipsis, and leaves a short one alone", () => {
+  expect(truncateColumn("midnight", 14)).toBe("midnight");
+  const long = "a very long design system name that would overflow the column";
+  const clipped = truncateColumn(long, 14);
+  expect(clipped.length).toBe(14);
+  expect(clipped.endsWith("…")).toBe(true);
+  expect(clipped.slice(0, -1)).toBe(long.slice(0, 13));
+  expect(truncateColumn("x", 0)).toBe("");
 });
 
 test("the viewport windows the rows with the shared chat-list math", () => {

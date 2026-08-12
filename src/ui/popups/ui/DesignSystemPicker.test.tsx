@@ -143,6 +143,17 @@ describe("DesignSystemPicker component (design gap, D8 — filled from 06-agent-
     expect(hint).toBeDefined();
   });
 
+  // Fix round 1, Important: the footer's `⏎` key and its label (`install`/`add source`) render
+  // as TWO SEPARATE runs (`DesignSystemPicker.tsx`'s `footer-action-key`/`footer-action-label`),
+  // mirroring `ChatListPopup.tsx`'s own key/label split. No run's text is ever literally
+  // "⏎ install" in ANY state — including a normal installable row — so asserting that exact
+  // string is undefined proved nothing. These now assert against the runs the component actually
+  // produces: `findRun(frame, "install")` matches the label run's own text whenever it renders,
+  // and structural `describe(...)` checks confirm the action-key/label pair is absent entirely
+  // when there is no action (the unavailable case). The paired positive test below
+  // ("an installable row offers ⏎ install") is what makes the negative assertions meaningful: if
+  // `actionHintFor` ever returned "install" for a degraded row, that positive test's own
+  // assumption would still hold, but these negative tests would now fail.
   test("an unavailable source shows its reason in amberHi, and offers no install", async () => {
     const handle = await createHeadlessRenderer({ w: 96, h: 28 });
     open = handle;
@@ -150,7 +161,9 @@ describe("DesignSystemPicker component (design gap, D8 — filled from 06-agent-
     await handle.render();
     const note = findRun(handle.capture(), "did not answer");
     expect(note && extractRgb(note.fg)).toBe(SHELL_PALETTE.amberHi);
-    expect(findRun(handle.capture(), "⏎ install")).toBeUndefined();
+    expect(findRun(handle.capture(), "install")).toBeUndefined();
+    expect(handle.describe(`${baseProps.id}-footer-action-key`)).toBeNull();
+    expect(handle.describe(`${baseProps.id}-footer-action-label`)).toBeNull();
   });
 
   test("an ungranted source offers `⏎ add source`, not `⏎ install`", async () => {
@@ -158,8 +171,20 @@ describe("DesignSystemPicker component (design gap, D8 — filled from 06-agent-
     open = handle;
     handle.mount(<DesignSystemPicker {...baseProps} rows={[UNGRANTED_ROW]} selectedIndex={0} />);
     await handle.render();
-    expect(findRun(handle.capture(), "add source")).toBeDefined();
-    expect(findRun(handle.capture(), "⏎ install")).toBeUndefined();
+    const label = findRun(handle.capture(), "add source");
+    expect(label).toBeDefined();
+    expect(label && label.text).not.toContain("install");
+    expect(findRun(handle.capture(), "install")).toBeUndefined();
+  });
+
+  test("an installable row offers ⏎ install", async () => {
+    const handle = await createHeadlessRenderer({ w: 96, h: 28 });
+    open = handle;
+    handle.mount(<DesignSystemPicker {...baseProps} rows={[MIDNIGHT_ROW]} selectedIndex={0} />);
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, "install")).toBeDefined();
+    expect(handle.describe(`${baseProps.id}-footer-action-key`)).not.toBeNull();
   });
 
   test("the footer carries the agent-picker hint vocabulary", async () => {
@@ -188,6 +213,41 @@ describe("DesignSystemPicker component (design gap, D8 — filled from 06-agent-
     handle.mount(<DesignSystemPicker {...baseProps} busy={true} />);
     await handle.render();
     expect(findRun(handle.capture(), "checking")).toBeDefined();
+  });
+
+  // Fix round 1, Minor 1: the publish hint is deliberately suppressed while busy, even when the
+  // selected row's system can publish — see the comment at the render site for why. `baseProps`
+  // always paired `canPublishSelected: true` with `busy: false`, so this branch had no coverage.
+  test("publish hint is suppressed while busy, even when canPublishSelected", async () => {
+    const handle = await createHeadlessRenderer({ w: 96, h: 28 });
+    open = handle;
+    handle.mount(<DesignSystemPicker {...baseProps} canPublishSelected={true} busy={true} />);
+    await handle.render();
+    expect(findRun(handle.capture(), "publish")).toBeUndefined();
+  });
+
+  // Fix round 1, Minor 2: `padEnd` alone never truncates, so an over-long system name used to
+  // overflow into the swatch/contents columns instead of clipping. `truncateColumn` (model layer)
+  // now clips it with a trailing `…`, mirroring `ChatListPopup.tsx`'s own `formatLabel` and this
+  // component's own `formatContents` column.
+  test("an over-long system name is truncated with an ellipsis rather than overflowing the row", async () => {
+    const longName = "a very long design system name that would overflow the column";
+    const LONG_ROW: DesignSystemRow = {
+      ...MIDNIGHT_ROW,
+      key: "local:long",
+      systemId: "long",
+      name: longName,
+    };
+    const handle = await createHeadlessRenderer({ w: 96, h: 28 });
+    open = handle;
+    handle.mount(<DesignSystemPicker {...baseProps} rows={[LONG_ROW]} selectedIndex={0} />);
+    await handle.render();
+    const frame = handle.capture();
+    expect(findRun(frame, longName)).toBeUndefined();
+    expect(frame.rows.flat().some((run) => run.text.includes("…"))).toBe(true);
+    // The VERSION column, drawn right after NAME, still renders intact — proof the truncated
+    // name did not bleed into the next cell instead of clipping.
+    expect(findRun(frame, "1.2.0")).toBeDefined();
   });
 
   test("every row gets a distinct, stable id", async () => {
