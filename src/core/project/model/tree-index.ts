@@ -140,6 +140,11 @@ async function readTreeSources(
  * {@link CanonicalTreeIndexV1.designSystem}). Logs a present-but-invalid manifest rather than
  * swallowing it: the Gate reports it to the user, and this line is what makes it visible in a debug
  * log when someone asks why a preview rendered against the seed palette.
+ *
+ * SIBLING READER: `core/project/model/descriptors.ts`'s `readDesignSystemManifest` makes the
+ * identical present-and-undecodable-is-null-plus-warn allowance (plan P4 decision D7), from a
+ * `treePaths`/`readTreeFile` starting point rather than this function's already-read `files` map.
+ * Keep the two decode-or-null branches behaving the same way if either changes.
  */
 function decodeDesignSystemFrom(files: ReadonlyMap<string, string>): DesignSystemManifestV1 | null {
   const text = files.get(DESIGN_SYSTEM_MANIFEST_RELPATH);

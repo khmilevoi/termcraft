@@ -53,7 +53,7 @@ function renderThemeLine(id: string, label: string, isDefault: boolean): string 
 function renderTokenLines(theme: DesignSystemManifestV1["themes"][string]): readonly string[] {
   const knownRoles = CORE_TOKEN_ROLES.filter((role) => role in theme.tokens);
   const extraNames = Object.keys(theme.tokens).filter(
-    (name) => !(CORE_TOKEN_ROLES as readonly string[]).includes(name),
+    (name) => !CORE_TOKEN_ROLES.some((role) => role === name),
   );
   return [...knownRoles, ...extraNames].map((name) => `${name}  ${theme.tokens[name]}`);
 }
