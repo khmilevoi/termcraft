@@ -13,15 +13,18 @@ import type { PagesManifestV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import { resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
+import { systemClock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 import { CURRENT_KIT_API_VERSION } from "runtime";
-import { createStore, nodeStoreDeps } from "store";
+import { createStore, designSystemsRoot, nodeStoreDeps } from "store";
+import type { OpenProject, StoreAdapterDeps } from "store";
 import { PROJECT_MANIFEST_FILENAME, WORKSPACE_STATE_FILENAME } from "store/toml";
 import type { EventEnvelopeV1, UiEnv } from "ui";
 
 import type { MigrationRequiredV1, ShellWithAgentRegistry } from "../types";
 import {
   ShellTeardownError,
+  buildDesignSystemDeps,
   buildGateRunner,
   closeShellResources,
   createShell,
@@ -504,6 +507,97 @@ describe("createShell", () => {
     expect(chatsListCalls).toBe(1);
 
     await shell.close();
+  });
+});
+
+/**
+ * project-design-systems §8.2/§8.4 (plan P10 Task 14) — `buildDesignSystemDeps`, exported for
+ * the SAME testability reason `buildGateRunner`/`toPreviewSessionHandle` are (see its own doc
+ * comment in `create-shell.ts`): `createShell`'s return value exposes no seam onto `kernelDeps`
+ * itself, so this suite drives the exact production composition directly against a real,
+ * on-disk project and a scratch `userStateRoot`, rather than reimplementing it.
+ */
+/** A real, on-disk project plus the `StoreAdapterDeps` bundle `buildDesignSystemDeps` takes —
+ *  mirrors `store/adapters/test-support.ts`'s `createRealProjectFixture`, which is test-only and
+ *  not re-exported from `store`, so this suite builds its own over the SAME real `store` calls
+ *  `interactiveShell` itself makes. Caller must `await open.close()` when done. */
+async function createRealOpenProject(
+  userStateRoot: string,
+): Promise<{ readonly open: OpenProject; readonly deps: StoreAdapterDeps }> {
+  const projectRoot = makeScratchDir("termcraft-shell-design-project-");
+  const store = createStore(nodeStoreDeps({ userStateRoot }));
+  const opened = await store.createProject({
+    root: projectRoot,
+    name: "Design System Fixture",
+    targetStack: "generic",
+    kitApiVersion: CURRENT_KIT_API_VERSION,
+  });
+  if (opened instanceof Error) throw opened;
+  return { open: opened, deps: { open: opened, uuidv7, clock: systemClock } };
+}
+
+describe("buildDesignSystemDeps (design-system composition root, D9)", () => {
+  test("the local design-system source is composed with the REAL admission budget", async () => {
+    // A source built with `allowAllPackageAdmission` in production would read an unbounded
+    // package — this only proves the REAL local source is composed (id/canPublish), not the
+    // budget's own enforcement, which `store/adapters/design-system-install.test.ts` and
+    // `store/design-systems`' own tests already cover directly.
+    const userStateRoot = makeScratchDir("termcraft-shell-design-source-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
+      expect(designSystemDeps.designSystemSource.id).toBe("local");
+      expect(designSystemDeps.designSystemSource.canPublish).toBe(true);
+    } finally {
+      await open.close();
+    }
+  });
+
+  test("the design-system library lives under the SAME userStateRoot as trust and sandboxes", async () => {
+    const scratch = makeScratchDir("termcraft-shell-design-userstate-");
+    const userStateRoot = path.join(scratch, "user-state");
+    const root = path.join(scratch, "project");
+
+    expect(designSystemsRoot(userStateRoot)).toBe(path.join(userStateRoot, "design-systems"));
+
+    const shell = expectFullShell(
+      await createShell("interactive", envFor(root), {
+        userStateRoot,
+        execPath: "bun",
+        srcRoot: "src/main.tsx",
+        spawn: NEVER_SPAWN,
+      }),
+    );
+    // The implicit project trust grant (`store.createProject`) and `buildDesignSystemDeps`'s own
+    // `local`-source grant (D9) both write through `OpenProject.trust`, which `interactiveShell`
+    // builds over the SAME `userStateRoot` this test passed in (never a second, independently
+    // resolved root) — so the trust ledger existing here is proof the two roots agree.
+    expect(fs.existsSync(path.join(userStateRoot, "trust"))).toBe(true);
+    await shell.close();
+  });
+
+  test("D9: local is granted without a prompt, but the grant is still RECORDED on the ledger", async () => {
+    const userStateRoot = makeScratchDir("termcraft-shell-design-grant-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
+      // "Granted without a prompt" — no interaction happened above, yet the callback already
+      // reports it granted, because `buildDesignSystemDeps` called `grantSource` itself.
+      expect(
+        await designSystemDeps.designSystemIsGranted(designSystemDeps.designSystemSource),
+      ).toBe(true);
+      // "Still recorded" — the SAME fact is independently visible through the trust store's own
+      // ledger, not just through the closure `buildDesignSystemDeps` handed back.
+      const subject = open.trust.buildSourceSubject({
+        sourceKind: "local",
+        sourceId: designSystemDeps.designSystemSource.id,
+        canonicalLocation: path.join(userStateRoot, "design-systems", "local"),
+        locationFilesystemIdentity: null,
+      });
+      expect(await open.trust.isSourceGranted(subject)).toBe(true);
+    } finally {
+      await open.close();
+    }
   });
 });
 

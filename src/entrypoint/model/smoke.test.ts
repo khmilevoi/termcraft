@@ -46,6 +46,8 @@ import type { KernelPort, PreviewSessionHandle, UiEnv, UiPreviewFrame } from "ui
 import { createReactTestRenderer } from "ui/testing";
 import type { ReactTestRenderer } from "ui/testing";
 
+import { buildDesignSystemDeps } from "./create-shell";
+
 /** No JSX in this `.ts` file (the task names this file `smoke.test.ts`, not `.tsx`) — `React.
  *  createElement` builds the one element this test mounts. Reached via `createRequire`, not a
  *  plain `import ... from "react"`, mirroring `ui/testing/model/react-renderer.ts`'s identical
@@ -400,6 +402,13 @@ async function composeRealShell(root: string, userStateRoot: string): Promise<Re
   const hostSupervisor = createFakeHostSupervisorPort();
   const exportRender = createFakeExportRenderPort();
 
+  // The SAME real design-system composition `create-shell.ts`'s `interactiveShell` builds
+  // (plan P10 Task 14) — local source over the real admission budget, the quarantine and
+  // install adapters, and the `local` trust grant (D9) — over this test's own real project
+  // and `userStateRoot`, never a fake: this file's own header says it exercises the SAME
+  // composed graph production builds, not one module's fakes in isolation.
+  const designSystemDeps = await buildDesignSystemDeps(userStateRoot, storeAdapterDeps);
+
   const kernelDeps: KernelDeps = {
     projectStore,
     chatReader: chatStore,
@@ -423,6 +432,7 @@ async function composeRealShell(root: string, userStateRoot: string): Promise<Re
     exportPublish: createExportPublishAdapter(storeAdapterDeps),
     agentRegistry: createFakeAgentRegistry([agentBackend]),
     agentPromptSource: createProductionAgentPromptSource(),
+    ...designSystemDeps,
     clock: systemClock,
   };
 

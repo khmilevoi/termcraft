@@ -7,7 +7,14 @@ import * as errore from "errore";
 import { createProductionAgentPromptSource, createProductionAgentRegistry } from "agent";
 import { type KernelDeps, createKernel } from "core";
 import type { Kernel } from "core/kernel";
-import type { GateRunner, PreviewFrameV1, PreviewSession } from "core/ports";
+import type {
+  DesignSystemInstallPort,
+  DesignSystemQuarantinePort,
+  DesignSystemSource,
+  GateRunner,
+  PreviewFrameV1,
+  PreviewSession,
+} from "core/ports";
 import type { UUIDv7 } from "core/protocol";
 import { createGateRunnerAdapter, resolveCompilerPath } from "gate";
 import type { SmokeRenderer } from "gate";
@@ -26,12 +33,18 @@ import {
 import type { SpawnFn } from "host/supervisor";
 import { systemClock } from "infrastructure/clock";
 import { log } from "infrastructure/debug-log";
+import { formatFsIdentity } from "infrastructure/fs-guard";
 import { uuidv7 } from "infrastructure/uuid";
 import { RUNTIME_DTS } from "runtime/generated/runtime-dts";
 import {
   createChatStoreAdapter,
+  createDesignSourceAdmission,
   createDesignStoreAdapter,
+  createDesignSystemInstallAdapter,
+  createDesignSystemQuarantineAdapter,
+  createDesignSystemSourceAdapter,
   createExportPublishAdapter,
+  createLocalDesignSystemSource,
   createPinStoreAdapter,
   createProjectStoreAdapter,
   createProjectWriteAdapter,
@@ -42,6 +55,8 @@ import {
   createStore,
   createTrustAdapter,
   createTurnTransactionsAdapter,
+  localLibraryDir,
+  nodeDesignSystemFsDeps,
   nodeStoreDeps,
 } from "store";
 import type { OpenProject, Store, StoreAdapterDeps } from "store";
@@ -131,10 +146,17 @@ export class ShellCompositionError extends errore.createTaggedError({
  * acquired inside `migrateProject` itself, is released before the second one ever calls
  * `openProject`.
  */
+/** The ONE resolution `createStoreForShell` and `interactiveShell` both use — see
+ *  {@link createStoreForShell}'s own doc comment for why two call sites legitimately exist, and
+ *  `interactiveShell`'s own use of this same helper (never a second, independent
+ *  `resolveDefaultUserStateRoot()` call) for why the design-system library composed alongside the
+ *  store below is guaranteed to land under the SAME per-user root (project-design-systems §8.2). */
+function resolveUserStateRootForShell(deps?: ShellDeps): string {
+  return deps?.userStateRoot ?? resolveDefaultUserStateRoot();
+}
+
 export function createStoreForShell(deps?: ShellDeps): Store {
-  return createStore(
-    nodeStoreDeps({ userStateRoot: deps?.userStateRoot ?? resolveDefaultUserStateRoot() }),
-  );
+  return createStore(nodeStoreDeps({ userStateRoot: resolveUserStateRootForShell(deps) }));
 }
 
 async function interactiveShell(
@@ -163,7 +185,15 @@ async function interactiveShell(
     });
   }
 
-  const store = createStoreForShell(deps);
+  // Hoisted so it is resolved EXACTLY ONCE and shared by `nodeStoreDeps` below and
+  // `buildDesignSystemDeps` further down — project-design-systems §8.2 requires the
+  // design-system library to live under the SAME per-user root as `trust/`/`sandboxes/`, and a
+  // second independent `resolveDefaultUserStateRoot()` call could never be proven to agree with
+  // the first if the two were ever computed differently (`ShellDeps.userStateRoot` is caller
+  // input in tests; `resolveDefaultUserStateRoot()` reads `process.env.LOCALAPPDATA`, which does
+  // not change mid-process, but "does not change" is not "is not called twice").
+  const userStateRoot = resolveUserStateRootForShell(deps);
+  const store = createStore(nodeStoreDeps({ userStateRoot }));
 
   const prepared = await openOrCreateProject(store, env.root);
   if (prepared instanceof Error) return prepared;
@@ -223,6 +253,12 @@ async function interactiveShell(
   // Task 9 Home health probe — never two independently constructed registries drifting apart.
   const agentRegistry = createProductionAgentRegistry(createGateDesignChecker(gateRunner));
 
+  // project-design-systems §8.2: the library lives under the SAME per-user root as `trust/`,
+  // `sandboxes/` and `backups/` (`userStateRoot`, resolved ONCE above), so the ledger and the
+  // library can never disagree about which machine they are on. See `buildDesignSystemDeps`'s
+  // own doc comment for the composition and D9's grant-but-record handling of `local`.
+  const designSystemDeps = await buildDesignSystemDeps(userStateRoot, storeAdapterDeps);
+
   const kernelDeps: KernelDeps = {
     projectStore: createProjectStoreAdapter(storeAdapterDeps),
     chatReader: chatStore,
@@ -251,6 +287,7 @@ async function interactiveShell(
     exportPublish: createExportPublishAdapter(storeAdapterDeps),
     agentRegistry,
     agentPromptSource: createProductionAgentPromptSource(),
+    ...designSystemDeps,
     clock: systemClock,
   };
 
@@ -306,6 +343,128 @@ async function interactiveShell(
  */
 export function buildGateRunner(tscExePath: string, smokeRenderer: SmokeRenderer): GateRunner {
   return createGateRunnerAdapter({ smokeRenderer, tscExePath, runtimeDts: RUNTIME_DTS });
+}
+
+/** The four `KernelDeps` fields project-design-systems §8.1/§8.3/§8.5 (Wave 3 / P10) add — see
+ *  {@link buildDesignSystemDeps}'s own doc comment for how each is built. */
+export interface DesignSystemKernelDeps {
+  readonly designSystemSource: DesignSystemSource;
+  readonly designSystemQuarantine: DesignSystemQuarantinePort;
+  readonly designSystemInstall: DesignSystemInstallPort;
+  readonly designSystemIsGranted: (source: DesignSystemSource) => Promise<boolean>;
+}
+
+/**
+ * Builds the design-system-facing slice of `KernelDeps` (plan P10 Task 14): the local source
+ * wrapped through the port adapter with the REAL admission budget
+ * (`createDesignSourceAdmission()`, never `allowAllPackageAdmission` — that is tests-only and
+ * P3's `LocalDesignSystemSourceDeps.admission` is required precisely so this cannot be
+ * forgotten), the quarantine adapter (Task 4's `store/design-systems` quarantine under this
+ * SAME `userStateRoot`), the install adapter (Task 5's `TransactionEngine.installDesignSystem`
+ * over the caller's already-open project), and the `local`-source trust grant (decision D9).
+ *
+ * DECISION D9. `local` is the user's own directory under their own `userStateRoot`, so it is
+ * granted WITHOUT A PROMPT on first use — but the grant is still RECORDED through
+ * `trustStore.grantSource`, so the ledger stays the single authority on what was decided and a
+ * later kind or path change is a fresh decision, exactly like every other source. A failure to
+ * grant does NOT refuse to start the shell (disproportionate — a trust-ledger write fault is not
+ * a reason to deny the whole shell): it is logged (errore rule 21 — the failure does not
+ * propagate) and `local` simply shows as an `ungranted` row in the picker until a later run's
+ * grant succeeds, which `core/design-systems`' `listGrantedSources` already renders legibly
+ * (§8.4: "an unrecorded remote source is never queried" — the SAME refusal path a genuinely
+ * ungranted remote source takes).
+ *
+ * `designSystemIsGranted` closes over the ONE subject built here rather than re-deriving one
+ * per call: `core/kernel/model/handlers/design-system.ts`'s own header notes that, with exactly
+ * one `designSystemSource` composed today, the only source a callback invocation can ever name
+ * is this one — a `source.id` mismatch is defensive (unreachable under this composition, not a
+ * per-source router for a multi-source future §10 does not build yet).
+ *
+ * Exported, not inlined into `kernelDeps` in `interactiveShell` — the SAME testability reason
+ * `buildGateRunner`/`toPreviewSessionHandle` are already exported for: `createShell`'s return
+ * value exposes no seam onto `kernelDeps` itself (`AppShell`/`KernelPort` are narrower on
+ * purpose), so `create-shell.test.ts` exercises this exact composition directly against a
+ * scratch `userStateRoot`.
+ */
+export async function buildDesignSystemDeps(
+  userStateRoot: string,
+  storeAdapterDeps: StoreAdapterDeps,
+): Promise<DesignSystemKernelDeps> {
+  const trustStore = storeAdapterDeps.open.trust;
+
+  const designSystemSource = createDesignSystemSourceAdapter(
+    createLocalDesignSystemSource({
+      userStateRoot,
+      fs: nodeDesignSystemFsDeps,
+      // REQUIRED and defaultless by P3's design, so an unbudgeted fetch does not compile.
+      admission: createDesignSourceAdmission(),
+      clock: systemClock,
+    }),
+  );
+
+  const localSourceSubject = trustStore.buildSourceSubject({
+    sourceKind: "local",
+    sourceId: designSystemSource.id,
+    canonicalLocation: localLibraryDir(userStateRoot),
+    locationFilesystemIdentity: localLibraryFsIdentity(userStateRoot),
+  });
+
+  const alreadyGranted = await trustStore.isSourceGranted(localSourceSubject);
+  if (!alreadyGranted) {
+    const granted = await trustStore.grantSource(localSourceSubject);
+    if (granted instanceof Error) {
+      log.warn(
+        `entrypoint: could not record the local design-system source's trust grant (${granted.message}); it will show as ungranted in the picker until a later run's grant succeeds`,
+      );
+    }
+  }
+
+  async function designSystemIsGranted(source: DesignSystemSource): Promise<boolean> {
+    if (source.id !== designSystemSource.id) {
+      // Defensive, should be unreachable — see this function's own doc comment.
+      log.warn(
+        `entrypoint: designSystemIsGranted was asked about an unrecognized source "${source.id}"; refusing rather than guessing`,
+      );
+      return false;
+    }
+    return trustStore.isSourceGranted(localSourceSubject);
+  }
+
+  return {
+    designSystemSource,
+    designSystemQuarantine: createDesignSystemQuarantineAdapter({ userStateRoot }),
+    designSystemInstall: createDesignSystemInstallAdapter(storeAdapterDeps),
+    designSystemIsGranted,
+  };
+}
+
+/** `true` for the ordinary "nothing here yet" `ENOENT` a fresh `userStateRoot` produces before
+ *  any install has ever run — mirrors `store/trust`'s own `isMissingFile` — so it can be told
+ *  apart from a genuine fault (permissions, a locked handle, …) below. */
+function isMissingPathError(cause: unknown): boolean {
+  return (
+    typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+/** `infrastructure/fs-guard`'s filesystem identity for the local design-system library
+ *  directory, or `null` when it is unavailable (D9) — most commonly because no install has ever
+ *  run yet, so the directory does not exist on disk. Never refuses the grant over this: a
+ *  missing identity is the ordinary "nothing published here yet" case, not a fault, and the
+ *  `SourceTrustSubjectInput` encoding already has an `absent` tag for exactly this. Logged only
+ *  when the failure is NOT the ordinary missing-directory case — otherwise every shell launch
+ *  before the first install would warn on every single run. */
+function localLibraryFsIdentity(userStateRoot: string): string | null {
+  const identity = formatFsIdentity(localLibraryDir(userStateRoot));
+  if (identity instanceof Error) {
+    if (!isMissingPathError(identity.cause)) {
+      log.warn(
+        `entrypoint: could not read the local design-system library's filesystem identity (${identity.message}); the trust subject carries a null identity`,
+      );
+    }
+    return null;
+  }
+  return identity;
 }
 
 /** One teardown resource `AppShell.close()` releases, run in reverse-acquisition order. */
