@@ -21,6 +21,8 @@ import {
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -52,7 +54,12 @@ import type { Clock } from "infrastructure/clock";
 
 import type { KernelDeps } from "../../types";
 import { modelHandlers, selectionHandlers } from "./selection-model";
-import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
+import {
+  type HandlerContext,
+  type PreviewSourceKindV1,
+  type ProjectTrustV1,
+  createDesignSystemInstallLedger,
+} from "./types";
 
 function slug(value: string): PageSlug {
   const parsed = parsePageSlug(value);
@@ -127,6 +134,7 @@ function buildTestContext(options?: {
     const pinStore = createFakePinStore();
     const projectStore = createFakeProjectStore({ root: "/test-root" });
     const clock: Clock = { now: () => new Date(1_700_000_000_000) };
+    const designSystemPorts = createFakeDesignSystemInstall();
 
     const deps: KernelDeps = {
       projectStore,
@@ -153,6 +161,14 @@ function buildTestContext(options?: {
       agentRegistry: createFakeAgentRegistry(
         options?.backends ?? [createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES })],
       ),
+      designSystemSource: createFakeDesignSystemSource({
+        id: "local",
+        label: "Local library",
+        canPublish: true,
+      }),
+      designSystemQuarantine: designSystemPorts,
+      designSystemInstall: designSystemPorts,
+      designSystemIsGranted: () => Promise.resolve(true),
       clock,
     };
     const frameTokenLedger = createFrameTokenLedger();
@@ -214,6 +230,7 @@ function buildTestContext(options?: {
       frameTokenLedger,
       geometryTokenLedger,
       pageRemovePlanLedger: createPageRemovePlanLedger(),
+      designSystemLedger: createDesignSystemInstallLedger(deps.designSystemQuarantine),
     };
 
     return {

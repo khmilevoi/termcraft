@@ -28,6 +28,8 @@ import {
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -62,11 +64,12 @@ import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../../types";
 import { terminalChangedPages, turnHandlers } from "./turn";
-import type {
-  HandlerContext,
-  PreviewSourceKindV1,
-  ProjectTrustV1,
-  TurnCancelHandle,
+import {
+  type HandlerContext,
+  type PreviewSourceKindV1,
+  type ProjectTrustV1,
+  type TurnCancelHandle,
+  createDesignSystemInstallLedger,
 } from "./types";
 
 /**
@@ -208,6 +211,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
     const pinStore = createFakePinStore();
     const projectStore = createFakeProjectStore({ root: "/test-root" });
     const clock: Clock = { now: () => new Date(1_700_000_000_000) };
+    const designSystemPorts = createFakeDesignSystemInstall();
 
     const deps: KernelDeps = {
       projectStore,
@@ -234,6 +238,14 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
         createFakeAgentBackend({ capabilities: FAKE_BACKEND_CAPABILITIES }),
       ]),
       agentPromptSource: createFakeAgentPromptSource(),
+      designSystemSource: createFakeDesignSystemSource({
+        id: "local",
+        label: "Local library",
+        canPublish: true,
+      }),
+      designSystemQuarantine: designSystemPorts,
+      designSystemInstall: designSystemPorts,
+      designSystemIsGranted: () => Promise.resolve(true),
       clock,
       ...overrides,
     };
@@ -304,6 +316,7 @@ function buildTestContext(overrides?: Partial<KernelDeps>): TestContext {
       frameTokenLedger,
       geometryTokenLedger,
       pageRemovePlanLedger: createPageRemovePlanLedger(),
+      designSystemLedger: createDesignSystemInstallLedger(deps.designSystemQuarantine),
     };
 
     return {

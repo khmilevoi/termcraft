@@ -83,6 +83,18 @@ export interface CapabilityTargetByKindV1 {
   "migration.confirm": { readonly migrationPlanId: string };
   "migration.discardPlan": { readonly migrationPlanId: string };
   "migration.retryRecovery": { readonly migrationActionId: string };
+  // project-design-systems §8.1/§10.1 Wave 3 / P10 (scope escape, task-9 discovery: this
+  // 43-row table is exhaustively `satisfies`-checked against `CommandKindV1`, so the four new
+  // `designSystem.*` commands cannot compile without a row here even though the plan's file
+  // list never names this file). All four stay literal `null`: nothing about the picker's
+  // commands needs a per-argument capability key in this plan — `designSystem.list` takes no
+  // input, and `preview`/`install`/`publish`'s own `ref`/`installId`/`sourceId` are exactly
+  // the kind of runtime identity `project.retryOpen`'s neighbours already keep out of a target
+  // unless a real per-identity capability need is named (none is, here).
+  "designSystem.list": null;
+  "designSystem.preview": null;
+  "designSystem.install": null;
+  "designSystem.publish": null;
 }
 
 /**
@@ -226,4 +238,8 @@ export const capabilityTargetByKindV1Schema = {
   "migration.retryRecovery": z.strictObject({
     migrationActionId: uuidv7Schema,
   }),
+  "designSystem.list": z.null(),
+  "designSystem.preview": z.null(),
+  "designSystem.install": z.null(),
+  "designSystem.publish": z.null(),
 } satisfies Readonly<{ [K in CommandKindV1]: z.ZodType<CapabilityTargetByKindV1[K]> }>;

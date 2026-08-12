@@ -23,6 +23,8 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -338,6 +340,7 @@ function buildDeps(
     },
     meta: { kitApiVersion: 1, title: "Home", minSize: { w: 80, h: 24 }, theme: "dark" },
   });
+  const designSystemPorts = createFakeDesignSystemInstall();
 
   return {
     projectStore: createFakeProjectStore({
@@ -365,6 +368,14 @@ function buildDeps(
     exportPublish,
     agentRegistry,
     agentPromptSource: createFakeAgentPromptSource(),
+    designSystemSource: createFakeDesignSystemSource({
+      id: "local",
+      label: "Local library",
+      canPublish: true,
+    }),
+    designSystemQuarantine: designSystemPorts,
+    designSystemInstall: designSystemPorts,
+    designSystemIsGranted: () => Promise.resolve(true),
     clock: makeClock(1_700_000_000_000),
   };
 }

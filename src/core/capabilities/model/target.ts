@@ -210,6 +210,13 @@ export const capabilityTargetExtractors = {
   "migration.retryRecovery": extractor("migration.retryRecovery", (p) => ({
     migrationActionId: p.migrationActionId,
   })),
+
+  // project-design-systems Wave 3 / P10 (scope escape — see `capability-target.ts`'s matching
+  // row comment): all four `designSystem.*` targets stay literal null, same reasoning.
+  "designSystem.list": nullTarget("designSystem.list"),
+  "designSystem.preview": nullTarget("designSystem.preview"),
+  "designSystem.install": nullTarget("designSystem.install"),
+  "designSystem.publish": nullTarget("designSystem.publish"),
 } as const satisfies ExtractorMap;
 
 /** Extracts one kind's capability target, validating the payload first (§10.1). */

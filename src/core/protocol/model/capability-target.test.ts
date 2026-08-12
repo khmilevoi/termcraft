@@ -156,6 +156,10 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
     valid: { migrationActionId: uuidv7() },
     breaks: [{ migrationActionId: "not-a-uuid" }],
   },
+  "designSystem.list": { valid: null, breaks: [{}] },
+  "designSystem.preview": { valid: null, breaks: [{}] },
+  "designSystem.install": { valid: null, breaks: [{}] },
+  "designSystem.publish": { valid: null, breaks: [{}] },
 };
 
 describe("capabilityTargetByKindV1Schema", () => {

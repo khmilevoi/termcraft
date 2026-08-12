@@ -20,6 +20,8 @@ import {
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -268,6 +270,10 @@ function buildDeps(overrides?: { readonly chatMutations?: ChatMutations }): Kern
   const chatStore = createFakeChatStore();
   const pageStore = createFakeDesignStoreForPages({ pages: [] });
   const pinStore = createFakePinStore();
+  // One shared instance for both design-system port fields — both are the SAME real capability
+  // (`store/design-systems`/`store`'s `TransactionEngine` behind one port pair, `core/ports/
+  // design-system-install.ts`'s own header) and the combined fake mirrors that on purpose.
+  const designSystemPorts = createFakeDesignSystemInstall();
 
   return {
     projectStore: createFakeProjectStore({ root: "/test-root" }),
@@ -292,6 +298,14 @@ function buildDeps(overrides?: { readonly chatMutations?: ChatMutations }): Kern
     exportPublish: createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
     agentPromptSource: createFakeAgentPromptSource(),
+    designSystemSource: createFakeDesignSystemSource({
+      id: "local",
+      label: "Local library",
+      canPublish: true,
+    }),
+    designSystemQuarantine: designSystemPorts,
+    designSystemInstall: designSystemPorts,
+    designSystemIsGranted: () => Promise.resolve(true),
     clock: makeClock(1_700_000_000_000),
   };
 }

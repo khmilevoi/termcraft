@@ -1,4 +1,7 @@
+import { type Atom, action, atom } from "@reatom/core";
+
 import type { KernelStateSnapshot } from "core/capabilities";
+import type { DesignSystemPreparedInstallV1 } from "core/design-systems";
 import type {
   CommitAction,
   CommitState,
@@ -17,7 +20,7 @@ import type {
   TurnState,
 } from "core/machines";
 import type { HandlerOutcome, PublishableEventV1 } from "core/mailbox";
-import type { HostSessionSpecV1, PreviewSession } from "core/ports";
+import type { DesignSystemQuarantinePort, HostSessionSpecV1, PreviewSession } from "core/ports";
 import type { FrameTokenLedger, GeometryTokenLedger, PreviewSessionCommands } from "core/preview";
 import type { PageRemovePlanLedger } from "core/project";
 import type {
@@ -274,6 +277,73 @@ export interface ExportRunnerContext {
 /** `EventPayloadByKindV1["selection.changed"]`'s non-null member, by another name — matches `selection-model.ts`'s own local `SelectionDtoV1` alias, declared independently here so `types.ts` never imports FROM a family module. */
 export type SelectionSnapshotV1 = NonNullable<EventPayloadByKindV1["selection.changed"]>;
 
+// --- The designSystem family's own extra surface (project-design-systems Wave 3 / P10) ----
+
+/**
+ * The single-slot "at most one preparation in flight" ledger `designSystem.preview`/`install`
+ * need (task-9 brief: "The preparation ledger is reached through `HandlerContext` the same way
+ * `pageRemovePlanLedger` already is"). Mirrors `core/project/model/page-remove-plan.ts`'s
+ * `PageRemovePlanLedger` factory shape (a plain closure `atom` plus named `action`-wrapped
+ * mutators, built once per `createKernel` call, never at module scope) — declared HERE rather
+ * than in a sibling `core/project`-style file because, unlike `PageRemovePlanLedger`, this
+ * ledger's own `replace`/`clear` must call `DesignSystemQuarantinePort.discard` (a `core/ports`
+ * type `types.ts` already imports for other reasons), and `./design-system.ts` needs
+ * `HandlerContext` from this file — declaring the ledger in `design-system.ts` instead would
+ * make the two files import each other.
+ *
+ * `DesignSystemPreparedInstallV1` (`core/design-systems`) is a completed, still-on-disk
+ * quarantine preparation — see that module's own header for why quarantine's lifetime spans
+ * the `preview` -> `install`/discard pair.
+ */
+export interface DesignSystemInstallLedger {
+  readonly currentAtom: Atom<DesignSystemPreparedInstallV1 | null>;
+  current(): DesignSystemPreparedInstallV1 | null;
+  /** Evicts and discards any earlier preparation, then holds `prepared` — "a second preparation evicts and DISCARDS the first" (task-9 brief). */
+  replace(prepared: DesignSystemPreparedInstallV1): void;
+  /** Returns and removes the held preparation, or `null` for an unknown/absent id — NEVER a silent re-prepare (task-9 brief). */
+  take(installId: string): DesignSystemPreparedInstallV1 | null;
+  /** Discards any held preparation with no replacement — Kernel teardown (`kernel.ts`'s own `close()`). */
+  clear(): void;
+}
+
+/**
+ * Builds one Kernel's design-system install ledger — a factory, not module-level atoms, for the
+ * identical reason `createPageRemovePlanLedger`'s own header states: "two kernels, or two
+ * tests, must never share one plan slot."
+ */
+export function createDesignSystemInstallLedger(
+  quarantine: DesignSystemQuarantinePort,
+): DesignSystemInstallLedger {
+  const currentAtom = atom<DesignSystemPreparedInstallV1 | null>(
+    null,
+    "kernel.designSystem.installLedger",
+  );
+
+  function discardHeld(): void {
+    const held = currentAtom();
+    if (held !== null) quarantine.discard(held.installId);
+  }
+
+  const replace = action((prepared: DesignSystemPreparedInstallV1): void => {
+    discardHeld();
+    currentAtom.set(prepared);
+  }, "kernel.designSystem.installLedger.replace");
+
+  const take = action((installId: string): DesignSystemPreparedInstallV1 | null => {
+    const held = currentAtom();
+    if (held === null || held.installId !== installId) return null;
+    currentAtom.set(null);
+    return held;
+  }, "kernel.designSystem.installLedger.take");
+
+  const clear = action((): void => {
+    discardHeld();
+    currentAtom.set(null);
+  }, "kernel.designSystem.installLedger.clear");
+
+  return { currentAtom, current: () => currentAtom(), replace, take, clear };
+}
+
 // --- The handler context -----------------------------------------------------------------
 
 /**
@@ -462,6 +532,8 @@ export interface HandlerContext {
   readonly geometryTokenLedger: GeometryTokenLedger;
   /** The per-Kernel `PageRemovePlanLedger` (Step C1) — see this interface's own comment above. */
   readonly pageRemovePlanLedger: PageRemovePlanLedger;
+  /** The per-Kernel `DesignSystemInstallLedger` (project-design-systems Wave 3 / P10) — see that type's own comment above. */
+  readonly designSystemLedger: DesignSystemInstallLedger;
 }
 
 // --- The well-formed outcome, made hard to get wrong ---------------------------------------

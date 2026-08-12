@@ -149,3 +149,22 @@ export { agentIdentityV1Schema, kernelStateChangedPayloadV1Schema } from "./mode
 // --- M21 closed DTOs (WP-1 task 3): preview.geometryResult's closed §4.2 result union --
 export type { GeometryQueryResultV1, LayoutNodeV1 } from "./model/event-payload";
 export { geometryQueryResultV1Schema } from "./model/event-payload";
+
+// --- project-design-systems Wave 3 / P10 (task 9): the designSystem.* event DTOs ---------
+export type {
+  DesignSystemBreakageDtoV1,
+  DesignSystemInstallFailedPayloadV1,
+  DesignSystemInstalledPayloadV1,
+  DesignSystemListedPayloadV1,
+  DesignSystemListFailedPayloadV1,
+  DesignSystemPreviewDtoV1,
+  DesignSystemPreviewedPayloadV1,
+  DesignSystemPreviewFailedPayloadV1,
+  DesignSystemPreviewStartedPayloadV1,
+  DesignSystemPublishedPayloadV1,
+  DesignSystemPublishFailedPayloadV1,
+  DesignSystemSummaryDtoV1,
+  DesignSystemTokenSwatchDtoV1,
+  DesignSystemUpdateDtoV1,
+  SourceListingDtoV1,
+} from "./model/event-payload";

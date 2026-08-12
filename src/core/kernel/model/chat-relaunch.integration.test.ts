@@ -13,6 +13,8 @@ import {
   createFakeAgentPromptSource,
   createFakeAgentRegistry,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -184,6 +186,7 @@ function buildRelaunchDeps(options: {
   readonly pageStore: ReturnType<typeof createFakeDesignStoreForPages>;
 }): KernelDeps {
   const pinStore = createFakePinStore();
+  const designSystemPorts = createFakeDesignSystemInstall();
   return {
     projectStore: options.projectStore,
     chatReader: options.chatStore,
@@ -207,6 +210,14 @@ function buildRelaunchDeps(options: {
     exportPublish: createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([]),
     agentPromptSource: createFakeAgentPromptSource(),
+    designSystemSource: createFakeDesignSystemSource({
+      id: "local",
+      label: "Local library",
+      canPublish: true,
+    }),
+    designSystemQuarantine: designSystemPorts,
+    designSystemInstall: designSystemPorts,
+    designSystemIsGranted: () => Promise.resolve(true),
     clock: makeClock(1_700_000_000_000),
   };
 }

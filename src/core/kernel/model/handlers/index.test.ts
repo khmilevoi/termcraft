@@ -17,6 +17,8 @@ import {
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -60,6 +62,7 @@ import {
   type HandlerContext,
   type PreviewSourceKindV1,
   type ProjectTrustV1,
+  createDesignSystemInstallLedger,
   noOpOutcome,
 } from "./types";
 
@@ -75,6 +78,7 @@ function buildDeps(): KernelDeps {
   const pageStore = createFakeDesignStoreForPages({ pages: [] });
   const pinStore = createFakePinStore();
   const clock: Clock = { now: () => new Date(1_700_000_000_000) };
+  const designSystemPorts = createFakeDesignSystemInstall();
 
   return {
     projectStore: createFakeProjectStore({ root: "/test-root" }),
@@ -99,6 +103,14 @@ function buildDeps(): KernelDeps {
     exportPublish: createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
     agentPromptSource: createFakeAgentPromptSource(),
+    designSystemSource: createFakeDesignSystemSource({
+      id: "local",
+      label: "Local library",
+      canPublish: true,
+    }),
+    designSystemQuarantine: designSystemPorts,
+    designSystemInstall: designSystemPorts,
+    designSystemIsGranted: () => Promise.resolve(true),
     clock,
   };
 }
@@ -174,6 +186,7 @@ function buildTestContext(): HandlerContext {
       frameTokenLedger,
       geometryTokenLedger,
       pageRemovePlanLedger: createPageRemovePlanLedger(),
+      designSystemLedger: createDesignSystemInstallLedger(deps.designSystemQuarantine),
     };
   });
 }
@@ -238,6 +251,10 @@ function samplePayloads(): { readonly [K in CommandKindV1]: CommandPayloadByKind
     "migration.confirm": { migrationPlanId: uuidv7(), acknowledged: true },
     "migration.discardPlan": { migrationPlanId: uuidv7() },
     "migration.retryRecovery": { migrationActionId: uuidv7() },
+    "designSystem.list": {},
+    "designSystem.preview": { ref: "local:midnight@1.2.0" },
+    "designSystem.install": { installId: uuidv7() },
+    "designSystem.publish": { sourceId: "local" },
   };
 }
 
@@ -249,11 +266,11 @@ function envelopeFor<K extends CommandKindV1>(
 }
 
 describe("createHandlerRegistry", () => {
-  test("assembles every one of the 44 CommandKindV1 members without throwing", () => {
+  test("assembles every one of the 48 CommandKindV1 members without throwing", () => {
     const registry = createHandlerRegistry(buildTestContext(), totalHandlers);
     const payloads = samplePayloads();
 
-    expect(COMMAND_KINDS_V1.length).toBe(44);
+    expect(COMMAND_KINDS_V1.length).toBe(48);
 
     // Step C1 wired four real family maps (`chat`, `selection`+`model`, `project`,
     // `preview`+`export`) into `totalHandlers` — `project.create`/`project.open`, in
@@ -267,7 +284,7 @@ describe("createHandlerRegistry", () => {
     //
     // A real dispatch pipeline never calls two handlers whose own preconditions conflict
     // back to back (the capability guard already enforces phase legality before `handle` is
-    // ever reached) — but THIS test drives all 44 kinds in `COMMAND_KINDS_V1`'s own fixed
+    // ever reached) — but THIS test drives all 48 kinds in `COMMAND_KINDS_V1`'s own fixed
     // order against ONE shared, evolving `HandlerContext`, with no guard between them, purely
     // to prove every kind resolves. `project.create`'s own admission legitimately moves the
     // project machine out of the exact phase a LATER kind in this same fixed order expects

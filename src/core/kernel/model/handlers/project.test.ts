@@ -19,6 +19,8 @@ import {
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -59,7 +61,12 @@ import { uuidv7 } from "infrastructure/uuid";
 import type { KernelDeps } from "../../types";
 import { buildPageDescriptors } from "./page-descriptors";
 import { projectHandlers } from "./project";
-import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
+import {
+  type HandlerContext,
+  type PreviewSourceKindV1,
+  type ProjectTrustV1,
+  createDesignSystemInstallLedger,
+} from "./types";
 
 /**
  * `project.create` / `project.open` / `project.retryOpen` / `project.close` /
@@ -223,6 +230,7 @@ function buildTestContext(options?: {
   const pageStore = options?.designReader ?? createFakeDesignStoreForPages({ pages: [] });
   const pinStore = createFakePinStore();
   const clock: Clock = { now: () => new Date(1_700_000_000_000) };
+  const designSystemPorts = createFakeDesignSystemInstall();
 
   const deps: KernelDeps = {
     projectStore:
@@ -249,6 +257,14 @@ function buildTestContext(options?: {
     exportPublish: options?.exportPublish ?? createFakeExportPublish(),
     agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
     agentPromptSource: createFakeAgentPromptSource(),
+    designSystemSource: createFakeDesignSystemSource({
+      id: "local",
+      label: "Local library",
+      canPublish: true,
+    }),
+    designSystemQuarantine: designSystemPorts,
+    designSystemInstall: designSystemPorts,
+    designSystemIsGranted: () => Promise.resolve(true),
     clock,
   };
   const frameTokenLedger = createFrameTokenLedger();
@@ -306,6 +322,7 @@ function buildTestContext(options?: {
     frameTokenLedger,
     geometryTokenLedger,
     pageRemovePlanLedger: createPageRemovePlanLedger(),
+    designSystemLedger: createDesignSystemInstallLedger(deps.designSystemQuarantine),
   };
 
   return {

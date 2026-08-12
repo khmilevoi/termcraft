@@ -57,6 +57,17 @@ export const EVENT_KINDS_V1 = [
   "pins.changed",
   "git.statusChanged",
   "diagnostics.changed",
+  // project-design-systems §9 Wave 3 / P10: the picker overlay's nine events, mirroring
+  // `export.start`'s admission/progress/terminal shape (§9 KCC:811-813 precedent).
+  "designSystem.listed",
+  "designSystem.listFailed",
+  "designSystem.previewStarted",
+  "designSystem.previewed",
+  "designSystem.previewFailed",
+  "designSystem.installed",
+  "designSystem.installFailed",
+  "designSystem.published",
+  "designSystem.publishFailed",
 ] as const;
 
 export type EventKindV1 = (typeof EVENT_KINDS_V1)[number];
@@ -67,8 +78,16 @@ export type EventKindV1 = (typeof EVENT_KINDS_V1)[number];
  * separate kind from `chat.records` because the mirror treats the two differently — a tail
  * page merges at the tail, an older page prepends (spec §6.5) — and one kind carrying both
  * would need a direction discriminant on the payload to say which.
+ *
+ * 45 -> 54 (project-design-systems §9 Wave 3 / P10): `listed`/`listFailed` report the
+ * grant-gated bounded multi-source list plus an optional update offer (decisions D9/D10);
+ * `previewStarted`/`previewed`/`previewFailed` report the quarantine -> candidate -> Gate
+ * pipeline — `previewStarted` publishes BEFORE the freezing `runTree` await (decision D7),
+ * so the picker has already painted "checking…" when the thread stops; `installed`/
+ * `installFailed` report committing a previously previewed preparation; `published`/
+ * `publishFailed` report publishing the project's own system back to a source.
  */
-export const EVENT_KIND_COUNT = 45;
+export const EVENT_KIND_COUNT = 54;
 
 const EVENT_KIND_SET: ReadonlySet<string> = new Set(EVENT_KINDS_V1);
 
