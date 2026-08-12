@@ -44,6 +44,7 @@ export {
 } from "./model/errors";
 export type { SourceError } from "./model/errors";
 export { allowAllPackageAdmission, nodeDesignSystemFsDeps } from "./model/fs-deps";
+export { createDesignSourceAdmission } from "./model/admission";
 export type { ConfiguredSourceV1, SourcesConfigV1 } from "./model/sources-config";
 export {
   BUILT_IN_LOCAL_SOURCE,
