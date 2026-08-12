@@ -272,8 +272,11 @@ flowchart TB
     follows this exact ordering. Canonical current sources may be codemodded; Git
     historical objects never are. (The format-counter gate and the verified-backup
     protocol are implemented and tested, and, as of design-tree phase 1b, so is the
-    migration itself: `MIGRATION_CHAIN` carries one real step — `project.toml`
-    format 1 -> 2 — proven end to end by `src/store/model/migration-fixture.test.ts`.
+    migration itself: `MIGRATION_CHAIN` carries two real steps — `project.toml`
+    format 1 -> 2 (design-tree phase 1b) and 2 -> 3 (plan P4, seeding
+    `design/system/`) — the version-1 origin proven end to end by
+    `src/store/model/migration-fixture.test.ts` and the version-2 one by
+    `store/migration/model/v2-to-v3.test.ts`.
     `flows/migration.md` has the whole path and what is still unbuilt.)
 19. **Operations log.** Bounded rotated local telemetry may record UUIDv7
     `recordId`, backend name, model, `sessionStartMode`, timings, retries, Gate result, cancellation/exit reason,
@@ -288,9 +291,10 @@ flowchart TB
     exercised by their own test suites. No migration from the abandoned
     numbered-page design exists — that layout never shipped, so there was never
     anything to migrate FROM it. The migration chain is no longer empty: it carries
-    one real step for the format-1 layout that DID ship (`project.toml`'s own
+    two real steps — the format-1 layout that DID ship (`project.toml`'s own
     ordered `pages` array, flat `pages/<slug>/page.tsx` files) becoming the
-    `design/` tree — see `flows/migration.md` for the whole path. The components
+    `design/` tree, and format 2 -> 3 seeding that tree's required `design/system/`
+    folder — see `flows/migration.md` for the whole path. The components
     that consume this storage have now landed: the assembled Kernel (`core`)
     reaches it through the `store/adapters` ring behind `core/ports`, and the
     composed UI shell drives that graph under `bun start`.
@@ -482,10 +486,13 @@ flowchart TB
   paired with each materialized remote package, carrying its content hash beside
   its `source:system@version` key
 - `src/store/design-systems/model/summary.ts` — item 16: a minimal, NON-EXECUTING
-  manifest read (the §7 Gate fatals are out of scope here) over a deliberately
-  PRIVATE manifest schema — P2's `entities/design-system` has not merged on this
-  branch, so this file carries its own narrow picker-visible-facts schema and drops
-  it for P2's real decoder at that sync point
+  manifest read (the §7 Gate fatals are out of scope here) projected off
+  `entities/design-system`'s own `decodeDesignSystemManifest` — the SAME decoder the
+  Gate uses, since the P2/P3 reconciliation sync point retired this file's earlier
+  private picker-visible-facts schema. `toDesignSystemSummary` is the pure, no-I/O
+  projection of an already-decoded manifest onto the seven facts a swatch row needs;
+  a candidate manifest failing the shared decoder now simply has nothing to list,
+  rather than summarizing and deferring the judgment to the Gate
 - `src/store/design-systems/model/{list,fetch,publish,local-source}.ts` — item 16:
   the one stage-1 source, a local directory: `list` (never opens a `.tsx`),
   `fetch`/`publish` against the admission boundary (`model/walk.ts`), and
@@ -567,11 +574,22 @@ flowchart TB
   existence check; `null` — never published — never blocks)
 - `src/store/migration/model/registry.ts` — item 18: the format-counter
   too-new gate shared by every durable-file kind, and `MIGRATION_CHAIN` — no
-  longer empty: one step, `project.toml` format 1 -> 2 (design-tree phase 1b,
-  `flows/migration.md`)
+  longer empty: two steps, `project.toml` format 1 -> 2 (design-tree phase 1b)
+  and 2 -> 3 (plan P4, design-systems §9), both landing a project on format 3
+  (`flows/migration.md`)
 - `src/store/migration/model/legacy-scan.ts`, `model/v1-to-v2.ts` — item 18: the
-  retired-layout reader and the plan/transaction builder for that one step
-  (`flows/migration.md` has the full walkthrough)
+  version-1 retired-layout reader and the plan/transaction builder for that origin
+  (which now emits `format_version` 3 directly, taking both steps in one
+  transaction; `flows/migration.md` has the full walkthrough)
+- `src/store/migration/model/format-two-scan.ts`, `model/v2-to-v3.ts` — item 18:
+  the version-2 origin's own reader (`scanFormatTwoProject`, which also probes
+  whether `design/system/design-system.json` already exists) and its
+  plan/transaction builder — at most three writes, no deletes, no page source
+  touched (`flows/migration.md`)
+- `src/store/model/design-system-seed.ts` — item 18: `createDesignSystemSeedFiles`,
+  the ONE emitter of `design/system/design-system.json` + `design/system/tokens.ts`'s
+  exact bytes, shared by `createProject` and both migration builders, so a created
+  project and a migrated one are seeded identically
 - `src/store/migration/model/backup-store.ts` — item 18: the verified-backup
   protocol (copy → manifest → flush → reopen-verify → `VERIFIED` marker) under
   `{userStateRoot}/backups/<projectId>/<migrationActionId>/`, with its first

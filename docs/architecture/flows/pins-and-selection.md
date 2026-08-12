@@ -83,7 +83,7 @@ stateDiagram-v2
 - `src/ui/preview/model/overlay.ts` — `pinAnchor` (fraction → cell inside a rect) and `pinInputAnchor` (the new-pin box beside its badge, slid back inside the canvas)
 - `src/ui/preview/model/element-rects.ts` — `indexElementRects`: one `layoutTree` reply flattened into the id→rect map both the badges and the pin list's orphan marker read
 - `src/ui/workspace/model/pins.ts` — `derivePinListRows`: numbers open pins and derives each row's `visible` from that same map
-- `src/ui/chat/ui/PinList.tsx` — the chat-panel pin list rows, including the dormant "not visible in the current render" marker
+- `src/ui/chat/ui/PinList.tsx` — the chat-panel pin list rows, including the "not visible in the current render" orphan marker, live since 2026-08-10 off the same id→rect map the badges read (step 8)
 - `src/ui/mirror/model/mirror.ts` — folds `selection.changed` into the selection slice and `pins.changed` into `pinsByPage`
 - `src/entrypoint/model/create-shell.ts` — `toPreviewSessionHandle` wires `acknowledgeDisplay` to a real `Kernel`-owned frame-token ledger (phase-8 Task 16); the upstream halves steps 1/2/4 depend on are in place too — `kernel.preview.enable` fires from `core/kernel/model/handlers/project.ts`'s `enablePreviewIfTrusted`, and `src/ui/app/model/deps.ts` dispatches `preview.selectPage` for the active page
 - `src/ui/workspace/ui/Workspace.tsx` — calls `acknowledgeFrame` for every preview frame it renders (the display acknowledgement that makes a frame token query-authorising), and `renderPinInput` mounts the new-pin box inside the preview canvas at `pinInputAnchor`, in place of the App's centred modal layer

@@ -74,7 +74,8 @@ flowchart LR
                          (interactive mode wires the real adapter graph, WP-4;
                           headless `export` driver, WP-5 Phase D)
      entities/          pure domain types; no ports, no I/O            [landed]
-       page/  chat/  turn/  pin/  design-tree/  design-system-ref/
+       page/  chat/  turn/  pin/  design-tree/
+       design-system/  design-system-ref/
      core/              Kernel — the only domain decision-maker         [landed]
        ports/           contracts core consumes: GitHistory, GitCommitter, AgentBackend…
        turns/  versions/  export/  chats/  design-systems/
@@ -369,7 +370,7 @@ final group's own heading spells out which is which).
   chat and pin vocabularies
 - `src/entities/turn/types.ts` — landed vocabulary (`AgentEvent`, `TurnFence`); the
   Claude backend produces both and `src/core/ports/agent-backend.ts` consumes them
-- `src/entities/design-system-ref/model/ref.ts` — `parseDesignSystemRef`/`formatDesignSystemRef`: a design system's ADDRESSABLE identity, `source:system@version` (project-design-systems §8.1). The source id runs to the `#` when there is one and to the first `:` otherwise, which is what lets `local:midnight@1.2.0` and `github:acme/design-systems#midnight@1.3.0` share one grammar. Deliberately separate from the manifest entity (`entities/design-system`, which does not exist on this branch — P2 has not merged): identity and content are different questions
+- `src/entities/design-system-ref/model/ref.ts` — `parseDesignSystemRef`/`formatDesignSystemRef`: a design system's ADDRESSABLE identity, `source:system@version` (project-design-systems §8.1). The source id runs to the `#` when there is one and to the first `:` otherwise, which is what lets `local:midnight@1.2.0` and `github:acme/design-systems#midnight@1.3.0` share one grammar. Deliberately separate from the manifest entity (`entities/design-system`, which landed with P2 `manifest-and-gate` and is anchored above): identity and content are different questions
 - `src/runtime/generated/runtime-dts.ts`, `src/runtime/generated/runtime.generated.d.ts` —
   the landed examples of the `generated/`
   exception this item records: both machine-emitted by `scripts/gen-runtime-dts.ts` in
@@ -411,12 +412,12 @@ final group's own heading spells out which is which).
 
 **`agent/` and the shared-vs-vendor split (items 1, 5, 8)**
 
-`agent/` is now four shared sub-modules (`confinement`, `session`, `health`, `run`)
-plus one vendor sub-module (`claude`, itself split into `backend`/`query`/`run`/
-`tools`/`errors`). None of the four shared sub-modules imports the Claude SDK — a
+`agent/` is now five shared sub-modules (`checks`, `confinement`, `session`, `health`,
+`run`) plus one vendor sub-module (`claude`, itself split into `backend`/`query`/`run`/
+`tools`/`errors`). None of the five shared sub-modules imports the Claude SDK — a
 second backend (Codex) would add only a sibling of `agent/claude` supplying its own
 stream driver, message classifier, tool vocabulary, and options builder, never a
-change to `confinement`/`session`/`health`/`run`. The run loop itself moved with the
+change to `checks`/`confinement`/`session`/`health`/`run`. The run loop itself moved with the
 split: `agent/run/model/engine.ts` now owns the terminal latch, the event queue, and
 both exit-confirmation ladders, and a vendor supplies only a driver that reads its
 stream and calls back into that engine — before the split this all lived inside the
