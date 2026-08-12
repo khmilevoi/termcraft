@@ -63,6 +63,33 @@ describe("the colours section teaches the design-system model (design-systems §
   });
 });
 
+/**
+ * THE CONTRADICTION THIS PINS (task 14 review round 1, Important, 2026-08-12). Task 14's colour
+ * rewrite added `import { useTokens } from "../system/tokens"` — a relative import to a project
+ * file — a few lines away from two untouched sentences that still said "It imports only from
+ * `@termcraft/runtime`" (top of doc) and "No imports beyond `@termcraft/runtime`" ("What not to
+ * do"). An agent reading either sentence right after being told to write that import would either
+ * skip it or stop trusting the guide.
+ *
+ * THE REAL RULE, verified against `src/gate/model/import-scan.ts`'s `scanImportAllowlist` doc
+ * comment (not paraphrased from memory): "Exactly two edges are legal anywhere in the tree
+ * (design §6): a static `import … from "@termcraft/runtime"` (bare root, no subpath), and a
+ * RELATIVE specifier (`./…`, `../…`) that resolves to a real file inside `design/`." So the old
+ * "only `@termcraft/runtime`" phrasing was already imprecise; task 14 is what put the
+ * contradiction inches apart in the same document.
+ */
+describe("the import rule states both legal edges, not just @termcraft/runtime (review round 1)", () => {
+  test("no longer claims @termcraft/runtime is the only legal import", () => {
+    expect(GUIDE).not.toContain("imports only from `@termcraft/runtime`");
+    expect(GUIDE).not.toContain("No imports beyond `@termcraft/runtime`");
+  });
+
+  test("states a relative import into the project's own tree is also legal", () => {
+    expect(GUIDE).toContain("relative import");
+    expect(GUIDE).toContain("this project's own tree");
+  });
+});
+
 describe("RUNTIME.md points at the Reatom guide", () => {
   test("the State section sends the reader to REATOM.md before writing state", () => {
     const start = GUIDE.indexOf("## State");

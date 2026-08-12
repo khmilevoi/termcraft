@@ -1,7 +1,9 @@
 # Authoring a termcraft page
 
-A page is one TSX module. It imports only from `@termcraft/runtime` — see `runtime.d.ts`
-alongside this file for the exact exported names and their types.
+A page is one TSX module. Its legal imports are `@termcraft/runtime` — see `runtime.d.ts`
+alongside this file for the exact exported names and their types — and a relative import
+(`./`, `../`) that resolves to a real file inside this project's own tree, such as the design
+system's token accessor. Nothing else is a legal import.
 
 ## Minimal shape
 
@@ -108,9 +110,9 @@ advance itself. That is the runtime's shape, not a missing feature.
 
 ## What not to do
 
-See "Time and the sealed render" above for the determinism rule. No imports beyond
-`@termcraft/runtime` — see `runtime.d.ts` and this turn's system prompt for the exact
-allowlist.
+See "Time and the sealed render" above for the determinism rule. Legal imports are
+`@termcraft/runtime` and a relative import into this project's own tree, nothing else — see
+`runtime.d.ts` and this turn's system prompt for the exact allowlist.
 
 A colour prop bound to a token _name_ (`color="accent"`) no longer type-checks. Write
 `color={t.accent}`.
