@@ -20,6 +20,7 @@ import type {
   ChatHistoryMirror,
   ChatRecord,
   ChatsMirror,
+  DesignSystemMirror,
   ExportMirror,
   PreviewMirror,
   PreviewNoticeMirror,
@@ -104,6 +105,8 @@ export interface Mirror {
    * snapshot's `agentIdentity` field. `Workspace` reads this to drive every rendered identity
    * text (chip, presence, title, record header, status block) instead of a hardcoded literal. */
   readonly agentIdentity: Atom<AgentIdentity>;
+  /** The design-system picker slice (P10 task 10) — see {@link DesignSystemMirror}. */
+  readonly designSystems: Atom<DesignSystemMirror>;
   /** Applies one Kernel event, advancing every affected atom. */
   readonly apply: (envelope: AnyEventEnvelope) => void;
 }
@@ -119,6 +122,18 @@ const EMPTY_PROJECT: ProjectMirror = {
   trust: null,
   openFailure: null,
   opening: false,
+};
+/** The design-system picker's rest state — no source list, no preparation, no failure. */
+export const EMPTY_DESIGN_SYSTEM_MIRROR: DesignSystemMirror = {
+  phase: "idle",
+  sources: [],
+  update: null,
+  installId: null,
+  previewRef: null,
+  previewSummary: null,
+  preview: null,
+  failure: null,
+  publishedAt: null,
 };
 
 /** Upserts a keyed value into a copy of `source`, returning a new immutable map. */
@@ -285,6 +300,10 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
   );
   const exportAtom = atom<ExportMirror>(IDLE_EXPORT, "ui.mirror.export");
   const agentIdentity = atom<AgentIdentity>(null, "ui.mirror.agentIdentity");
+  const designSystemsAtom = atom<DesignSystemMirror>(
+    EMPTY_DESIGN_SYSTEM_MIRROR,
+    "ui.mirror.designSystems",
+  );
 
   /** Merges gate-progress content into the running turn; a no-op when no turn matches. */
   function applyTurnProgress(envelope: Extract<AnyEventEnvelope, { kind: "turn.progress" }>): void {
@@ -369,8 +388,11 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         chats.set({ activeChatId: payload.activeChatId, summaries: new Map() });
         agentIdentity.set(agentIdentityFromSnapshot(payload));
         // A fresh snapshot is the authoritative reset point; transient slices (turn, preview,
-        // selection, export, pins, diagnostics, history) are rebuilt from the events that follow
-        // it — there is no replay (§9), so a subscription started mid-turn simply starts idle.
+        // selection, export, pins, diagnostics, history, designSystems) are rebuilt from the
+        // events that follow it — there is no replay (§9), so a subscription started mid-turn
+        // simply starts idle. `KernelSnapshotPayloadV1` carries no design-system field (P10 adds
+        // none), so `designSystems` resets exactly like `turn`/`preview`/`export` rather than
+        // carrying a picker session across into a differently-scoped project.
         turn.set(IDLE_TURN);
         preview.set(NO_PREVIEW);
         selection.set(null);
@@ -379,6 +401,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         diagnostics.set(new Map());
         history.set(EMPTY_HISTORY);
         lastOlderPageFailure.set(null);
+        designSystemsAtom.set(EMPTY_DESIGN_SYSTEM_MIRROR);
         return;
       }
       case "kernel.capabilitiesChanged": {
@@ -782,6 +805,96 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
         });
         return;
       }
+      case "designSystem.listed": {
+        const p = envelope.payload;
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "listed",
+          sources: p.sources,
+          update: p.update,
+          failure: null,
+        });
+        return;
+      }
+      case "designSystem.listFailed": {
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "failed",
+          failure: envelope.payload.failure,
+        });
+        return;
+      }
+      case "designSystem.previewStarted": {
+        // Published BEFORE `runTree` is awaited (decision D7) — the picker paints "checking…"
+        // while the thread is about to freeze, not after. `sources`/`update` are left untouched:
+        // spreading the prior state is what keeps the picker's source list on screen behind the
+        // dialog that is about to open.
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "checking",
+          previewRef: envelope.payload.ref,
+          failure: null,
+        });
+        return;
+      }
+      case "designSystem.previewed": {
+        const p = envelope.payload;
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "previewed",
+          installId: p.installId,
+          previewRef: p.ref,
+          previewSummary: p.summary,
+          preview: p.preview,
+          failure: null,
+        });
+        return;
+      }
+      case "designSystem.previewFailed": {
+        const p = envelope.payload;
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "failed",
+          previewRef: p.ref,
+          failure: p.failure,
+        });
+        return;
+      }
+      case "designSystem.installed": {
+        // Clears the preparation the ledger just committed — never left around to be re-sent as
+        // a stale `installId` a later `designSystem.install` could name (task-9 brief).
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "idle",
+          installId: null,
+          previewRef: null,
+          previewSummary: null,
+          preview: null,
+          failure: null,
+        });
+        return;
+      }
+      case "designSystem.installFailed": {
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "failed",
+          failure: envelope.payload.failure,
+        });
+        return;
+      }
+      case "designSystem.published": {
+        const p = envelope.payload;
+        designSystemsAtom.set({ ...designSystemsAtom(), publishedAt: p.publishedAt });
+        return;
+      }
+      case "designSystem.publishFailed": {
+        designSystemsAtom.set({
+          ...designSystemsAtom(),
+          phase: "failed",
+          failure: envelope.payload.failure,
+        });
+        return;
+      }
       // Out-of-MVP-scope kinds (kernel.stateChanged is handled above for its own narrow
       // `kernel.project.state` exception ONLY — every other model/action stays advisory
       // until the typed snapshot lands, plan D6; restore/commit/migration are deferred;
@@ -810,6 +923,7 @@ export function createMirror(now: () => number = () => Date.now()): Mirror {
     diagnostics,
     export: exportAtom,
     agentIdentity,
+    designSystems: designSystemsAtom,
     apply,
   };
 }

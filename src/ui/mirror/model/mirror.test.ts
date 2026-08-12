@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import type { FailureDtoV1, UUIDv7 } from "core/protocol";
+import type { EventPayloadByKindV1, FailureDtoV1, UUIDv7 } from "core/protocol";
 import { uuidv7 } from "infrastructure/uuid";
 import { TEST_NONCE, TEST_SHA, TEST_TS, event, resetEventSeq, snapshot } from "ui/testing";
 
@@ -1926,5 +1926,172 @@ describe("chat history paging (chat-scroll spec §6.5)", () => {
       event("chat.changed", { activeChatId: uuidv7(), added: [], updated: [], removedChatIds: [] }),
     );
     expect(mirror.history()).toEqual({ records: [], prevCursor: null, totalRecordCount: 0 });
+  });
+});
+
+describe("mirror.apply — design systems (P10 task 10, project-design-systems §8.1-§8.5)", () => {
+  // NOTE ON THE BRIEF'S `envelope(...)` HELPER NAME: `ui/testing` exports this builder as
+  // `event(...)` (see `snapshot`/`event` above, and every other describe block in this file) —
+  // there is no separate `envelope` export. Divergence from the brief's snippet, reported.
+  const OP: UUIDv7 = uuidv7();
+  const FAILURE = failure();
+  const NOW = TEST_TS;
+
+  const LOCAL_LISTING: EventPayloadByKindV1["designSystem.listed"]["sources"][number] = {
+    sourceId: "local",
+    label: "Local library",
+    canPublish: true,
+    state: "listed",
+    systems: [],
+    reason: null,
+  };
+
+  const PREVIEWED_PAYLOAD: EventPayloadByKindV1["designSystem.previewed"] = {
+    operationId: OP,
+    installId: uuidv7(),
+    ref: "local:midnight@1.2.0",
+    summary: {
+      id: "midnight",
+      name: "Midnight",
+      version: "1.2.0",
+      kitApiVersion: 1,
+      defaultTheme: "dark-default",
+      defaultThemeTokens: [{ name: "bg", value: "#000000" }],
+      componentNames: ["Button"],
+    },
+    preview: { verdict: "clean", errors: [], warnings: [] },
+  };
+
+  type DesignSystemFailedKind =
+    | "designSystem.listFailed"
+    | "designSystem.previewFailed"
+    | "designSystem.installFailed"
+    | "designSystem.publishFailed";
+
+  /**
+   * Applies one `*Failed` event by literal kind, never through a shared generic call — `event`'s
+   * own `K extends EventKindV1` does not distribute over a call site typed as the WHOLE
+   * `DesignSystemFailedKind` union (`EventOf<K>` collapses to one non-distributed type there,
+   * `mirror.apply`'s `AnyEventEnvelope` parameter rejects it), so each branch below calls `event`
+   * with its own string literal, which DOES infer and distribute correctly.
+   */
+  function applyDesignSystemFailure(mirror: Mirror, kind: DesignSystemFailedKind): void {
+    if (kind === "designSystem.listFailed") {
+      mirror.apply(event("designSystem.listFailed", { operationId: OP, failure: FAILURE }));
+      return;
+    }
+    if (kind === "designSystem.previewFailed") {
+      mirror.apply(
+        event("designSystem.previewFailed", {
+          operationId: OP,
+          ref: "local:midnight@1.2.0",
+          failure: FAILURE,
+        }),
+      );
+      return;
+    }
+    if (kind === "designSystem.installFailed") {
+      mirror.apply(
+        event("designSystem.installFailed", {
+          operationId: OP,
+          ref: "local:midnight@1.2.0",
+          failure: FAILURE,
+        }),
+      );
+      return;
+    }
+    mirror.apply(
+      event("designSystem.publishFailed", { operationId: OP, sourceId: "local", failure: FAILURE }),
+    );
+  }
+
+  test("designSystem.listed fills the sources and the update offer in ONE transition", () => {
+    const mirror = createMirror();
+    mirror.apply(
+      event("designSystem.listed", { operationId: OP, sources: [LOCAL_LISTING], update: null }),
+    );
+    expect(mirror.designSystems()).toMatchObject({
+      phase: "listed",
+      sources: [LOCAL_LISTING],
+      update: null,
+    });
+  });
+
+  test("designSystem.previewStarted puts the picker into `checking` before the freeze", () => {
+    const mirror = createMirror();
+    mirror.apply(
+      event("designSystem.previewStarted", { operationId: OP, ref: "local:midnight@1.2.0" }),
+    );
+    expect(mirror.designSystems()).toMatchObject({
+      phase: "checking",
+      previewRef: "local:midnight@1.2.0",
+    });
+  });
+
+  test("designSystem.previewed carries the installId the install command needs", () => {
+    const mirror = createMirror();
+    mirror.apply(event("designSystem.previewed", PREVIEWED_PAYLOAD));
+    expect(mirror.designSystems()).toMatchObject({
+      phase: "previewed",
+      installId: PREVIEWED_PAYLOAD.installId,
+      preview: PREVIEWED_PAYLOAD.preview,
+    });
+  });
+
+  test("a previewed state keeps the source list — the picker must not blank behind the dialog", () => {
+    const mirror = createMirror();
+    mirror.apply(
+      event("designSystem.listed", { operationId: OP, sources: [LOCAL_LISTING], update: null }),
+    );
+    mirror.apply(event("designSystem.previewed", PREVIEWED_PAYLOAD));
+    expect(mirror.designSystems().sources).toEqual([LOCAL_LISTING]);
+  });
+
+  test("designSystem.installed clears the preparation so a stale installId can never be re-sent", () => {
+    const mirror = createMirror();
+    mirror.apply(event("designSystem.previewed", PREVIEWED_PAYLOAD));
+    mirror.apply(event("designSystem.installed", { operationId: OP, ref: "local:midnight@1.2.0" }));
+    expect(mirror.designSystems()).toMatchObject({
+      phase: "idle",
+      installId: null,
+      preview: null,
+    });
+  });
+
+  test("every *Failed event lands the failure and the `failed` phase", () => {
+    const kinds: readonly DesignSystemFailedKind[] = [
+      "designSystem.listFailed",
+      "designSystem.previewFailed",
+      "designSystem.installFailed",
+      "designSystem.publishFailed",
+    ];
+    for (const kind of kinds) {
+      const mirror = createMirror();
+      applyDesignSystemFailure(mirror, kind);
+      expect(mirror.designSystems()).toMatchObject({ phase: "failed", failure: FAILURE });
+    }
+  });
+
+  test("designSystem.published records publishedAt", () => {
+    const mirror = createMirror();
+    mirror.apply(
+      event("designSystem.published", {
+        operationId: OP,
+        ref: "local:midnight@1.2.0",
+        publishedAt: NOW,
+      }),
+    );
+    expect(mirror.designSystems().publishedAt).toBe(NOW);
+  });
+
+  test("a fresh kernel.snapshot resets the design-systems slice, like every other transient slice", () => {
+    const mirror = createMirror();
+    mirror.apply(
+      event("designSystem.listed", { operationId: OP, sources: [LOCAL_LISTING], update: null }),
+    );
+    expect(mirror.designSystems().phase).toBe("listed");
+    mirror.apply(snapshot());
+    expect(mirror.designSystems().phase).toBe("idle");
+    expect(mirror.designSystems().sources).toEqual([]);
   });
 });

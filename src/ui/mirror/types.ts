@@ -1,11 +1,15 @@
 import type {
   CommandKindV1,
+  DesignSystemPreviewDtoV1,
+  DesignSystemSummaryDtoV1,
+  DesignSystemUpdateDtoV1,
   DiagnosticDtoV1,
   EventPayloadByKindV1,
   FailureDtoV1,
   PageDescriptorV1,
   PinDtoV1,
   Sha256Hex,
+  SourceListingDtoV1,
   UUIDv7,
 } from "core/protocol";
 
@@ -252,6 +256,39 @@ export type ExportMirror =
       pageSlug: string | null;
       sizeBytes: number | null;
     }>;
+
+/**
+ * The design-system picker's own phase (P10 plan §10.1 Wave 3, task 10). Distinct from
+ * {@link ExportMirror}'s union-per-phase shape because the picker's fields do not partition
+ * cleanly by phase: `sources`/`update` must survive INTO `previewed` (the picker must not blank
+ * behind the breakage-preview dialog) and `installId`/`preview` must survive a later `failed`
+ * transition raised by an unrelated command (e.g. a `publish` failure while a preview is still
+ * held) — a discriminated union would force clearing fields a later event never touched. One
+ * flat shape lets every fold keep exactly what it did not learn about, mirroring the `TurnMirror`
+ * gate-retry field's "accumulate, never reset except on the event that means it" discipline.
+ */
+export type DesignSystemPhase =
+  | "idle"
+  | "listing"
+  | "listed"
+  | "checking"
+  | "previewed"
+  | "installing"
+  | "failed";
+
+/** The design-system picker slice — `designSystem.*`'s nine events fold into this (task 10). */
+export interface DesignSystemMirror {
+  readonly phase: DesignSystemPhase;
+  readonly sources: readonly SourceListingDtoV1[];
+  readonly update: DesignSystemUpdateDtoV1 | null;
+  /** Set once a preview lands; the install command needs it. */
+  readonly installId: string | null;
+  readonly previewRef: string | null;
+  readonly previewSummary: DesignSystemSummaryDtoV1 | null;
+  readonly preview: DesignSystemPreviewDtoV1 | null;
+  readonly failure: FailureDtoV1 | null;
+  readonly publishedAt: string | null;
+}
 
 /** The screen the app root mounts (phase-7 plan D6 — UI-derived until the typed snapshot lands). */
 export type ScreenKind = "home" | "trust-prompt" | "workspace" | "read-only" | "enlarge";
