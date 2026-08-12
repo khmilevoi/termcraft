@@ -93,6 +93,14 @@ export type {
 export { createFakeDesignSystemSource } from "./design-system-source";
 
 export type {
+  DesignSystemInstallFailableMethod,
+  FakeDesignSystemInstall,
+  FakeDesignSystemInstallCall,
+  RecordedDesignSystemInstallV1,
+} from "./design-system-install";
+export { createFakeDesignSystemInstall } from "./design-system-install";
+
+export type {
   DiagnosticsCacheCall,
   FakeDiagnosticsCache,
   FakePageMetaCache,

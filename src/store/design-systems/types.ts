@@ -117,12 +117,20 @@ export interface DesignSystemSummary {
  * `admission` is REQUIRED and has no default (design §8.3, §13): P10 hands in a budget over
  * `store/safe-fs`'s `createLimitBudget` at the fetch boundary, and a required field is what
  * makes forgetting it a compile error rather than an unbounded read.
+ *
+ * `admission` is a FACTORY, not an instance (fix for I1). `createDesignSourceAdmission`'s own
+ * doc comment already says "A FRESH BUDGET PER CALL, never a module-level singleton" — but the
+ * composition root used to call it exactly once and bind the resulting instance into this deps
+ * object for the shell's whole lifetime, so `fetch`/`publish` shared one cumulative budget across
+ * every call in the session. Taking the factory here, and calling it once per `fetch`/`publish`
+ * invocation (never per-file inside the loop those functions run), keeps every operation's
+ * aggregate count/bytes independent — exactly what the factory's contract already promised.
  */
 export interface LocalDesignSystemSourceDeps {
   /** The OS per-user termcraft state root that owns the design-system library (design §8.2). */
   readonly userStateRoot: AbsPath;
   readonly fs: DesignSystemFsDeps;
-  readonly admission: PackageAdmission;
+  readonly admission: () => PackageAdmission;
   readonly clock: Clock;
 }
 

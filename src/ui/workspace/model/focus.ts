@@ -15,7 +15,8 @@ export type OverlayKind =
   | "export"
   | "trust"
   | "tab-menu"
-  | "history";
+  | "history"
+  | "design-system";
 
 /**
  * The single widget that owns focus in the workspace.

@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 
+import { QuarantineFailedError } from "store/design-systems";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
+import { DesignSystemTreeDriftedError } from "store/model/factory";
 import {
   ChatMutationLockedError,
   SourceChangedError,
@@ -27,6 +29,27 @@ describe("toFailureDto — known store errors that must not reach the unmapped c
         path: "chats/chat-1.jsonl",
         offset: 42,
         reason: "invalid JSON",
+      });
+      const dto = toFailureDto(error);
+      expect(dto.code).toBe("PERSISTENCE_FAILED");
+      expect(dto.retryable).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("QuarantineFailedError (store/design-systems, M1) maps to PERSISTENCE_FAILED without the catch-all console.warn firing", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // An ordinary mkdir/write/read-back fault from `admitPackageThroughQuarantine`
+      // (`store/design-systems/model/quarantine.ts`) — never a limit refusal, which
+      // `store/adapters/design-system-install.ts`'s `quarantineFailureDto` intercepts before
+      // `toFailureDto` ever sees this error.
+      const error = new QuarantineFailedError({
+        stage: "stage",
+        path: "design-systems/quarantine/install-1/staging/design/system/tokens.ts",
+        reason: "ENOSPC: no space left on device",
       });
       const dto = toFailureDto(error);
       expect(dto.code).toBe("PERSISTENCE_FAILED");
@@ -82,6 +105,21 @@ describe("toFailureDto — known store errors that must not reach the unmapped c
       const error = new TurnAlreadyTerminalError({ turnId: "turn-1", targetChatId: "chat-1" });
       const dto = toFailureDto(error);
       expect(dto.code).toBe("PERSISTENCE_FAILED");
+      expect(dto.retryable).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe("toFailureDto — DesignSystemTreeDriftedError (I2 fix) gets its own distinguishable code", () => {
+  test("maps to DESIGN_SYSTEM_TREE_CHANGED, not the generic PERSISTENCE_FAILED bucket — the UI can tell this apart from every other durable fault", () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const error = new DesignSystemTreeDriftedError({});
+      const dto = toFailureDto(error);
+      expect(dto.code).toBe("DESIGN_SYSTEM_TREE_CHANGED");
       expect(dto.retryable).toBe(false);
       expect(warnSpy).not.toHaveBeenCalled();
     } finally {

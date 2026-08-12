@@ -1,5 +1,5 @@
 import type { FailureDtoV1 } from "core/protocol";
-import { PagesManifestInvalidError } from "entities/design-tree";
+import { DuplicateInventoryPathError, PagesManifestInvalidError } from "entities/design-tree";
 import { log } from "infrastructure/debug-log";
 import {
   DesignSystemPackageInvalidError,
@@ -8,6 +8,7 @@ import {
   DesignSystemRefRejectedError,
   DesignSystemSourceIoError,
   DuplicatePackageFileError,
+  QuarantineFailedError,
   SourcesConfigInvalidError,
 } from "store/design-systems";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
@@ -15,6 +16,7 @@ import { LeaseHeldError, LeaseIoError, LeaseUnavailableError } from "store/lease
 import { MigrationBackupFailedError, MigrationStaleError } from "store/migration";
 import { DesignTreeTooDeepError, PageEntryNotFoundError } from "store/model/design-tree-store";
 import {
+  DesignSystemTreeDriftedError,
   EntrySourceDriftedError,
   JsonlOpenError,
   ManifestDriftedError,
@@ -165,6 +167,17 @@ function isLeaseError(error: Error): boolean {
  * its own `RESOURCE_LIMIT_EXCEEDED` above. Everything else here is the same generic durable
  * read/write/decode fault every sibling on the `PERSISTENCE_FAILED` list is — the closed v1
  * union has no "design-system source" family of its own, and inventing one is forbidden.
+ *
+ * `QuarantineFailedError` (M1 fix) is included here too, though it is not itself a `SourceError`
+ * member: it is `store/design-systems`' OTHER tagged error, covering the mkdir/write/read-back
+ * faults `admitPackageThroughQuarantine` raises while staging a package (`quarantine.ts`). It is
+ * an ORDINARY, expected failure family, not a surprise — `store/adapters/design-system-install.ts`'s
+ * `quarantineFailureDto` already walks its `cause` chain for a `StorageLimitExceededError`/
+ * `DesignSystemPackageTooLargeError` BEFORE calling `toFailureDto`, so by the time one reaches
+ * here it is never a limit fault; the same generic `PERSISTENCE_FAILED` bucket every sibling
+ * above gets is correct. Without this line it fell through to the final "unmapped store error"
+ * branch below and logged a `console.warn` on every ordinary quarantine mkdir/write failure —
+ * this file's own header says a KNOWN store error must never reach that branch.
  */
 function isDesignSystemSourceError(error: Error): boolean {
   return (
@@ -173,7 +186,8 @@ function isDesignSystemSourceError(error: Error): boolean {
     error instanceof DesignSystemRefRejectedError ||
     error instanceof DesignSystemPublishRefusedError ||
     error instanceof SourcesConfigInvalidError ||
-    error instanceof DuplicatePackageFileError
+    error instanceof DuplicatePackageFileError ||
+    error instanceof QuarantineFailedError
   );
 }
 
@@ -307,6 +321,43 @@ export function toFailureDto(error: Error): FailureDtoV1 {
   if (error instanceof DesignTreeTooDeepError) {
     return {
       code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `assertDesignTreeNotDrifted` (`store/model/factory.ts`, I2 fix): the same tree-relative path
+   * was listed twice while re-walking `design/` for `installDesignSystem`'s drift check — the
+   * identical fault `core/project/model/tree-index.ts`'s `readCanonicalTreeIndex` refuses as
+   * `PERSISTENCE_FAILED` for the same reason there (`entities/design-tree`'s own
+   * `createDesignTreeInventory` refuses rather than silently picking one of two byte images). Not
+   * itself a drift signal — the closed v1 union has no dedicated "inconsistent inventory" code.
+   */
+  if (error instanceof DuplicateInventoryPathError) {
+    return {
+      code: "PERSISTENCE_FAILED",
+      retryable: false,
+      safeMessage: safeMessageOf(error),
+      details: {},
+    };
+  }
+
+  /**
+   * `TransactionEngine.installDesignSystem()` (I2 fix): the whole design tree
+   * `core/design-systems/model/install.ts`'s Gate pass ran over at preview time drifted before
+   * the commit — `DesignSystemTreeDriftedError`'s own doc comment (`store/model/factory.ts`)
+   * explains why the comparison is whole-tree rather than `system/`-scoped. Gets its OWN code
+   * (`DESIGN_SYSTEM_TREE_CHANGED`) rather than folding into `APPLY_SOURCE_CHANGED`: that code's
+   * `part` is a kernel-command-contract §11.2-fixed, closed `"page" | "manifest"` vocabulary for a
+   * TURN's own CAS conflict, and a whole-design-tree drift scoped to design-system installs is
+   * neither — the UI needs a code it can recognize to say "the tree changed, redo the preview",
+   * not a bucket shared with an unrelated turn-commit race.
+   */
+  if (error instanceof DesignSystemTreeDriftedError) {
+    return {
+      code: "DESIGN_SYSTEM_TREE_CHANGED",
       retryable: false,
       safeMessage: safeMessageOf(error),
       details: {},

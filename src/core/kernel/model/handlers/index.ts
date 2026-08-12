@@ -3,6 +3,7 @@ import type { CommandEnvelopeV1, CommandKindV1 } from "core/protocol";
 
 import { chatHandlers } from "./chat";
 import { type DeferredHandlerKind, deferredHandlers } from "./deferred";
+import { designSystemHandlers } from "./design-system";
 import { pageHandlers, pinHandlers } from "./page-pin";
 import { exportHandlers, previewHandlers } from "./preview-export";
 import { projectHandlers } from "./project";
@@ -137,6 +138,12 @@ type MigrationPostMvpKind = Exclude<
   | "page.reorder"
   | "pin.create"
   | "pin.setStatus"
+  // project-design-systems Wave 3 / P10 (task 9): the four `designSystem.*` kinds are real,
+  // landed handlers (`./design-system.ts`) — not post-MVP.
+  | "designSystem.list"
+  | "designSystem.preview"
+  | "designSystem.install"
+  | "designSystem.publish"
 >;
 
 /**
@@ -165,14 +172,15 @@ const migrationPostMvpHandlers: CommandHandlerMap<MigrationPostMvpKind> = {
 };
 
 /**
- * The complete, 44-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the six landed
- * families' maps (30: `chatHandlers` 3, `selectionHandlers` 2, `modelHandlers` 1,
+ * The complete, 48-kind `TotalHandlerMap`: `deferredHandlers` (10, real) + the seven landed
+ * families' maps (34: `chatHandlers` 3, `selectionHandlers` 2, `modelHandlers` 1,
  * `projectHandlers` 5, `previewHandlers` 9, `exportHandlers` 1, `turnHandlers` 2,
- * `pageHandlers` 5, `pinHandlers` 2) + `migrationPostMvpHandlers` (4, deliberately
- * post-MVP: `migration.*` — see this file's own header for why, not merely "not yet
- * built"). The `satisfies` clause below is the compile-time exhaustiveness check the
- * task brief requires — remove, rename, or add a `CommandKindV1` member without updating one
- * of these maps and this line stops compiling; it is never a runtime surprise.
+ * `pageHandlers` 5, `pinHandlers` 2, `designSystemHandlers` 4 — project-design-systems Wave 3 /
+ * P10, task 9) + `migrationPostMvpHandlers` (4, deliberately post-MVP: `migration.*` — see this
+ * file's own header for why, not merely "not yet built"). The `satisfies` clause below is the
+ * compile-time exhaustiveness check the task brief requires — remove, rename, or add a
+ * `CommandKindV1` member without updating one of these maps and this line stops compiling; it
+ * is never a runtime surprise.
  */
 export const totalHandlers = {
   ...deferredHandlers,
@@ -185,6 +193,7 @@ export const totalHandlers = {
   ...turnHandlers,
   ...pageHandlers,
   ...pinHandlers,
+  ...designSystemHandlers,
   ...migrationPostMvpHandlers,
 } satisfies TotalHandlerMap;
 

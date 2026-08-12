@@ -7,7 +7,9 @@ import { z } from "zod";
  * transition-table entry, and contract tests".
  *
  * The list is transcribed verbatim from §8.1 in its declared order. Its length is
- * asserted at 44 by the closure test so a member cannot be silently added or dropped.
+ * asserted at 48 by the closure test so a member cannot be silently added or dropped.
+ * (44 -> 48, project-design-systems §8.1/§10.1 Wave 3 / P10: the four `designSystem.*`
+ * commands below.)
  *
  * `CapabilityId` is exactly this union (§10.1) — the identity is enforced as a
  * compile-time check in `core/capabilities`, not restated as a second list.
@@ -57,6 +59,14 @@ export const COMMAND_KINDS_V1 = [
   "migration.confirm",
   "migration.discardPlan",
   "migration.retryRecovery",
+  // project-design-systems §8.1/§10.1 Wave 3 / P10: the picker overlay's four commands,
+  // modelled on `export.start`'s single-command-family shape. Appended after the closed
+  // §8.1 union rather than interleaved, matching how `chat.load-older` was appended for the
+  // chat-scroll spec.
+  "designSystem.list",
+  "designSystem.preview",
+  "designSystem.install",
+  "designSystem.publish",
 ] as const;
 
 export type CommandKindV1 = (typeof COMMAND_KINDS_V1)[number];
@@ -68,8 +78,14 @@ export type CommandKindV1 = (typeof COMMAND_KINDS_V1)[number];
  * read, because it crosses the same guard/capability boundary every other chat operation
  * does, and its answer travels as an event for the same reason `chat.records` does —
  * `AcceptedCommandV1` is a closed object with no payload slot.
+ *
+ * 44 -> 48 (project-design-systems §8.1/§10.1 Wave 3 / P10): `designSystem.list`/`preview`/
+ * `install`/`publish` drive the picker overlay — listing configured sources, previewing an
+ * installable candidate through quarantine -> immutable candidate -> whole-tree Gate,
+ * committing a previously previewed preparation, and publishing the project's own system
+ * back to a source. Modelled on `export.start`'s `launchOperation` shape.
  */
-export const COMMAND_KIND_COUNT = 44;
+export const COMMAND_KIND_COUNT = 48;
 
 const COMMAND_KIND_SET: ReadonlySet<string> = new Set(COMMAND_KINDS_V1);
 
@@ -101,6 +117,8 @@ export const COMMAND_FAMILIES_V1 = [
   "commit",
   "export",
   "migration",
+  // project-design-systems §8.1/§10.1 Wave 3 / P10.
+  "designSystem",
 ] as const;
 
 export type CommandFamilyV1 = (typeof COMMAND_FAMILIES_V1)[number];

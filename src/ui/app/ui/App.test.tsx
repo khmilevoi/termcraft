@@ -953,6 +953,129 @@ describe("App (end-to-end, FakeKernel-driven)", () => {
     expect(dismissed).not.toContain("export failed");
   });
 
+  // P10 task 13, fix round 1 CRITICAL: this file had zero render-level coverage of the
+  // `overlay === "design-system"` branch — component selection, `canPublishSelected`/`updateNote`
+  // derivation, and (fix round 1 Important 1) the busy-verb wiring that used to read "installing"
+  // during D7's own CHECK, before the user had even confirmed anything.
+  test("renders the design-system picker with its rows, the publish hint, and the update note", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      kernel.emit(
+        event("designSystem.listed", {
+          operationId: uuidv7(),
+          sources: [
+            {
+              sourceId: "local",
+              label: "Local library",
+              canPublish: true,
+              state: "listed",
+              systems: [
+                {
+                  id: "midnight",
+                  name: "midnight",
+                  version: "1.2.0",
+                  kitApiVersion: 1,
+                  defaultTheme: "dark",
+                  defaultThemeTokens: [],
+                  componentNames: [],
+                },
+              ],
+              reason: null,
+            },
+          ],
+          update: {
+            installedRef: "local:midnight@1.1.0",
+            availableRef: "local:midnight@1.2.0",
+            reason: "a newer version is available",
+          },
+        }),
+      );
+      deps.local.overlay.set("design-system");
+      deps.local.designSystemSelection.set(0);
+    });
+    const frame = await renderer.waitForFrame((output) => output.includes("design systems"));
+    // Row content — `designSystemRows`/`canPublishSelected` actually reached the component.
+    expect(frame).toContain("midnight");
+    expect(frame).toContain("publish");
+    // `updateNote`, formatted by `App.tsx` from the mirror's own `update` field.
+    expect(frame).toContain("local:midnight@1.2.0 is available");
+  });
+
+  test("the picker itself is busy while listing (P10 task 13, mirror contract: no listStarted event exists)", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      deps.local.overlay.set("design-system");
+      // The exact optimistic write `intent.ts`'s `open-design-systems` effect performs, at the
+      // exact moment it performs it — no `designSystem.listed` has landed yet.
+      deps.mirror.designSystems.set({
+        ...deps.mirror.designSystems(),
+        phase: "listing",
+      });
+    });
+    const frame = await renderer.waitForFrame((output) => output.includes("design systems"));
+    expect(frame).toContain("checking");
+    expect(frame).not.toContain("⏎ install");
+  });
+
+  // Fix round 1, Important 1: `"checking"` (D7's Gate-freeze window, BEFORE the user has confirmed
+  // anything) and `"installing"` (after the confirm dispatched `designSystem.install`) are both
+  // `kind === "install"` — the dialog used to read "⠹ installing…" for BOTH, which is factually
+  // wrong during the check. This is the exact `App.tsx` wiring (`designSystemBusyPhaseFor`), not
+  // just the component in isolation (already covered by `DesignSystemInstallPrompt.test.tsx`).
+  test("the install confirm reads 'checking' during the Gate pass and 'installing' only after the user confirmed", async () => {
+    const kernel = createFakeKernel();
+    const deps = createUiDeps(kernel, { w: 120, h: 36 });
+    const renderer = await createReactTestRenderer(<App deps={deps} />, {
+      width: 120,
+      height: 36,
+    });
+    open = renderer;
+    await renderer.act(() => {
+      kernel.emit(workspaceSnapshot());
+      deps.local.overlay.set("design-system");
+      deps.local.designSystemPrompt.set("install");
+      // The exact optimistic write `designSystem.previewStarted`'s own mirror fold performs (D7:
+      // published BEFORE the Gate runs) — no `designSystem.previewed` has landed yet, so `preview`
+      // is still `null`.
+      deps.mirror.designSystems.set({
+        ...deps.mirror.designSystems(),
+        phase: "checking",
+        previewRef: "local:midnight@1.2.0",
+      });
+    });
+    const checkingFrame = await renderer.waitForFrame((output) => output.includes("checking"));
+    expect(checkingFrame).toContain("⠹ checking…");
+    expect(checkingFrame).not.toContain("installing");
+
+    await renderer.act(() => {
+      // The exact optimistic write `applyIntent`'s `design-system-activate` performs once the
+      // user confirms a landed, non-blocked preview.
+      deps.mirror.designSystems.set({
+        ...deps.mirror.designSystems(),
+        phase: "installing",
+        installId: uuidv7(),
+        preview: { verdict: "clean", errors: [], warnings: [] },
+      });
+    });
+    const installingFrame = await renderer.waitForFrame((output) => output.includes("installing"));
+    expect(installingFrame).toContain("⠹ installing…");
+    expect(installingFrame).not.toContain("checking");
+  });
+
   test("passes read-only state into the workspace presentation", async () => {
     const kernel = createFakeKernel();
     kernel.setSnapshot({

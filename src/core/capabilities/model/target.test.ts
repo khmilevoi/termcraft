@@ -148,6 +148,46 @@ function buildCases(): readonly Case[] {
     });
   }
 
+  // --- the four designSystem.* null-target kinds (project-design-systems Wave 3 / P10,
+  // scope escape — see `target.ts`'s matching row comment) -------------------------------
+  cases.push({
+    kind: "designSystem.list",
+    payload: {},
+    expectedTarget: null,
+    forbiddenSentinels: [],
+    forbiddenKeys: [],
+  });
+  {
+    const ref = sentinel("designSystem.preview.ref");
+    cases.push({
+      kind: "designSystem.preview",
+      payload: { ref },
+      expectedTarget: null,
+      forbiddenSentinels: [ref],
+      forbiddenKeys: [],
+    });
+  }
+  {
+    const installId = uuidv7();
+    cases.push({
+      kind: "designSystem.install",
+      payload: { installId },
+      expectedTarget: null,
+      forbiddenSentinels: [installId],
+      forbiddenKeys: [],
+    });
+  }
+  {
+    const sourceId = sentinel("designSystem.publish.sourceId");
+    cases.push({
+      kind: "designSystem.publish",
+      payload: { sourceId },
+      expectedTarget: null,
+      forbiddenSentinels: [sourceId],
+      forbiddenKeys: [],
+    });
+  }
+
   // --- project.retryOpen: fully copied, closed discriminated union -----------------
   {
     const restoreActionId = uuidv7();
@@ -514,10 +554,10 @@ function buildCases(): readonly Case[] {
 const cases = buildCases();
 
 describe("capabilityTargetExtractors — §10.1 exhaustive security property", () => {
-  test("the case table covers all 44 command kinds, each exactly once", () => {
+  test("the case table covers all 48 command kinds, each exactly once", () => {
     const kinds = cases.map((c) => c.kind).sort();
     expect(kinds).toEqual([...COMMAND_KINDS_V1].sort());
-    expect(new Set(kinds).size).toBe(44);
+    expect(new Set(kinds).size).toBe(48);
   });
 
   test("test self-check: every forbidden sentinel really is present in its own payload", () => {

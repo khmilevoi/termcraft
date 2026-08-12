@@ -146,7 +146,17 @@ function classifyProject(components: readonly string[]): ManagedNamespace | null
   if (first === undefined) return null;
 
   if (components.length === 1) {
-    if (first === "project.toml" || first === "workspace.local.toml" || first === ".gitignore")
+    // `design-system-source.json` is the project's provenance record (project-design-systems
+    // §8.5): the `source:system@version` its design system came from, plus that package's content
+    // hash. Portable and Git-tracked like `project.toml`, but versioned by its OWN `schemaVersion`
+    // rather than by `format_version`, so it needs no migration step and its absence simply means
+    // "this project's design system came from the compiled seed, not from a source".
+    if (
+      first === "project.toml" ||
+      first === "workspace.local.toml" ||
+      first === ".gitignore" ||
+      first === "design-system-source.json"
+    )
       return "project-config";
     return null;
   }

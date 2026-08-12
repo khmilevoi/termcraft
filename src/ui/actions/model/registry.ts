@@ -339,6 +339,33 @@ export const UI_ACTIONS: readonly UiActionEntry[] = [
       inert: true,
     },
   },
+  {
+    // DESIGN EXTENSION (D8, P10 plan): the design-system picker is itself a flagged design GAP —
+    // none of the 27 `.dc.html` screens or design's own `commandRegistry()` covers browsing or
+    // installing a design system at all, so there is no mock invocation to transcribe (see
+    // `ui/popups/model/design-system-picker.ts`'s own header comment for the full record). A
+    // slash command is the same reachability mechanism every other overlay in this table gets;
+    // unlike `page.prev`/`page.next` above, no hotkey is bound, because design draws no key
+    // vocabulary here to extend — nothing beyond the mechanism itself is invented.
+    //
+    // `order: 7.5`, not a renumber of the seven design rows or `/exit`: it sorts right before the
+    // trailing `/exit` row without disturbing any of design's own literal order values (the
+    // point `/exit`'s own comment just below still makes about ITS `order: 8`).
+    id: "design-system.open",
+    execution: { kind: "local", effect: "open-design-systems" },
+    slash: {
+      cmd: "/design-systems",
+      desc: "browse and install design systems",
+      order: 7.5,
+      // The row IS the reachability path to `designSystem.list` (opening the overlay dispatches
+      // it immediately, `intent.ts`'s `open-design-systems` effect) — unlike `/chats`, whose own
+      // `command.capability` is `null` because switching is a SEPARATE command dispatched later
+      // from the popup, this row's local action and its capability are the same operation, so no
+      // `slashRowState` special case is needed the way `/chats` gets one.
+      capability: "designSystem.list",
+      screens: ["workspace"],
+    },
+  },
   // `/exit`'s SHAPE — cmd, desc, order-8 (trailing) position, `home:true`, no `lock` (turn-safe)
   // — comes straight from design's own `commandRegistry()` (`design/termcraft-engine.js:934`:
   // `{cmd:'/exit', desc:'quit termcraft', home:true}`). CORRECTED, phase-8 Task 17 review fix

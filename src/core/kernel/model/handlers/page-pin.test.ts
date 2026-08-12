@@ -23,6 +23,8 @@ import {
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDesignStore,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -61,7 +63,12 @@ import type { Clock } from "infrastructure/clock";
 
 import type { KernelDeps } from "../../types";
 import { pageHandlers, pinHandlers } from "./page-pin";
-import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
+import {
+  type HandlerContext,
+  type PreviewSourceKindV1,
+  type ProjectTrustV1,
+  createDesignSystemInstallLedger,
+} from "./types";
 
 /**
  * `page-pin.ts`'s own test suite (kernel-assembly WP-1 task 9, Step C2 — the `page`+`pin`
@@ -168,6 +175,7 @@ function buildTestContext(options?: {
     });
     const mutex = createFakeProjectWriteCoordinator();
     const chatStore = createFakeChatStore({ clock });
+    const designSystemPorts = createFakeDesignSystemInstall();
 
     const deps: KernelDeps = {
       projectStore,
@@ -192,6 +200,14 @@ function buildTestContext(options?: {
       exportPublish: createFakeExportPublish(),
       agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
       agentPromptSource: createFakeAgentPromptSource(),
+      designSystemSource: createFakeDesignSystemSource({
+        id: "local",
+        label: "Local library",
+        canPublish: true,
+      }),
+      designSystemQuarantine: designSystemPorts,
+      designSystemInstall: designSystemPorts,
+      designSystemIsGranted: () => Promise.resolve(true),
       clock,
     };
 
@@ -270,6 +286,7 @@ function buildTestContext(options?: {
       frameTokenLedger,
       geometryTokenLedger,
       pageRemovePlanLedger: createPageRemovePlanLedger(),
+      designSystemLedger: createDesignSystemInstallLedger(deps.designSystemQuarantine),
     };
 
     return {

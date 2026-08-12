@@ -478,6 +478,38 @@ const migrationRetryRecoveryPayloadSchema = z.strictObject({
   migrationActionId: uuidv7Schema,
 });
 
+// ---------------------------------------------------------------------------
+// designSystem.list / preview / install / publish (project-design-systems §8.1/§10.1
+// Wave 3 / P10) — the picker overlay's four commands, modelled on `export.start`.
+// ---------------------------------------------------------------------------
+
+/** `designSystem.list`: empty, matching `export.start`/`chat.create`'s own "no input" shape. */
+const designSystemListPayloadSchema = z.strictObject({});
+
+/**
+ * `designSystem.preview`: the canonical `source:system@version` reference text
+ * (`entities/design-system-ref`'s `formatDesignSystemRef`/`parseDesignSystemRef` own that
+ * format; this schema only checks non-empty — the real parse, and its failure, happen in the
+ * Kernel handler so a malformed ref becomes a real `designSystem.previewFailed`, never a
+ * decode-time protocol error indistinguishable from a client bug).
+ */
+const designSystemPreviewPayloadSchema = z.strictObject({
+  ref: z.string().min(1),
+});
+
+/**
+ * `designSystem.install`: `installId`, a previously previewed preparation's id. Decision D4
+ * fixes it as a UUIDv7 minted by `prepareDesignSystemInstall`'s `newInstallId()`.
+ */
+const designSystemInstallPayloadSchema = z.strictObject({
+  installId: uuidv7Schema,
+});
+
+/** `designSystem.publish`: the configured source's id to publish the project's own system to. */
+const designSystemPublishPayloadSchema = z.strictObject({
+  sourceId: z.string().min(1),
+});
+
 /**
  * The closed `CommandPayloadByKindV1` schema map (§8.2). `satisfies` (not a type
  * annotation) checks completeness/no-excess against `CommandKindV1` while keeping each
@@ -529,6 +561,10 @@ export const commandPayloadSchemas = {
   "migration.confirm": migrationConfirmPayloadSchema,
   "migration.discardPlan": migrationDiscardPlanPayloadSchema,
   "migration.retryRecovery": migrationRetryRecoveryPayloadSchema,
+  "designSystem.list": designSystemListPayloadSchema,
+  "designSystem.preview": designSystemPreviewPayloadSchema,
+  "designSystem.install": designSystemInstallPayloadSchema,
+  "designSystem.publish": designSystemPublishPayloadSchema,
 } satisfies Readonly<Record<CommandKindV1, z.ZodType>>;
 
 /**

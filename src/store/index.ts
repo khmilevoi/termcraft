@@ -171,10 +171,17 @@ export {
   LOCAL_SOURCE_ID,
   LOCAL_SOURCE_LABEL,
   SourcesConfigInvalidError,
+  createDesignSourceAdmission,
   createLocalDesignSystemSource,
   designSystemContentHash,
+  designSystemsRoot,
+  localLibraryDir,
   nodeDesignSystemFsDeps,
   readSourcesConfig,
   writeSourcesConfig,
 } from "./design-systems";
 export { createDesignSystemSourceAdapter } from "./adapters/design-system-source";
+export {
+  createDesignSystemInstallAdapter,
+  createDesignSystemQuarantineAdapter,
+} from "./adapters/design-system-install";

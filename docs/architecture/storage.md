@@ -8,6 +8,7 @@ and their recovery boundaries.
 flowchart TB
     subgraph tc[".termcraft/ — one folder, one project"]
         proj["project.toml — format_version 3 · project_id · name · created_at · target_stack"]
+        dssrc["design-system-source.json — OPTIONAL, schemaVersion 1<br/>source:system@version + content hash · absent means no recorded source"]
         gi[".gitignore — generated hard exclusions"]
         subgraph pg["design/ — the canonical authored tree"]
             manifest["pages.json — ordered slug to entry bindings + requested active page"]
@@ -226,10 +227,20 @@ flowchart TB
     carries a content hash — a domain-separated sha256 over the package's file set — beside its
     `source:system@version` key, so a republished version is caught rather than assumed away.
     The library sits outside every project for the same reason the trust ledger does: a
-    repository can copy a reference but cannot copy the bytes it was verified against. Only the
-    `local` source and its adapter exist today (`store/design-systems/`); the install pipeline,
-    quarantine, the breakage preview, the picker UI, the provenance record, and the update check
-    are P10 work and nothing here is wired into the composition root yet.
+    repository can copy a reference but cannot copy the bytes it was verified against. The
+    `local` source and its adapter, the install pipeline, quarantine, the breakage preview, the
+    picker UI, the provenance record, and the update check have all landed and are wired into the
+    composition root (project-design-systems §8.3–§8.5, §10.1 Wave 3 / P10) — see
+    [flows/design-system-install.md](flows/design-system-install.md). A crash mid-install cannot
+    leave a half-replaced system: `design/system/**` and the provenance record commit together in
+    ONE recoverable `runProjectMutation("design-system-install")` transaction (decision D11), so
+    the same crash-recovery guarantees every other project mutation carries apply here too — a
+    crash before the transaction's `intent.json` leaves the project byte-identical, and a crash
+    after it is rolled forward by the recovery scan `openProject` already runs. The provenance
+    record itself, `.termcraft/design-system-source.json` (decision D1), is portable and Git-
+    tracked like `project.toml` but versioned by its OWN `schemaVersion` rather than by
+    `format_version`, so it needs no migration step; its absence means "this project's design
+    system came from the compiled seed", never an error.
 17. **Export.** `export/` is derived and may be committed by `/commit-all`.
     `ExportPublishTransaction` assembles and verifies an immutable generation under
     `generations/<generationId>/`, including `runtime-api.json`, then replaces
@@ -443,10 +454,15 @@ flowchart TB
   Stored records follow the same kind split as `subject.ts` above — project records
   are still written with no `kind` field, source records carry `kind: "source"` —
   and each kind refuses the other on read, so a wrong-kind record grants nothing.
-  Enforcing "an unrecorded remote source is never queried" in the code that
-  instantiates a configured source, and widening `core/ports/trust.ts` to source
-  subjects, are both P10 work — the store-side ledger capability is complete, but it
-  has no `core`-side caller yet; the built-in `local` source needs no grant
+  "An unrecorded remote source is never queried" is now enforced (P10, decision D9):
+  `core/design-systems/model/sources.ts`'s `listGrantedSources` never calls `list()`
+  on a source its `isGranted` callback refuses, and
+  `src/entrypoint/model/create-shell.ts` supplies that callback, closed over the one
+  `designSystemSource` composed today. The built-in `local` source is granted
+  WITHOUT a prompt on first use (it is the designer's own directory under their own
+  `userStateRoot`) but the grant is still RECORDED through `trustStore.grantSource`,
+  so the ledger stays the single authority on what was decided and a later kind or
+  path change is a fresh decision, exactly like every other source
 - `src/store/sandbox/model/staging-store.ts` — item 15: `createTurnWorkspace`,
   the create-new turn directory, design-tree/runtime-doc staging (every tree file
   copied at the SAME tree-relative path, which is what makes an import specifier
@@ -477,6 +493,51 @@ flowchart TB
 - `src/store/adapters/design-system-source.ts` — item 16: the production
   `core/ports/design-system-source.ts` adapter over the module above, mapping every
   `SourceError` onto `FailureDtoV1` (`store/adapters/failure.ts`)
+- `src/store/design-systems/model/admission.ts` — item 16 (P10, decision D2):
+  `createDesignSourceAdmission`, the real `PackageAdmission` a `fetch` boundary
+  admits an untrusted package's declared size/depth against, built over
+  `store/safe-fs`'s `createLimitBudget("workspace")` — the same budget row
+  quarantine's own candidate snapshot applies (`design-source`: 512 files, 64 MiB
+  aggregate, depth 8, 2 MiB per file)
+- `src/store/design-systems/model/quarantine.ts` — item 16 (P10, decision D4):
+  `admitPackageThroughQuarantine`/`discardQuarantine`. Materializes a fetched
+  package's bytes under `{userStateRoot}/design-systems/quarantine/<installId>/`
+  (a UUIDv7, create-new via `mkdirNew` so a collision is a fault, not a silent
+  reuse) at `staging/design/system/<packageRelPath>` — the `design/` prefix is
+  load-bearing, it is what makes `classifyNamespace("workspace", …)` return
+  `design-source` so the real limit budget applies with no new namespace — then
+  calls `store/safe-fs`'s `snapshotToCandidate` to enumerate and admit the whole
+  staging tree against that budget and the no-follow walk BEFORE creating the
+  candidate directory at all, and reads the resulting immutable candidate's bytes
+  back EXACTLY ONCE (decision D5 — the same read feeds both the Gate and the
+  install transaction; the staging tree and the fetched package are never read
+  again)
+- `src/store/design-systems/model/provenance.ts` — item 16 (P10, decision D1):
+  `encodeDesignSystemProvenance`/`decodeDesignSystemProvenance`, the
+  `DesignSystemProvenanceV1` schema (`schemaVersion`, `ref` stored as its
+  canonical `source:system@version` text, `contentHash`, `installedAt`) at
+  `DESIGN_SYSTEM_PROVENANCE_FILENAME` (`design-system-source.json`)
+- `src/store/safe-fs/model/limits.ts` — item 16 (P10, decision D1): `classifyProject`
+  admits `design-system-source.json` as a fourth top-level `.termcraft` file,
+  classified `project-config` alongside `project.toml`/`workspace.local.toml`/
+  `.gitignore`
+- `src/store/adapters/design-system-install.ts` — item 16 (P10):
+  `createDesignSystemQuarantineAdapter`/`createDesignSystemInstallAdapter`, the
+  production `core/ports/design-system-install.ts` port pair over quarantine
+  above and `TransactionEngine.installDesignSystem` below; a `StorageLimitExceededError`
+  found anywhere in a `QuarantineFailedError`'s `cause` chain maps to
+  `RESOURCE_LIMIT_EXCEEDED` rather than the generic `toFailureDto` mapping
+- `src/store/transaction/model/wrappers.ts` — item 16 (P10, decision D11):
+  `"design-system-install"` — the newest `ProjectMutationKind`, appended without
+  disturbing any earlier kind's meaning — and
+  `buildDesignSystemInstallOperations`, which folds every `nextFiles` entry
+  (`replace`) and `removedTreeRelPaths` entry (`delete`) plus one `replace` for
+  the provenance record into a single `TransactionOperation` list, refusing any
+  path `isInsideDesignSystem` does not accept
+- `src/store/model/factory.ts` — item 16 (P10): `TransactionEngine.installDesignSystem`
+  wraps `buildDesignSystemInstallOperations` in `runProjectMutation` under the
+  project's write mutex, so `design/system/**` and the provenance record commit
+  together or not at all
 - `src/core/export/model/package.ts` — item 17: `assembleExportPackage`, the
   in-memory export file list — `design-prompt.md`, `runtime-api.json`, the WHOLE
   canonical tree once under `design/<treeRelPath>`, one `closures/<slug>.json` per

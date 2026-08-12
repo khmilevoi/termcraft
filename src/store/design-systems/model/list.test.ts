@@ -56,7 +56,7 @@ function depsFor(root: string, inner = nodeDesignSystemFsDeps) {
   return {
     userStateRoot: root,
     fs: inner,
-    admission: allowAllPackageAdmission,
+    admission: () => allowAllPackageAdmission,
     clock: systemClock,
   };
 }

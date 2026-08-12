@@ -4,6 +4,9 @@ import type {
   AgentRegistry,
   ChatMutations,
   ChatReader,
+  DesignSystemInstallPort,
+  DesignSystemQuarantinePort,
+  DesignSystemSource,
   DesignTreeReader,
   DiagnosticsCache,
   ExportPublishPort,
@@ -93,6 +96,32 @@ export interface KernelDeps {
    * installed package, no I/O beyond an existence check).
    */
   readonly agentPromptSource: AgentPromptSource;
+  /**
+   * The three `designSystem.*` port fields (project-design-systems §8.1/§8.3/§8.5 Wave 3 /
+   * P10, task-9 brief: "`KernelDeps` gains exactly three fields, one per `core/ports`
+   * contract") — `core/design-systems/model/install.ts`'s pipeline is threaded through
+   * `handlers/design-system.ts` exactly the way `gateRunner`/`hostSupervisor`/... already are.
+   * The composition root (Task 14) supplies the real adapters over `store/design-systems` and
+   * `store`'s `TransactionEngine`; `core/ports/fakes/design-system-*.ts` are the doubles this
+   * task's own tests use until then.
+   */
+  readonly designSystemSource: DesignSystemSource;
+  readonly designSystemQuarantine: DesignSystemQuarantinePort;
+  readonly designSystemInstall: DesignSystemInstallPort;
+  /**
+   * A FOURTH field beyond the brief's literal "exactly three" (task-9 divergence, stated here
+   * loudly): the trust seam. `core/ports`' `TrustGate` does not carry
+   * `buildSourceSubject`/`isSourceGranted`/`grantSource` (those live on `store/trust`'s
+   * `TrustStore`, and `core` may not import `store`) — decision D9 and this plan's own
+   * carry-forward note both say the grant check is "an injected `isGranted` callback" that
+   * "Task 14 supplies... at the composition root", and instruct this task to "Thread the
+   * callback through your handlers' deps." A callback is not one of the three `core/ports`
+   * CONTRACTS the brief counted, so it is declared as a fourth, plain (non-port) `KernelDeps`
+   * field rather than silently omitted or reached for via `store/trust` (forbidden). `local`'s
+   * own no-prompt auto-grant (D9) is a property of what THIS callback resolves to for the
+   * `local` source, not a special case this type needs to know about.
+   */
+  readonly designSystemIsGranted: (source: DesignSystemSource) => Promise<boolean>;
   readonly clock: Clock;
 }
 

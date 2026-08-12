@@ -55,10 +55,10 @@ describe("isDeferredCapabilityKind", () => {
     }
   });
 
-  test("is false for every one of the other 34 kinds", () => {
+  test("is false for every one of the other 38 kinds", () => {
     const deferredSet = new Set(EXPECTED_DEFERRED_KINDS);
     const nonDeferred = COMMAND_KINDS_V1.filter((kind) => !deferredSet.has(kind));
-    expect(nonDeferred.length).toBe(34);
+    expect(nonDeferred.length).toBe(38);
     for (const kind of nonDeferred) {
       expect(isDeferredCapabilityKind(kind), `${kind} should not be deferred`).toBe(false);
     }

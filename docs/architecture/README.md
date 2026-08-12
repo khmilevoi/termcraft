@@ -12,9 +12,12 @@ document here that addresses how the source tree itself is laid out.
 > documents below anchor those to real source files. All seven components the design
 > names are real code today, including the Kernel (`core/`), now fully self-assembled
 > behind a public `core/index.ts` boundary — `createKernel`, the seven-machine/
-> mailbox/capability wiring, and a real command handler registry answering all 44
+> mailbox/capability wiring, and a real command handler registry answering all 48
 > command kinds (kernel-assembly WP-1; 43 → 44, chat-scroll spec §6.1:
-> `chat.load-older`). The executable roots (`src/main.tsx`,
+> `chat.load-older`; 44 → 48, project-design-systems §8.1/§10.1 Wave 3 / P10: the
+> four `designSystem.*` commands — see
+> [flows/design-system-install.md](flows/design-system-install.md)). The executable
+> roots (`src/main.tsx`,
 > `src/demo.tsx`) and the `entrypoint/` ring that owns terminal lifetime and shutdown
 > have landed too. The production adapter graph inside that composition root has also
 > landed: `store`/`agent`/`gate`/`host` are mapped onto `core/ports/` to build a real
@@ -128,3 +131,8 @@ One document per user-visible process:
   multi-size snapshots, resolved layout trees, plus exact design files.
 - [flows/migration.md](flows/migration.md) — upgrading stored data: mandatory
   verified external backup, recoverable migration, and the too-new-file error.
+- [flows/design-system-install.md](flows/design-system-install.md) — browsing,
+  previewing, and installing a design system from a configured source: trust,
+  quarantine, the immutable candidate, the whole-tree Gate as a breakage preview,
+  and the one recoverable install transaction; also publishing the project's own
+  system back to the local library.

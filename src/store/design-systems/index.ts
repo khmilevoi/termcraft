@@ -44,6 +44,7 @@ export {
 } from "./model/errors";
 export type { SourceError } from "./model/errors";
 export { allowAllPackageAdmission, nodeDesignSystemFsDeps } from "./model/fs-deps";
+export { createDesignSourceAdmission } from "./model/admission";
 export type { ConfiguredSourceV1, SourcesConfigV1 } from "./model/sources-config";
 export {
   BUILT_IN_LOCAL_SOURCE,
@@ -74,3 +75,21 @@ export type { LocalPackage, PublishReceipt } from "./types";
 export { publishLocalPackage } from "./model/publish";
 export type { DesignSystemSource } from "./types";
 export { createLocalDesignSystemSource } from "./model/local-source";
+export type { DesignSystemProvenanceV1 } from "./model/provenance";
+export {
+  DESIGN_SYSTEM_PROVENANCE_FILENAME,
+  DESIGN_SYSTEM_PROVENANCE_SCHEMA_VERSION,
+  DesignSystemProvenanceInvalidError,
+  decodeDesignSystemProvenance,
+  encodeDesignSystemProvenance,
+} from "./model/provenance";
+export type { AdmittedPackage, QuarantineDeps, QuarantineFsDeps } from "./model/quarantine";
+export {
+  QUARANTINE_DIRNAME,
+  QuarantineFailedError,
+  admitPackageThroughQuarantine,
+  discardQuarantine,
+  nodeQuarantineFsDeps,
+  quarantineInstallDir,
+  quarantineRootDir,
+} from "./model/quarantine";

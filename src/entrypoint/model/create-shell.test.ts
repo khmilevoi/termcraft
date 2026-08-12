@@ -8,20 +8,25 @@ import type { PreviewFrameV1, PreviewIdentityV1, RunTreeResultV1 } from "core/po
 import { createFakePreviewSession } from "core/ports/fakes";
 import { FrameAckError, PreviewNoLiveSessionError, createFrameTokenLedger } from "core/preview";
 import type { UUIDv7 } from "core/protocol";
+import { parseDesignSystemId, parseDesignSystemVersion } from "entities/design-system-ref";
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { encodePagesManifest } from "entities/design-tree";
 import type { PagesManifestV1 } from "entities/design-tree";
 import { type PageSlug, parsePageSlug } from "entities/page";
 import { resolveCompilerPath } from "gate";
 import type { SmokeRenderer, SmokeRequest, SmokeResult } from "gate";
+import { systemClock } from "infrastructure/clock";
 import { uuidv7 } from "infrastructure/uuid";
 import { CURRENT_KIT_API_VERSION } from "runtime";
 import { createStore, nodeStoreDeps } from "store";
+import type { OpenProject, StoreAdapterDeps } from "store";
 import { PROJECT_MANIFEST_FILENAME, WORKSPACE_STATE_FILENAME } from "store/toml";
 import type { EventEnvelopeV1, UiEnv } from "ui";
 
 import type { MigrationRequiredV1, ShellWithAgentRegistry } from "../types";
 import {
   ShellTeardownError,
+  buildDesignSystemDeps,
   buildGateRunner,
   closeShellResources,
   createShell,
@@ -504,6 +509,185 @@ describe("createShell", () => {
     expect(chatsListCalls).toBe(1);
 
     await shell.close();
+  });
+});
+
+/**
+ * project-design-systems §8.2/§8.4 (plan P10 Task 14) — `buildDesignSystemDeps`, exported for
+ * the SAME testability reason `buildGateRunner`/`toPreviewSessionHandle` are (see its own doc
+ * comment in `create-shell.ts`): `createShell`'s return value exposes no seam onto `kernelDeps`
+ * itself, so this suite drives the exact production composition directly against a real,
+ * on-disk project and a scratch `userStateRoot`, rather than reimplementing it.
+ */
+/** A real, on-disk project plus the `StoreAdapterDeps` bundle `buildDesignSystemDeps` takes —
+ *  mirrors `store/adapters/test-support.ts`'s `createRealProjectFixture`, which is test-only and
+ *  not re-exported from `store`, so this suite builds its own over the SAME real `store` calls
+ *  `interactiveShell` itself makes. Caller must `await open.close()` when done. */
+async function createRealOpenProject(
+  userStateRoot: string,
+): Promise<{ readonly open: OpenProject; readonly deps: StoreAdapterDeps }> {
+  const projectRoot = makeScratchDir("termcraft-shell-design-project-");
+  const store = createStore(nodeStoreDeps({ userStateRoot }));
+  const opened = await store.createProject({
+    root: projectRoot,
+    name: "Design System Fixture",
+    targetStack: "generic",
+    kitApiVersion: CURRENT_KIT_API_VERSION,
+  });
+  if (opened instanceof Error) throw opened;
+  return { open: opened, deps: { open: opened, uuidv7, clock: systemClock } };
+}
+
+describe("buildDesignSystemDeps (design-system composition root, D9)", () => {
+  test("the local design-system source is composed with the REAL admission budget", async () => {
+    // A source built with `allowAllPackageAdmission` in production would read an unbounded
+    // package — this only proves the REAL local source is composed (id/canPublish), not the
+    // budget's own enforcement, which `store/adapters/design-system-install.test.ts` and
+    // `store/design-systems`' own tests already cover directly.
+    const userStateRoot = makeScratchDir("termcraft-shell-design-source-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
+      expect(designSystemDeps.designSystemSource.id).toBe("local");
+      expect(designSystemDeps.designSystemSource.canPublish).toBe(true);
+    } finally {
+      await open.close();
+    }
+  });
+
+  test("the design-system library lives under the SAME userStateRoot as trust and sandboxes", async () => {
+    // FIX ROUND 1 (Important): the original version of this test compared `designSystemsRoot(x)`
+    // against `path.join(x, "design-systems")` — a pure function checked against its own
+    // definition, which would pass even if `buildDesignSystemDeps` were never wired up — plus an
+    // `fs.existsSync(.../trust)` check that is true regardless of this task's changes (the
+    // implicit project-trust grant already creates it). Neither assertion could fail if the
+    // composition were broken. Fixed to observe REAL disk behavior instead: publish an actual
+    // package THROUGH the composed `designSystemSource` and confirm the bytes land where §8.2
+    // says the library lives — `{userStateRoot}/design-systems/local/<id>/` — for this EXACT
+    // `userStateRoot`, never a re-derived path.
+    const userStateRoot = makeScratchDir("termcraft-shell-design-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
+
+      const systemId = parseDesignSystemId("midnight");
+      if (systemId instanceof Error) throw systemId;
+      const version = parseDesignSystemVersion("1.0.0");
+      if (version instanceof Error) throw version;
+      const manifestBytes = new TextEncoder().encode(
+        JSON.stringify({
+          ...validManifestObject(),
+          id: "midnight",
+          version: "1.0.0",
+          components: [],
+        }),
+      );
+
+      const receipt = await designSystemDeps.designSystemSource.publish({
+        systemId,
+        version,
+        files: [{ relPath: "design-system.json", bytes: manifestBytes }],
+      });
+      if ("code" in receipt) throw new Error(`fixture bug: publish failed: ${receipt.safeMessage}`);
+
+      // If `buildDesignSystemDeps` had ever been wired to a DIFFERENT root than the one this
+      // test passed in, this exact path would simply not exist.
+      const publishedManifestPath = path.join(
+        userStateRoot,
+        "design-systems",
+        "local",
+        "midnight",
+        "design-system.json",
+      );
+      expect(fs.existsSync(publishedManifestPath)).toBe(true);
+
+      // The library and the trust ledger are colocated under the SAME root (§8.2): the implicit
+      // project trust grant plus `buildDesignSystemDeps`'s own `local`-source grant (D9) both
+      // write through `OpenProject.trust`, built over this identical `userStateRoot`.
+      expect(fs.existsSync(path.join(userStateRoot, "trust"))).toBe(true);
+    } finally {
+      await open.close();
+    }
+  });
+
+  test("D9: local is granted without a prompt, but the grant is still RECORDED on the ledger", async () => {
+    const userStateRoot = makeScratchDir("termcraft-shell-design-grant-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
+      // "Granted without a prompt" — no interaction happened above, yet the callback already
+      // reports it granted, because `buildDesignSystemDeps` called `grantSource` itself.
+      expect(
+        await designSystemDeps.designSystemIsGranted(designSystemDeps.designSystemSource),
+      ).toBe(true);
+      // "Still recorded" — the SAME fact is independently visible through the trust store's own
+      // ledger, not just through the closure `buildDesignSystemDeps` handed back.
+      const subject = open.trust.buildSourceSubject({
+        sourceKind: "local",
+        sourceId: designSystemDeps.designSystemSource.id,
+        canonicalLocation: path.join(userStateRoot, "design-systems", "local"),
+        locationFilesystemIdentity: null,
+      });
+      expect(await open.trust.isSourceGranted(subject)).toBe(true);
+    } finally {
+      await open.close();
+    }
+  });
+
+  test("I1: fetch/publish never share an admission budget — sequential composed calls all stay admissible", async () => {
+    // Design-source budget: 512 files, §8.3/§13. Regression scenario (finding I1): a single
+    // `createDesignSourceAdmission()` bound into the composition for the shell's LIFETIME would
+    // accumulate across every fetch/publish call — the review's own account is ~42 operations
+    // before a perfectly valid, in-budget preview is refused. A fresh budget per call (the fix)
+    // never accumulates across calls, so this stays admissible no matter how many operations run
+    // in one session.
+    const userStateRoot = makeScratchDir("termcraft-shell-design-source-budget-userstate-");
+    const { open, deps } = await createRealOpenProject(userStateRoot);
+    try {
+      const designSystemDeps = await buildDesignSystemDeps(userStateRoot, deps);
+
+      const systemId = parseDesignSystemId("midnight");
+      if (systemId instanceof Error) throw systemId;
+      const version = parseDesignSystemVersion("1.0.0");
+      if (version instanceof Error) throw version;
+
+      // 30 files per package — well under the 512-file cap for ONE operation — but 20 fetches of
+      // it sum to 600 admitFile calls across the session, past 512. A shared cumulative budget
+      // (the bug) refuses partway through; a fresh budget per call (the fix) admits every one.
+      const manifestBytes = new TextEncoder().encode(
+        JSON.stringify({
+          ...validManifestObject(),
+          id: "midnight",
+          version: "1.0.0",
+          components: [],
+        }),
+      );
+      const files = [
+        { relPath: "design-system.json", bytes: manifestBytes },
+        ...Array.from({ length: 29 }, (_unused, index) => ({
+          relPath: `tokens-${index}.ts`,
+          bytes: new TextEncoder().encode("export {}\n"),
+        })),
+      ];
+
+      const receipt = await designSystemDeps.designSystemSource.publish({
+        systemId,
+        version,
+        files,
+      });
+      if ("code" in receipt) throw new Error(`fixture bug: publish failed: ${receipt.safeMessage}`);
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const fetched = await designSystemDeps.designSystemSource.fetch(receipt.ref);
+        if ("code" in fetched) {
+          throw new Error(
+            `fetch #${attempt} was refused (${fetched.code}: ${fetched.safeMessage}) — the admission budget is being shared across calls`,
+          );
+        }
+      }
+    } finally {
+      await open.close();
+    }
   });
 });
 

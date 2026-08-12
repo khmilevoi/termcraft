@@ -7,7 +7,7 @@ import type { FetchedPackage, LocalDesignSystemSourceDeps } from "../types";
 import { designSystemContentHash } from "./content-hash";
 import type { SourceError } from "./errors";
 import { DesignSystemPackageInvalidError, DesignSystemRefRejectedError } from "./errors";
-import { LOCAL_SOURCE_ID, MANIFEST_FILENAME, localSystemDir } from "./layout";
+import { LOCAL_SOURCE_ID, MANIFEST_FILENAME, localLibraryDir, localSystemDir } from "./layout";
 import { readDesignSystemSummary } from "./summary";
 import { readPackageDirectory } from "./walk";
 
@@ -35,6 +35,36 @@ export async function fetchLocalPackage(
     });
   }
 
+  // NO-FOLLOW AT THE PACKAGE ROOT (design §13; P3 minor M5). `readPackageDirectory` refuses a
+  // symlinked ENTRY, but the root itself was never checked — `listDir(local/<id>)` follows a
+  // planted junction straight into a directory outside the library, and those bytes would reach
+  // the candidate. `DesignSystemFsDeps` has no `lstat`, and it does not need one: the parent
+  // listing already carries `isSymbolicLink` for the `<id>` entry, and this is the exact predicate
+  // `listLocalSystems` applies, so the two can never disagree about what the library holds.
+  const libraryDir = localLibraryDir(deps.userStateRoot);
+  const libraryEntries = deps.fs.listDir(libraryDir);
+  if (libraryEntries instanceof Error) return libraryEntries;
+  if (libraryEntries === null) {
+    return new DesignSystemRefRejectedError({
+      ref: formatDesignSystemRef(ref),
+      reason: "no such design system in the local library",
+    });
+  }
+
+  const rootEntry = libraryEntries.find((entry) => entry.name === ref.systemId);
+  if (rootEntry === undefined) {
+    return new DesignSystemRefRejectedError({
+      ref: formatDesignSystemRef(ref),
+      reason: "no such design system in the local library",
+    });
+  }
+  if (rootEntry.isSymbolicLink || !rootEntry.isDirectory) {
+    return new DesignSystemPackageInvalidError({
+      path: ref.systemId,
+      reason: "package entries must be regular files or directories, never links",
+    });
+  }
+
   const packageRoot = localSystemDir(deps.userStateRoot, ref.systemId);
   const present = deps.fs.listDir(packageRoot);
   if (present instanceof Error) return present;
@@ -45,7 +75,9 @@ export async function fetchLocalPackage(
     });
   }
 
-  const files = readPackageDirectory(deps.fs, deps.admission, packageRoot);
+  // Fresh budget for THIS fetch (I1 fix) — `deps.admission` is a factory precisely so a second
+  // fetch in the same session never inherits the first one's aggregate counters.
+  const files = readPackageDirectory(deps.fs, deps.admission(), packageRoot);
   if (files instanceof Error) return files;
 
   const manifest = files.find((file) => file.relPath === MANIFEST_FILENAME);

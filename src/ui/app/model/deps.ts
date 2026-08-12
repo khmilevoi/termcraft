@@ -39,6 +39,7 @@ import {
   createMirror,
   createScreenAtom,
 } from "ui/mirror";
+import type { DesignSystemPromptKind } from "ui/popups";
 import {
   type PreviewInteractionState,
   createPreviewInteractionState,
@@ -212,6 +213,25 @@ export interface UiLocalState {
    * (confirmed with the user — no in-session re-ask affordance).
    */
   readonly trustPromptDismissed: Atom<boolean>;
+  /**
+   * Selected row in the design-system picker overlay (P10 task 13) — a plain `Atom<number>`
+   * moved by ONE named model action, `applyIntent`'s `design-system-move` case (RTM-S04),
+   * exactly like {@link chatSelection} above. Rows are `ui/popups`' `designSystemRows(mirror
+   * .designSystems().sources)` — never stored separately, so the index this atom holds and the
+   * rows the picker renders can never disagree about what "row 3" means.
+   */
+  readonly designSystemSelection: Atom<number>;
+  /**
+   * `null` while the picker itself is showing; `"install"`/`"publish"` while the breakage-preview
+   * / publish-confirm dialog is showing over it (P10 task 13). `renderOverlay` (`App.tsx`) reads
+   * this to choose between `DesignSystemPicker` and `DesignSystemInstallPrompt`; `applyIntent`'s
+   * `design-system-activate` case reads it to decide what Enter means. Cleared back to `null` by
+   * `overlay-dismiss` (returns to the picker, not the workspace) and by this module's own
+   * `applyEnvelope`, once a `designSystem.installed`/`designSystem.published` terminal success
+   * lands for the dialog that is currently open — neither event carries a "close the UI" field of
+   * its own; this is the one place a terminal SUCCESS becomes a UI-local transition.
+   */
+  readonly designSystemPrompt: Atom<DesignSystemPromptKind | null>;
 }
 
 /**
@@ -686,6 +706,24 @@ export function createUiDeps(
           applyTurnTerminal(deps, distributed.kind);
         }
         mirror.apply(distributed);
+        // AFTER the mirror fold — `designSystemPrompt`'s own doc comment (`UiLocalState`) covers
+        // why this lives here rather than as a mirror field: `designSystem.installed`/`published`
+        // carry no "close the UI" instruction, so a terminal SUCCESS for the dialog CURRENTLY
+        // open is the one fact that must become a UI-local transition. Scoped to the prompt kind
+        // that is actually showing, so an install success arriving after the user already backed
+        // out to the picker (or opened a later publish confirm) does not reach in and close it.
+        if (
+          distributed.kind === "designSystem.installed" &&
+          local.designSystemPrompt() === "install"
+        ) {
+          local.designSystemPrompt.set(null);
+        }
+        if (
+          distributed.kind === "designSystem.published" &&
+          local.designSystemPrompt() === "publish"
+        ) {
+          local.designSystemPrompt.set(null);
+        }
         // AFTER the mirror fold, for the same reason `resyncPreviewSession` below is (STALE
         // _REVISION defect, 2026-08-11): geometry results are the ONE event kind the UI answers
         // by dispatching a command of its own — `selection.set` for a resolved click, and
@@ -1047,6 +1085,13 @@ export function createUiDeps(
   const pinEditor = atom<TextEditorHandle | null>(null, "ui.local.pinEditor");
   const pinDraft = atom("", "ui.local.pinDraft");
   const pinSaveError = atom<string | null>(null, "ui.local.pinSaveError");
+  // The design-system picker's own selection/prompt (P10 task 13) — see `UiLocalState
+  // .designSystemSelection`/`.designSystemPrompt`'s own doc comments.
+  const designSystemSelection = atom(0, "ui.local.designSystemSelection");
+  const designSystemPrompt = atom<DesignSystemPromptKind | null>(
+    null,
+    "ui.local.designSystemPrompt",
+  );
 
   const local: UiLocalState = {
     prompt,
@@ -1074,6 +1119,8 @@ export function createUiDeps(
     startupOpenPending,
     startupOpenFailure,
     trustPromptDismissed,
+    designSystemSelection,
+    designSystemPrompt,
   };
 
   // Declared BEFORE `deps` and closing over it: both halves run later — on mount and on every

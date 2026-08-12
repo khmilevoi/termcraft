@@ -39,6 +39,7 @@ import type {
 } from "store/toml";
 import type {
   CommittedMarker,
+  DesignSystemInstallFile,
   JournalCorruptError,
   ProjectMutationInput,
   RecoveryOutcome,
@@ -423,6 +424,29 @@ export interface SetWorkspaceLocalInput {
   readonly createdAt: string;
 }
 
+/**
+ * `designSystem.install` (project-design-systems §8.3, §8.5): every incoming `system/**` file,
+ * every TREE-relative path the outgoing system had that the incoming one does not, and the
+ * provenance record — all committed together by {@link TransactionEngine.installDesignSystem}.
+ */
+export interface InstallDesignSystemInput {
+  readonly transactionId: string;
+  readonly actionId: string;
+  readonly nextFiles: readonly DesignSystemInstallFile[];
+  readonly removedTreeRelPaths: readonly string[];
+  /** `encodeDesignSystemProvenance`'s complete output (`store/design-systems`). */
+  readonly provenanceBytes: Uint8Array;
+  /**
+   * The whole design tree's `treeRevision` (I2 fix) AT THE MOMENT the caller's Gate pass ran —
+   * `core/design-systems/model/install.ts`'s `DesignSystemPreparedInstallV1.treeRevision`,
+   * forwarded verbatim through `DesignSystemInstallPort.install`. Re-verified INSIDE the write
+   * permit, immediately before any write — see `TransactionEngine.installDesignSystem`'s own doc
+   * comment and `DesignSystemTreeDriftedError` (`./model/factory.ts`).
+   */
+  readonly expectedTreeRevision: string;
+  readonly createdAt: string;
+}
+
 export interface AdvanceSessionCheckpointInput {
   readonly transactionId: string;
   readonly actionId: string;
@@ -487,6 +511,20 @@ export interface TransactionEngine {
   setWorkspaceLocal(input: SetWorkspaceLocalInput): Promise<Error | CommittedMarker>;
   /** Checkpoint persistence (storage-identity §6.2): hashes the target chat's current prefix and durably records the advanced checkpoint. */
   advanceSessionCheckpoint(input: AdvanceSessionCheckpointInput): Promise<Error | CommittedMarker>;
+  /**
+   * `designSystem.install` (project-design-systems §8.3): replaces `design/system/**` and writes
+   * `.termcraft/design-system-source.json` in ONE `project-mutation`. Every operation's own
+   * per-file `oldImage` only re-affirms whatever `observeFileImage` reads INSIDE this same permit
+   * immediately before the write — it cannot, by itself, catch a tree that changed BETWEEN the
+   * caller's Gate pass (preview time) and this call, because it never compares against anything
+   * captured at that earlier point (I2 fix). What closes that window is `input.expectedTreeRevision`:
+   * checked FIRST, inside the permit, against a freshly re-walked `design/` tree's own
+   * `computeTreeRevision` — `DesignSystemTreeDriftedError` (`./model/factory.ts`) refuses the
+   * commit, writing nothing, when the two disagree; the CAS below never even runs. A crash after
+   * that check passes is rolled forward or discarded by the recovery scan that already runs at
+   * `openProject`, so a half-replaced system is not a reachable state either way.
+   */
+  installDesignSystem(input: InstallDesignSystemInput): Promise<Error | CommittedMarker>;
 
   /**
    * The v1 -> v2 mechanical migration's single transaction (turn-durability §11). Distinct from
@@ -689,6 +727,7 @@ export type {
   JsonlOpenError,
   ProjectLayoutError,
   ProjectAlreadyExistsError,
+  DesignSystemTreeDriftedError,
   EntrySourceDriftedError,
   ManifestDriftedError,
   ReorderPagesInvalidOrderError,

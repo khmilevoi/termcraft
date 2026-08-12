@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { parseDesignSystemRef } from "entities/design-system-ref";
+import { validManifestObject } from "entities/design-system/model/manifest.fixture";
 import { systemClock } from "infrastructure/clock";
 
 import type { PackageAdmission, PackageFile } from "../types";
@@ -16,7 +16,7 @@ import {
 } from "./errors";
 import { fetchLocalPackage } from "./fetch";
 import { allowAllPackageAdmission, nodeDesignSystemFsDeps } from "./fs-deps";
-import { localSystemDir } from "./layout";
+import { localLibraryDir, localSystemDir } from "./layout";
 import { writeFixturePackage } from "./test-support";
 
 const scratchRoots: string[] = [];
@@ -63,7 +63,7 @@ function refOf(text: string) {
 }
 
 function depsFor(root: string, admission: PackageAdmission = allowAllPackageAdmission) {
-  return { userStateRoot: root, fs: nodeDesignSystemFsDeps, admission, clock: systemClock };
+  return { userStateRoot: root, fs: nodeDesignSystemFsDeps, admission: () => admission, clock: systemClock };
 }
 
 function seed(root: string, files: readonly PackageFile[] = PACKAGE): void {
@@ -185,5 +185,40 @@ describe("fetchLocalPackage", () => {
     expect(await fetchLocalPackage(depsFor(root), refOf("local:midnight@1.2.0"))).toBeInstanceOf(
       DesignSystemPackageInvalidError,
     );
+  });
+
+  // M5 (design §13, plan-context D2): `readPackageDirectory` refuses a symlinked ENTRY inside a
+  // package, and `listLocalSystems` refuses a symlinked library entry — but the package ROOT
+  // itself was reached by `listDir(local/<id>)`, which follows a symlinked `local/<id>` straight
+  // into whatever it points at. A link planted in the library must be refused the same way
+  // `listLocalSystems` refuses it, not silently followed into a valid-looking package elsewhere.
+  test("M5: a symlinked local/<id> is refused instead of being read through", async () => {
+    const root = freshScratch();
+    const outsideTarget = path.join(freshScratch(), "outside-midnight");
+    fs.mkdirSync(outsideTarget, { recursive: true });
+    writeFixturePackage(outsideTarget, PACKAGE);
+
+    const libraryDir = localLibraryDir(root);
+    fs.mkdirSync(libraryDir, { recursive: true });
+    const linkPath = localSystemDir(root, "midnight" as never);
+    try {
+      fs.symlinkSync(outsideTarget, linkPath, "junction");
+    } catch {
+      // Windows without developer mode/junction support refuses symlink creation; the plain-
+      // directory case below still proves the fix does not over-refuse ordinary packages.
+      return;
+    }
+
+    const fetched = await fetchLocalPackage(depsFor(root), refOf("local:midnight@1.2.0"));
+    expect(fetched).toBeInstanceOf(DesignSystemPackageInvalidError);
+    if (!(fetched instanceof Error)) return;
+    expect(fetched.message).toContain("never links");
+  });
+
+  test("M5: a package root that is a plain directory still fetches", async () => {
+    const root = freshScratch();
+    seed(root);
+    const fetched = await fetchLocalPackage(depsFor(root), refOf("local:midnight@1.2.0"));
+    expect(fetched).not.toBeInstanceOf(Error);
   });
 });

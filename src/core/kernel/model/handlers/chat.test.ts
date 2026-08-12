@@ -27,6 +27,8 @@ import {
   createFakeAgentRegistry,
   createFakeChatStore,
   createFakeDesignStoreForPages,
+  createFakeDesignSystemInstall,
+  createFakeDesignSystemSource,
   createFakeDiagnosticsCache,
   createFakeExportPublish,
   createFakeExportRenderPort,
@@ -58,7 +60,12 @@ import { uuidv7 } from "infrastructure/uuid";
 
 import type { KernelDeps } from "../../types";
 import { chatHandlers } from "./chat";
-import type { HandlerContext, PreviewSourceKindV1, ProjectTrustV1 } from "./types";
+import {
+  type HandlerContext,
+  type PreviewSourceKindV1,
+  type ProjectTrustV1,
+  createDesignSystemInstallLedger,
+} from "./types";
 
 /**
  * `chat.ts`'s own test suite (kernel-assembly WP-1 task 9, Step B — `chat` family).
@@ -192,6 +199,7 @@ function buildTestContext(overrides?: {
     const pageStore = createFakeDesignStoreForPages({ pages: [] });
     const pinStore = createFakePinStore();
     const clock = slugClock();
+    const designSystemPorts = createFakeDesignSystemInstall();
 
     const deps: KernelDeps = {
       projectStore,
@@ -216,6 +224,14 @@ function buildTestContext(overrides?: {
       exportPublish: createFakeExportPublish(),
       agentRegistry: createFakeAgentRegistry([createFakeAgentBackend()]),
       agentPromptSource: createFakeAgentPromptSource(),
+      designSystemSource: createFakeDesignSystemSource({
+        id: "local",
+        label: "Local library",
+        canPublish: true,
+      }),
+      designSystemQuarantine: designSystemPorts,
+      designSystemInstall: designSystemPorts,
+      designSystemIsGranted: () => Promise.resolve(true),
       clock,
     };
 
@@ -294,6 +310,7 @@ function buildTestContext(overrides?: {
       frameTokenLedger,
       geometryTokenLedger,
       pageRemovePlanLedger: createPageRemovePlanLedger(),
+      designSystemLedger: createDesignSystemInstallLedger(deps.designSystemQuarantine),
     };
 
     return {

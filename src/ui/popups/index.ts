@@ -12,6 +12,26 @@ export {
   computeChatListViewport,
   formatChatWhen,
 } from "./model/chat-list";
+export type { DesignSystemRow, DesignSystemPickerProps } from "./model/design-system-picker";
+export {
+  DESIGN_SYSTEM_VIEWPORT_CAP,
+  DESIGN_SYSTEM_EMPTY_NOTE,
+  SWATCH_GLYPH,
+  designSystemRows,
+  formatContents,
+  visibleSwatches,
+} from "./model/design-system-picker";
+export { DesignSystemPicker } from "./ui/DesignSystemPicker";
+export type {
+  DesignSystemBusyPhase,
+  DesignSystemInstallPromptProps,
+  DesignSystemPromptKind,
+} from "./ui/DesignSystemInstallPrompt";
+export {
+  MAX_RENDERED_BULLETS,
+  breakageBullets,
+  DesignSystemInstallPrompt,
+} from "./ui/DesignSystemInstallPrompt";
 export type { PinInputPopupProps } from "./ui/PinInputPopup";
 export { PIN_INPUT_POPUP_SIZE, PinInputPopup } from "./ui/PinInputPopup";
 export type { ExportFailurePopupProps, ExportPopupProps } from "./ui/ExportPopup";

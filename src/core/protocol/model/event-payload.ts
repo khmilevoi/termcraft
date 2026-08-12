@@ -1894,6 +1894,266 @@ export const diagnosticsChangedPayloadV1Schema = z.strictObject({
 });
 
 // ---------------------------------------------------------------------------
+// designSystem.listed / listFailed / previewStarted / previewed / previewFailed /
+// installed / installFailed / published / publishFailed (project-design-systems §8.1-§8.5,
+// §9-alike Wave 3 / P10) — the picker overlay's nine events, modelled on `export.start`'s
+// `ExportProgressPayloadV1`/`ExportTerminalPayloadV1` two-declaration shape.
+// ---------------------------------------------------------------------------
+
+/**
+ * MIRRORS `core/design-systems/model/candidate.ts`'s `MAX_PREVIEW_ITEMS` BY VALUE, not by
+ * import: `core/protocol` cannot import `core/design-systems` (that module imports THIS one
+ * for `FailureDtoV1`/`Sha256Hex`; the reverse would risk a value-level cycle) — the same
+ * "transcribe by value, never import" precedent this file already uses for Gate's error/
+ * warning kinds and the seven machines' phase unions above.
+ */
+const DESIGN_SYSTEM_PREVIEW_ITEMS_MAX = 40;
+
+/** One token of a theme, in DECLARATION ORDER — the picker's swatch row is drawn in this order (§8.1). */
+export interface DesignSystemTokenSwatchDtoV1 {
+  readonly name: string;
+  readonly value: string;
+}
+
+const designSystemTokenSwatchDtoV1Schema = z.strictObject({
+  name: z.string().min(1),
+  value: z.string().min(1),
+});
+
+/** `DesignSystemSummaryV1` (`core/ports/design-system-source.ts`), redrawn as a closed Kernel DTO. */
+export interface DesignSystemSummaryDtoV1 {
+  readonly id: string;
+  readonly name: string;
+  readonly version: string;
+  readonly kitApiVersion: number;
+  readonly defaultTheme: string;
+  readonly defaultThemeTokens: readonly DesignSystemTokenSwatchDtoV1[];
+  readonly componentNames: readonly string[];
+}
+
+// `defaultThemeTokens`/`componentNames` carry NO `.max()` (I3 fix): both are copied straight off
+// an untrusted manifest (`store/design-systems/model/summary.ts`'s `toDesignSystemSummary`, over
+// `manifest.themes[…].tokens`/`manifest.components`) with no producer-side truncation, so a
+// runtime cap here could fail an otherwise-valid `designSystem.listed`/`.previewed` and take the
+// WHOLE event batch down with it (`event-bus.ts`'s `validateBatch` is all-or-nothing). Matches
+// this file's own sibling precedent: `turnGateErrorV1Schema`/`turnGateWarningV1Schema`'s
+// `blockedPages` (~line 880/912) carry no cap either, for the identical reason.
+const designSystemSummaryDtoV1Schema = z.strictObject({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  version: z.string().min(1),
+  kitApiVersion: positiveIntSchema,
+  defaultTheme: z.string().min(1),
+  defaultThemeTokens: z.array(designSystemTokenSwatchDtoV1Schema).readonly(),
+  componentNames: z.array(z.string().min(1)).readonly(),
+});
+
+/** One configured source's row for the picker (`SourceListingV1`, `core/design-systems`, decisions D9/D10). */
+export interface SourceListingDtoV1 {
+  readonly sourceId: string;
+  readonly label: string;
+  readonly canPublish: boolean;
+  readonly state: "listed" | "ungranted" | "unavailable";
+  readonly systems: readonly DesignSystemSummaryDtoV1[];
+  /** `null` when `state === "listed"`; otherwise the ungranted/unavailable reason. */
+  readonly reason: string | null;
+}
+
+const SOURCE_LIST_STATES_V1 = ["listed", "ungranted", "unavailable"] as const;
+
+const sourceListingDtoV1Schema = z.strictObject({
+  sourceId: z.string().min(1),
+  label: z.string().min(1),
+  canPublish: z.boolean(),
+  state: z.enum(SOURCE_LIST_STATES_V1),
+  systems: z.array(designSystemSummaryDtoV1Schema).readonly(),
+  // NO `.max()` (I3 fix): `core/design-systems/model/sources.ts`'s `listOne` copies
+  // `raced.message`/`safeMessage` in verbatim, with no producer-side truncation — a long source
+  // failure message used to fail this schema and take the WHOLE `designSystem.listed` batch down
+  // with it. Same sibling precedent as `designSystemSummaryDtoV1Schema`'s fields just above.
+  reason: z.string().nullable(),
+});
+
+/** One Gate diagnostic, redrawn for the picker's breakage-preview dialog (`DesignSystemBreakageItemV1`, decision D6). */
+export interface DesignSystemBreakageDtoV1 {
+  readonly code: string;
+  readonly message: string;
+  readonly file: string | null;
+  readonly blockedPages: readonly string[];
+}
+
+const designSystemBreakageDtoV1Schema = z.strictObject({
+  code: z.string().min(1),
+  // `.max(400)` stays: `core/design-systems/model/candidate.ts`'s `truncateMessage` already
+  // truncates every message to this exact bound before `toBreakageItem` builds this DTO, so the
+  // cap is producer-enforced, never producer-unbounded.
+  message: z.string().max(400),
+  file: z.string().min(1).nullable(),
+  // NO `.max()` (I3 fix): `candidate.ts`'s `toBreakageItem` copies `blockedPages` in verbatim —
+  // a package that breaks 21+ pages via one shared module used to fail this schema and take the
+  // WHOLE `designSystem.previewed` event down with it, hanging the picker on "checking…" forever.
+  // Matches this file's own sibling precedent: `turnGateErrorV1Schema`/`turnGateWarningV1Schema`'s
+  // `blockedPages` (~line 880/912) carry no cap either.
+  blockedPages: z.array(pageSlugSchema).readonly(),
+});
+
+/** The classified answer `summarizeGatePass` hands the picker (`DesignSystemPreviewV1`, decision D6). */
+export interface DesignSystemPreviewDtoV1 {
+  readonly verdict: "clean" | "breaks-pages" | "blocked";
+  readonly errors: readonly DesignSystemBreakageDtoV1[];
+  readonly warnings: readonly DesignSystemBreakageDtoV1[];
+}
+
+const DESIGN_SYSTEM_PREVIEW_VERDICTS_V1 = ["clean", "breaks-pages", "blocked"] as const;
+
+const designSystemPreviewDtoV1Schema = z.strictObject({
+  verdict: z.enum(DESIGN_SYSTEM_PREVIEW_VERDICTS_V1),
+  errors: z.array(designSystemBreakageDtoV1Schema).max(DESIGN_SYSTEM_PREVIEW_ITEMS_MAX).readonly(),
+  warnings: z
+    .array(designSystemBreakageDtoV1Schema)
+    .max(DESIGN_SYSTEM_PREVIEW_ITEMS_MAX)
+    .readonly(),
+});
+
+/** §8.5's update offer (`DesignSystemUpdateV1`, decisions D9/D10) — both refs already formatted `source:system@version` text. */
+export interface DesignSystemUpdateDtoV1 {
+  readonly installedRef: string;
+  readonly availableRef: string;
+  readonly reason: string;
+}
+
+const designSystemUpdateDtoV1Schema = z.strictObject({
+  installedRef: z.string().min(1),
+  availableRef: z.string().min(1),
+  reason: z.string().min(1).max(200),
+});
+
+/** `designSystem.listed`'s payload: the grant-gated bounded multi-source list, plus an optional update offer. */
+export interface DesignSystemListedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly sources: readonly SourceListingDtoV1[];
+  readonly update: DesignSystemUpdateDtoV1 | null;
+}
+
+export const designSystemListedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  sources: z.array(sourceListingDtoV1Schema).readonly(),
+  update: designSystemUpdateDtoV1Schema.nullable(),
+});
+
+/** `designSystem.listFailed`'s payload — the list operation itself could not run at all (e.g. the provenance record could not be read). */
+export interface DesignSystemListFailedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly failure: FailureDtoV1;
+}
+
+export const designSystemListFailedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  failure: failureDtoV1Schema,
+});
+
+/**
+ * `designSystem.previewStarted`'s payload — published BEFORE `runTree` is awaited (decision
+ * D7), so the picker has already painted "checking…" when the thread freezes.
+ */
+export interface DesignSystemPreviewStartedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly ref: string;
+}
+
+export const designSystemPreviewStartedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  ref: z.string().min(1),
+});
+
+/** `designSystem.previewed`'s payload — a completed preparation, ready to install or discard. */
+export interface DesignSystemPreviewedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly installId: UUIDv7;
+  readonly ref: string;
+  readonly summary: DesignSystemSummaryDtoV1;
+  readonly preview: DesignSystemPreviewDtoV1;
+}
+
+export const designSystemPreviewedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  installId: uuidv7Schema,
+  ref: z.string().min(1),
+  summary: designSystemSummaryDtoV1Schema,
+  preview: designSystemPreviewDtoV1Schema,
+});
+
+/** `designSystem.previewFailed`'s payload. */
+export interface DesignSystemPreviewFailedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly ref: string;
+  readonly failure: FailureDtoV1;
+}
+
+export const designSystemPreviewFailedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  ref: z.string().min(1),
+  failure: failureDtoV1Schema,
+});
+
+/** `designSystem.installed`'s payload — `ref` is the installed reference's canonical text. */
+export interface DesignSystemInstalledPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly ref: string;
+}
+
+export const designSystemInstalledPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  ref: z.string().min(1),
+});
+
+/**
+ * `designSystem.installFailed`'s payload. `ref` is the installed reference's canonical text
+ * when a preparation was found and its commit failed; when `installId` names no held
+ * preparation at all (never silently re-prepared, `handlers/design-system.ts`'s own header),
+ * there is no `DesignSystemRef` to format yet, so `ref` carries the raw `installId` instead —
+ * still enough to say WHICH install this failure is about.
+ */
+export interface DesignSystemInstallFailedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly ref: string;
+  readonly failure: FailureDtoV1;
+}
+
+export const designSystemInstallFailedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  ref: z.string().min(1),
+  failure: failureDtoV1Schema,
+});
+
+/** `designSystem.published`'s payload. */
+export interface DesignSystemPublishedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly ref: string;
+  /** RFC 3339 UTC. */
+  readonly publishedAt: string;
+}
+
+export const designSystemPublishedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  ref: z.string().min(1),
+  publishedAt: rfc3339UtcSchema,
+});
+
+/** `designSystem.publishFailed`'s payload — `sourceId` (not `ref`) since a refused publish never resolves a `DesignSystemRef`. */
+export interface DesignSystemPublishFailedPayloadV1 {
+  readonly operationId: UUIDv7;
+  readonly sourceId: string;
+  readonly failure: FailureDtoV1;
+}
+
+export const designSystemPublishFailedPayloadV1Schema = z.strictObject({
+  operationId: uuidv7Schema,
+  sourceId: z.string().min(1),
+  failure: failureDtoV1Schema,
+});
+
+// ---------------------------------------------------------------------------
 // The closed EventPayloadByKindV1 map (§9, KCC:715-759)
 // ---------------------------------------------------------------------------
 
@@ -1944,6 +2204,15 @@ export type EventPayloadByKindV1 = Readonly<{
   "pins.changed": PinsChangedPayloadV1;
   "git.statusChanged": GitStatusChangedPayloadV1;
   "diagnostics.changed": DiagnosticsChangedPayloadV1;
+  "designSystem.listed": DesignSystemListedPayloadV1;
+  "designSystem.listFailed": DesignSystemListFailedPayloadV1;
+  "designSystem.previewStarted": DesignSystemPreviewStartedPayloadV1;
+  "designSystem.previewed": DesignSystemPreviewedPayloadV1;
+  "designSystem.previewFailed": DesignSystemPreviewFailedPayloadV1;
+  "designSystem.installed": DesignSystemInstalledPayloadV1;
+  "designSystem.installFailed": DesignSystemInstallFailedPayloadV1;
+  "designSystem.published": DesignSystemPublishedPayloadV1;
+  "designSystem.publishFailed": DesignSystemPublishFailedPayloadV1;
 }>;
 
 /**
@@ -2018,4 +2287,13 @@ export const eventPayloadV1SchemaByKind = {
   "pins.changed": pinsChangedPayloadV1Schema,
   "git.statusChanged": gitStatusChangedPayloadV1Schema,
   "diagnostics.changed": diagnosticsChangedPayloadV1Schema,
+  "designSystem.listed": designSystemListedPayloadV1Schema,
+  "designSystem.listFailed": designSystemListFailedPayloadV1Schema,
+  "designSystem.previewStarted": designSystemPreviewStartedPayloadV1Schema,
+  "designSystem.previewed": designSystemPreviewedPayloadV1Schema,
+  "designSystem.previewFailed": designSystemPreviewFailedPayloadV1Schema,
+  "designSystem.installed": designSystemInstalledPayloadV1Schema,
+  "designSystem.installFailed": designSystemInstallFailedPayloadV1Schema,
+  "designSystem.published": designSystemPublishedPayloadV1Schema,
+  "designSystem.publishFailed": designSystemPublishFailedPayloadV1Schema,
 } as const satisfies Record<EventKindV1, z.ZodType>;

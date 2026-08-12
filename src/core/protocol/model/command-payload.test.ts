@@ -326,6 +326,22 @@ const FIXTURES: Record<CommandKindV1, Fixture> = {
     valid: { migrationActionId: uuidv7() },
     breaks: [{ migrationActionId: uuidv7(), extra: 1 }, { migrationActionId: "bad" }, {}],
   },
+  "designSystem.list": {
+    valid: {},
+    breaks: [{ extra: 1 }, { sourceId: "local" }],
+  },
+  "designSystem.preview": {
+    valid: { ref: "local:midnight@1.2.0" },
+    breaks: [{ ref: "local:midnight@1.2.0", extra: 1 }, { ref: "" }, {}],
+  },
+  "designSystem.install": {
+    valid: { installId: uuidv7() },
+    breaks: [{ installId: uuidv7(), extra: 1 }, { installId: "bad" }, {}],
+  },
+  "designSystem.publish": {
+    valid: { sourceId: "local" },
+    breaks: [{ sourceId: "local", extra: 1 }, { sourceId: "" }, {}],
+  },
 };
 
 describe("commandPayloadSchemas", () => {

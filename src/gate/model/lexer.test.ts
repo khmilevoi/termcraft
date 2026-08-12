@@ -409,7 +409,12 @@ describe("tokenize — the over-fire proof, re-measured on every run", () => {
     // The project-design-systems P4 plan (integration spine) adds 16 files, taking it to 1043.
     // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
     // grows.
-    expect(files.length).toBe(1043);
+    // The project-design-systems P10 plan (install-and-picker) adds 28 files across
+    // `store/design-systems`, `core/design-systems`, `core/kernel/model/handlers`,
+    // `ui/popups` and their tests, taking it to 1071.
+    // — update BOTH this number and the count quoted in `lexer.oracle.test.ts` when the corpus
+    // grows.
+    expect(files.length).toBe(1071);
   });
 
   test("across the corpus, every prose run is LEXED and none of them swallows what follows", () => {

@@ -5,8 +5,11 @@ import * as errore from "errore";
 
 import type { ChatHeader, ChatSystemErrorRecord } from "entities/chat";
 import {
+  DuplicateInventoryPathError,
   PAGES_MANIFEST_RELPATH,
   PAGES_MANIFEST_SCHEMA_VERSION,
+  computeTreeRevision,
+  createDesignTreeInventory,
   encodePagesManifest,
 } from "entities/design-tree";
 import type { PageEntryV1, PagesManifestInvalidError, PagesManifestV1 } from "entities/design-tree";
@@ -104,6 +107,7 @@ import {
   // `store/transaction` already does. `pageCommentsPath` was RENAMED, not deleted (pin logs
   // are still slug-keyed, design §3) — its call sites below use `pinsJsonlPath`, a
   // mechanical rename with no behavior change.
+  buildDesignSystemInstallOperations,
   buildMigrationTransaction,
   buildPinEventOperations,
   buildWorkspaceLocalPatchOperation,
@@ -144,6 +148,7 @@ import type {
   ChatStore,
   CreateChatInput,
   CreateProjectInput,
+  InstallDesignSystemInput,
   ManifestStore,
   MigrationOutcomeV1,
   OpenProject,
@@ -170,6 +175,7 @@ import {
   createDesignTreeStore,
   readManifestFromDisk,
 } from "./design-tree-store";
+import type { DesignTreeTooDeepError } from "./design-tree-store";
 
 // `store/model/factory.ts` — the composition-root entry point (T19). Wires every already-
 // landed submodule against ONE injected `StoreDeps` bundle into the flat `Store` port
@@ -264,6 +270,35 @@ export class ManifestDriftedError extends errore.createTaggedError({
 export class EntrySourceDriftedError extends errore.createTaggedError({
   name: "EntrySourceDriftedError",
   message: "design-tree entry $entryRelPath for page $pageSlug changed since it was read: $reason",
+}) {}
+
+/**
+ * `TransactionEngine.installDesignSystem` (project-design-systems §8.3, §8.5; I2 fix): the
+ * whole design tree `core/design-systems/model/install.ts`'s Gate pass ran over — identified by
+ * its `treeRevision` (`entities/design-tree`'s `computeTreeRevision`, folded over EVERY file
+ * under `design/`, not just `system/**`) — drifted between that preview and this commit. Refused
+ * rather than silently installed against a tree the preview never actually saw.
+ *
+ * WHOLE-TREE, NOT `system/`-SCOPED, DELIBERATELY. Scoping the comparison to `system/**` alone
+ * would catch a concurrent turn landing `design/system/extra.tsx` (the file survives the install
+ * inside the freshly-installed system, violating §4.4's "replaces the folder wholesale") but miss
+ * a PAGE edited between the Gate pass and the commit that now uses a token the incoming system
+ * lacks — exactly the "breaks-pages" case the preview exists to surface (§8.3, §12: "surfaced
+ * before commit"). Comparing the same `treeRevision` the Gate pass was itself computed over closes
+ * both windows with one check, at the cost of refusing on ANY tree change since preview — including
+ * an unrelated page edit that would not actually have broken this install. That over-refusal is
+ * the accepted trade: the designer re-runs `designSystem.preview` (cheap — the picker already has
+ * the ref) and gets an accurate breakage preview against the tree as it now stands, which is
+ * strictly better than committing against a tree the Gate never actually validated.
+ *
+ * See `assertDesignTreeNotDrifted` for the re-verification this guards — checked FIRST, inside
+ * the permit, before `buildDesignSystemInstallOperations` does anything else, the identical
+ * discipline {@link ManifestDriftedError}/{@link EntrySourceDriftedError} already follow.
+ */
+export class DesignSystemTreeDriftedError extends errore.createTaggedError({
+  name: "DesignSystemTreeDriftedError",
+  message:
+    "the design tree changed since the design-system install was previewed; redo the preview before installing",
 }) {}
 
 // ---- production dependency wiring --------------------------------------------------
@@ -444,6 +479,41 @@ function assertEntrySourceNotDrifted(
     });
   }
   return currentImage;
+}
+
+/**
+ * `installDesignSystem`'s CAS precondition (I2 fix): re-walks `design/` and recomputes its
+ * `treeRevision` (`entities/design-tree`'s `computeTreeRevision`, over `createDesignTreeInventory`
+ * — the identical fold `core/project/model/tree-index.ts`'s `readCanonicalTreeIndex` used to
+ * produce the value the caller captured at preview time), and compares it against
+ * `expectedTreeRevision`. NO Gate re-run — this is a cheap hash comparison, not a third whole-tree
+ * type check (`core/design-systems/model/install.ts`'s own header already accepts paying for TWO;
+ * a third would be needless when a revision comparison catches the same drift). MUST be called
+ * first, inside the permit, before `buildDesignSystemInstallOperations` does anything else — see
+ * {@link DesignSystemTreeDriftedError}'s own doc comment for why the comparison is whole-tree
+ * rather than `system/`-scoped.
+ */
+async function assertDesignTreeNotDrifted(
+  fs: TransactionFsDeps,
+  expectedTreeRevision: string,
+): Promise<
+  | SafeFsError
+  | DesignTreeTooDeepError
+  | DuplicateInventoryPathError
+  | DesignSystemTreeDriftedError
+  | null
+> {
+  const listed = await createDesignTreeStore(fs.safeFs).listTree();
+  if (listed instanceof Error) return listed;
+
+  const inventory = createDesignTreeInventory(
+    listed.map((file) => ({ relPath: file.relPath, sha256: file.sha256 })),
+  );
+  if (inventory instanceof Error) return inventory;
+
+  const currentTreeRevision = computeTreeRevision(inventory);
+  if (currentTreeRevision !== expectedTreeRevision) return new DesignSystemTreeDriftedError({});
+  return null;
 }
 
 /**
@@ -831,6 +901,42 @@ function makeTransactionEngine(
           mutationKind: "local-state-write",
           operations: [built.operation],
           payloads: payloadMapOf(built.payload),
+          createdAt: input.createdAt,
+        });
+      });
+    },
+
+    /**
+     * `designSystem.install` (project-design-systems §8.3): replaces `design/system/**` and
+     * writes `.termcraft/design-system-source.json` in ONE `project-mutation`. Refuses with
+     * `DesignSystemTreeDriftedError` (checked FIRST, inside the permit — I2 fix) when the whole
+     * design tree changed since `input.expectedTreeRevision` was captured at preview time; see
+     * that class's own doc comment for why the comparison is whole-tree rather than `system/`-
+     * scoped. Only once that check passes does each operation's own per-file `oldImage` CAS run,
+     * inside `runProjectMutation`; a crash after intent is rolled forward or discarded by the
+     * recovery scan that already runs at `openProject`, so a half-replaced system is not a
+     * reachable state either way.
+     */
+    async installDesignSystem(input: InstallDesignSystemInput) {
+      return withPermit(mutex, async (permit) => {
+        const drifted = await assertDesignTreeNotDrifted(fs, input.expectedTreeRevision);
+        if (drifted instanceof Error) return drifted;
+
+        const built = buildDesignSystemInstallOperations(wrapperDeps, {
+          nextFiles: input.nextFiles,
+          removedTreeRelPaths: input.removedTreeRelPaths,
+          provenanceBytes: input.provenanceBytes,
+        });
+        if (built instanceof Error) return built;
+
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "design-system-install",
+          operations: indexPageOperations(built),
+          payloads: collectPagePayloads(built),
           createdAt: input.createdAt,
         });
       });

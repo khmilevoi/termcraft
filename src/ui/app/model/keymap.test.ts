@@ -27,6 +27,7 @@ const ctx = (over: Partial<KeyContext>): KeyContext => ({
   projectOpening: false,
   projectOpen: true,
   fullscreen: false,
+  designSystemPrompt: null,
   ...over,
 });
 
@@ -617,6 +618,54 @@ describe("resolveKey — modal controls", () => {
     expect(resolveKey(key({ name: "return" }), exportOpen)).toEqual({ kind: "export-dismiss" });
     expect(resolveKey(key({ name: "escape" }), exportOpen)).toEqual({ kind: "export-dismiss" });
     expect(resolveKey(key({ name: "x", sequence: "x" }), exportOpen)).toEqual({ kind: "none" });
+  });
+});
+
+describe("resolveKey — design-system overlay (P10 task 13)", () => {
+  test("the design-system overlay routes up/down/enter/esc", () => {
+    const context = ctx({ overlay: "design-system" });
+    expect(resolveKey(key({ name: "up" }), context)).toEqual({
+      kind: "design-system-move",
+      delta: -1,
+    });
+    expect(resolveKey(key({ name: "down" }), context)).toEqual({
+      kind: "design-system-move",
+      delta: 1,
+    });
+    expect(resolveKey(key({ name: "return" }), context)).toEqual({
+      kind: "design-system-activate",
+    });
+    expect(resolveKey(key({ name: "escape" }), context)).toEqual({ kind: "overlay-dismiss" });
+  });
+
+  test("`p` publishes only from the picker, never from a confirmation", () => {
+    expect(
+      resolveKey(
+        key({ name: "p", sequence: "p" }),
+        ctx({ overlay: "design-system", designSystemPrompt: null }),
+      ),
+    ).toEqual({ kind: "design-system-publish" });
+    // A confirmation already covering the screen is not the picker — `p` falls through to
+    // `none` there rather than being (re)read as "publish" (KeyContext.designSystemPrompt's own
+    // doc comment).
+    expect(
+      resolveKey(
+        key({ name: "p", sequence: "p" }),
+        ctx({ overlay: "design-system", designSystemPrompt: "install" }),
+      ),
+    ).toEqual({ kind: "none" });
+  });
+
+  // ASSERTS THE EXISTING BEHAVIOUR (adapt-don't-assume): the trust-prompt branch (`resolveKey`'s
+  // very first check) only ever answers `isSubmitKey`/`escape` — every other key, `down` included,
+  // already fell through to `{ kind: "none" }` before this task touched the file. The overlay
+  // branch this task adds sits far below that branch and is simply never reached while
+  // `screen === "trust-prompt"`, so trust wins by the SAME unconditional early return it already
+  // had, not by anything new this task adds.
+  test("the trust-prompt screen still wins over any overlay", () => {
+    expect(
+      resolveKey(key({ name: "down" }), ctx({ screen: "trust-prompt", overlay: "design-system" })),
+    ).toEqual({ kind: "none" });
   });
 });
 

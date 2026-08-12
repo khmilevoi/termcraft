@@ -11,6 +11,8 @@ import {
   commitPlanReadyPayloadV1Schema,
   commitStartedPayloadV1Schema,
   commitTerminalPayloadV1Schema,
+  designSystemListedPayloadV1Schema,
+  designSystemPreviewedPayloadV1Schema,
   diagnosticsChangedPayloadV1Schema,
   eventPayloadV1SchemaByKind,
   exportProgressPayloadV1Schema,
@@ -1677,5 +1679,76 @@ describe("diagnosticsChangedPayloadV1Schema", () => {
     expect(
       diagnosticsChangedPayloadV1Schema.safeParse({ ...valid, generation: "-1" }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * I3 (project-design-systems P10 final review): the caps this file used to place on
+ * `blockedPages`/`reason` are producer-UNBOUNDED — `core/design-systems/model/candidate.ts`'s
+ * `toBreakageItem` copies `blockedPages` untruncated, and `core/design-systems/model/sources.ts`'s
+ * `listOne` copies `raced.message`/`safeMessage` into `reason` untruncated — so a package that
+ * breaks 21+ pages, or a source failure with a long message, used to fail this schema and take
+ * the WHOLE event batch down with it (`event-bus.ts`'s `validateBatch` is all-or-nothing). Fixed
+ * by dropping the caps to match the sibling precedent already in this file: `turnGateErrorV1Schema`/
+ * `turnGateWarningV1Schema`'s own `blockedPages` (~line 880/912) carry no `.max()` either. The
+ * `designSystemBreakageDtoV1Schema.message` cap and the preview's `errors`/`warnings` array caps
+ * stay — `candidate.ts` truncates/slices to those exact bounds before it ever builds the DTO, so
+ * those two are producer-enforced, not producer-unbounded.
+ */
+describe("designSystem event payloads (I3: unbounded producers vs runtime caps)", () => {
+  const SUMMARY = {
+    id: "midnight",
+    name: "Midnight",
+    version: "1.0.0",
+    kitApiVersion: 1,
+    defaultTheme: "dark",
+    defaultThemeTokens: [{ name: "accent", value: "#4cc9f0" }],
+    componentNames: ["Button"],
+  };
+
+  test("designSystem.previewed publishes with 21+ blocked pages on one breakage item", () => {
+    const manyBlockedPages = Array.from({ length: 25 }, (_unused, index) => `page-${index}`);
+    const valid = {
+      operationId: uid(),
+      installId: uid(),
+      ref: "local:midnight@1.0.0",
+      summary: SUMMARY,
+      preview: {
+        verdict: "breaks-pages",
+        errors: [
+          {
+            code: "FORBIDDEN_IMPORT",
+            message: "shared/module.ts imports a forbidden dependency",
+            file: "shared/module.ts",
+            blockedPages: manyBlockedPages,
+          },
+        ],
+        warnings: [],
+      },
+    };
+    const parsed = designSystemPreviewedPayloadV1Schema.safeParse(valid);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.preview.errors[0]?.blockedPages.length).toBe(25);
+  });
+
+  test("designSystem.listed publishes with a source reason over 400 characters", () => {
+    const longReason = "x".repeat(500);
+    const valid = {
+      operationId: uid(),
+      sources: [
+        {
+          sourceId: "local",
+          label: "Local library",
+          canPublish: true,
+          state: "unavailable",
+          systems: [],
+          reason: longReason,
+        },
+      ],
+      update: null,
+    };
+    const parsed = designSystemListedPayloadV1Schema.safeParse(valid);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.sources[0]?.reason).toBe(longReason);
   });
 });

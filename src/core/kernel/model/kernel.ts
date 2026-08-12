@@ -64,7 +64,12 @@ import type { Kernel, KernelDeps } from "../types";
 import { createKernelCounters } from "./counters";
 import { createHandlerRegistry, totalHandlers } from "./handlers";
 import { hostCircuitOpenedEvents } from "./handlers/preview-export";
-import type { HandlerContext, SelectionSnapshotV1, TurnCancelHandle } from "./handlers/types";
+import {
+  type HandlerContext,
+  type SelectionSnapshotV1,
+  type TurnCancelHandle,
+  createDesignSystemInstallLedger,
+} from "./handlers/types";
 import { publishOperationEvents } from "./operation-publish";
 
 /**
@@ -426,6 +431,12 @@ export function createKernel(deps: KernelDeps): Kernel {
           growablePageDescriptors = [];
           growableLivePreviewSessionId = null;
           growableProjectId = null;
+          // A held design-system preparation is project-scoped (it names a candidate for THIS
+          // project's `design/system/**`) and must not outlive the project it was previewed
+          // against — the same rule this branch already applies to every growable identity
+          // above. `clear()` discards the quarantine directory too, so a preparation abandoned
+          // by a project switch never leaks (project-design-systems Wave 3 / P10).
+          designSystemLedger.clear();
           return;
         }
         // (§10 smoke closeout, bug 2) `handlers/project.ts`'s own `runProjectReadySequence`
@@ -549,6 +560,12 @@ export function createKernel(deps: KernelDeps): Kernel {
     // must never share one plan slot"), so exactly one is built here, per `createKernel`
     // call, matching every other per-Kernel factory above.
     const pageRemovePlanLedger = createPageRemovePlanLedger();
+
+    // The per-Kernel `DesignSystemInstallLedger` (`./handlers/types.ts`, project-design-systems
+    // Wave 3 / P10) — same "exactly one per `createKernel` call" discipline as
+    // `pageRemovePlanLedger` just above. Its `replace`/`clear` reach `deps.designSystemQuarantine
+    // .discard` directly, so an abandoned quarantine preparation is never leaked.
+    const designSystemLedger = createDesignSystemInstallLedger(deps.designSystemQuarantine);
 
     // The preview family's four `SessionCommandsDeps` collaborators, plus the router
     // itself — built ONCE, over the SAME real `previewMachine` this Kernel already holds
@@ -812,6 +829,7 @@ export function createKernel(deps: KernelDeps): Kernel {
       frameTokenLedger,
       geometryTokenLedger,
       pageRemovePlanLedger,
+      designSystemLedger,
     };
 
     // `deferredHandlers` (10 kinds) + the four landed families' maps (`chat`, `selection`+
@@ -941,6 +959,10 @@ export function createKernel(deps: KernelDeps): Kernel {
       // teardown below tears down the preview session, which makes the supervisor emit — and
       // a listener still attached would try to drive machines this frame is releasing.
       unsubscribeSupervisor();
+      // Whole-Kernel teardown discards any held design-system preparation too — mirrors
+      // `setActivePreviewSession(null)` just below for the identical reason (project-scoped
+      // state must not outlive the Kernel that scoped it).
+      designSystemLedger.clear();
       const preview = activePreview;
       // Routed through `setActivePreviewSession(null)` (not a bare `activePreview = null`
       // assignment) so this teardown path ALSO invalidates `previewSessionCommands`'s own
