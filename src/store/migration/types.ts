@@ -176,6 +176,14 @@ export interface LegacyProjectV1 {
   readonly targetStack: TargetStack;
   /** Manifest order, which IS page order in format 1 and becomes `design/pages.json`'s order. */
   readonly pages: readonly LegacyPageV1[];
+  /**
+   * Whether `design/system/design-system.json` already exists in the tree — a format-1 layout
+   * has no `design/` folder by construction, so this is normally `false`, but nothing stops a
+   * hand-edit, a third-party tool, or an abandoned earlier attempt from creating one before the
+   * migration runs. Mirrors {@link FormatTwoProjectV1.hasDesignSystem}'s ruling 4: the seed is
+   * written only when this is `false`, so an already-present system is never silently clobbered.
+   */
+  readonly hasDesignSystem: boolean;
 }
 
 // ---- the retired format-2 layout (design-systems §9) -----------------------------------
@@ -224,9 +232,12 @@ export interface MigrationPlanV1 {
   readonly moves: readonly MigrationMoveV1[];
   readonly pageCount: number;
   readonly pinLogCount: number;
-  /** Whether this transaction writes `design/system/` — always `true` today (ruling 1: a
-   *  version-1 project never has one; a version-2 project has one only if it installed it
-   *  early). The dialog draws its design-system bullet from this, not from a version check. */
+  /** Whether this transaction writes `design/system/` — `true` in the ordinary case for both
+   *  origins (a version-1 project's layout has no `design/` folder at all, and a version-2
+   *  project usually has not installed one yet), but `false` whenever the scan finds one already
+   *  present (ruling 4) — a hand-edit, a third-party tool, or an earlier abandoned attempt on
+   *  either origin. The dialog draws its design-system bullet from this, never from a bare
+   *  version check. */
   readonly seedsDesignSystem: boolean;
   /** `{userStateRoot}/backups/<projectId>` — the real location, shown verbatim in the dialog. */
   readonly backupsDir: AbsPath;

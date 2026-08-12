@@ -50,9 +50,12 @@ export function migratedPinsPath(slug: PageSlug): string {
  *   3. `design/pages.json` synthesized from `project.toml`'s ordered `pages` array (not a move —
  *      built by `buildV1ToV2Operations`, which is why it is not listed here)
  *   4. `project.toml` rewritten without `pages`, at `format_version = 3` (likewise)
- *   5. `design/system/` seeded — `seedsDesignSystem` is always `true` here: a version-1 project's
- *      layout has no `design/` tree at all, so it can never already have one (unlike the
- *      version-2 origin, where ruling 4 applies).
+ *   5. `design/system/` seeded, unless the scan already found one (not a move — built by
+ *      `buildV1ToV2Operations`, which is why it is not listed here either). A version-1 layout has
+ *      no `design/` tree by construction, so `seedsDesignSystem` is usually `true`, but ruling 4
+ *      applies here exactly as it does on the version-2 origin: nothing stops a hand-edit, a
+ *      third-party tool, or an abandoned earlier attempt from having created one already, and the
+ *      seed must not silently replace it.
  *
  * NO PAGE SOURCE BYTE IS EDITED. §12.2: every page stays a self-contained single file importing
  * only `@termcraft/runtime`, which is still valid under §5/§6 — the new format PERMITS shared
@@ -86,7 +89,7 @@ export function planV1ToV2(input: {
     moves: [...sources, ...pinLogs],
     pageCount: sources.length,
     pinLogCount: pinLogs.length,
-    seedsDesignSystem: true,
+    seedsDesignSystem: !input.scan.hasDesignSystem,
     // The REAL backup location (`{userStateRoot}/backups/<projectId>/`), outside `.termcraft` so a
     // Git operation cannot clobber it — `docs/architecture/storage.md` item 17. §12.3 records this
     // as a deliberate divergence from the dialog mockup, which draws
@@ -123,11 +126,14 @@ export interface V1ToV2OperationsV1 {
  * the bytes it hands the backup and the images it CASes on are read in the same pass.
  *
  * FIVE THINGS, not four: relocate every page source and pin log (1, 2), synthesize
- * `design/pages.json` (3), seed `design/system/` (4, new — a version-1 project never had one, so
- * this always writes it, unlike the version-2 origin's "only if absent" gate), then rewrite
- * `project.toml` at the current format version LAST (5) — `PROJECT_MANIFEST_FORMAT_VERSION` is
- * now 3, so this step alone, with no manifest-logic edit, is what turns "1 -> 2" into "1 -> 3 in
- * one transaction" (ruling 1). Keeping the seed write before the manifest rewrite matters for the
+ * `design/pages.json` (3), seed `design/system/` (4, new — guarded by the SAME "only if absent"
+ * rule `buildV2ToV3Operations` applies: a version-1 layout has no `design/` tree by construction,
+ * so this is normally unconditional in practice, but `input.scan.hasDesignSystem` is checked
+ * here too, so a hand-edit or an abandoned earlier attempt is never silently overwritten — see
+ * `LegacyProjectV1.hasDesignSystem`'s own doc comment), then rewrite `project.toml` at the
+ * current format version LAST (5) — `PROJECT_MANIFEST_FORMAT_VERSION` is now 3, so this step
+ * alone, with no other manifest-logic edit, is what turns "1 -> 2" into "1 -> 3 in one
+ * transaction" (ruling 1). Keeping the seed write before the manifest rewrite matters for the
  * identical reason `v2-to-v3.ts`'s own ordering comment gives: a `project.toml` written before the
  * tree actually holds `design/system/` would open a window where the manifest lies about it.
  *
@@ -221,12 +227,18 @@ export function buildV1ToV2Operations(
   const wroteManifest = write(designFilePath(PAGES_MANIFEST_RELPATH), pagesManifestBytes);
   if (wroteManifest instanceof Error) return wroteManifest;
 
-  // --- 4: seed the project's design system (design-systems §9, ruling 1) --------------------
-  // Unconditional: format 1's layout has no `design/` tree at all, so a version-1 project can
-  // never already have one — unlike `buildV2ToV3Operations`'s "only if absent" gate.
-  for (const file of createDesignSystemSeedFiles({ kitApiVersion: input.kitApiVersion })) {
-    const wroteSeed = write(designFilePath(file.relPath), file.bytes);
-    if (wroteSeed instanceof Error) return wroteSeed;
+  // --- 4: seed the project's design system, unless the scan already found one ---------------
+  // (design-systems §9, ruling 1 + ruling 4). A format-1 layout has no `design/` tree by
+  // construction, so `input.scan.hasDesignSystem` is normally `false` here — but this guard is
+  // NOT a formality: skipping it would let a hand-edit, a third-party tool, or an abandoned
+  // earlier attempt's `design/system/design-system.json` be silently overwritten by a `write()`
+  // that observes it as `oldImage: { state: "file", … }` and never backs it up (`backupFiles`
+  // must stay "never a superset, never a subset" — this interface's own doc comment above).
+  if (!input.scan.hasDesignSystem) {
+    for (const file of createDesignSystemSeedFiles({ kitApiVersion: input.kitApiVersion })) {
+      const wroteSeed = write(designFilePath(file.relPath), file.bytes);
+      if (wroteSeed instanceof Error) return wroteSeed;
+    }
   }
 
   // --- 5: rewrite project.toml — drop `pages`, set the current format_version ---------------

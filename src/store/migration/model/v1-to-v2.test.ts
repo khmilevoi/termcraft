@@ -19,6 +19,7 @@ const PLAN_ID = "019fb111-0000-7000-8000-000000000001";
 const scan = (input: {
   readonly slugs: readonly string[];
   readonly pinned?: readonly string[];
+  readonly hasDesignSystem?: boolean;
 }): LegacyProjectV1 => ({
   formatVersion: 1,
   projectId: PROJECT_ID,
@@ -30,6 +31,7 @@ const scan = (input: {
     legacySourcePath: `pages/${slug}/page.tsx`,
     legacyPinsPath: (input.pinned ?? []).includes(slug) ? `pages/${slug}/comments.jsonl` : null,
   })),
+  hasDesignSystem: input.hasDesignSystem ?? false,
 });
 
 describe("planV1ToV2 (design-tree §12.2 track 1's move set)", () => {
@@ -80,6 +82,15 @@ describe("planV1ToV2 (design-tree §12.2 track 1's move set)", () => {
     expect(plan.moves).toEqual([]);
     expect(plan.seedsDesignSystem).toBe(true);
   });
+
+  test("seedsDesignSystem is false when the scan already found one (ruling 4)", () => {
+    const plan = planV1ToV2({
+      scan: scan({ slugs: [], hasDesignSystem: true }),
+      userStateRoot: USER_STATE_ROOT,
+      migrationPlanId: PLAN_ID,
+    });
+    expect(plan.seedsDesignSystem).toBe(false);
+  });
 });
 
 // ---- buildV1ToV2Operations ---------------------------------------------------------------
@@ -98,6 +109,9 @@ const nextPayloadId = () => `payload-${++payloadCounter}`;
 function seedForOperations(input: {
   readonly slugs: readonly string[];
   readonly pinned?: readonly string[];
+  /** A hand-edit or an abandoned earlier attempt's `design/system/design-system.json`, already
+   *  present before the scan+build pipeline runs — the case ruling 4 guards against. */
+  readonly hasDesignSystem?: boolean;
 }) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "tc-v1v2-"));
   scratchRoots.push(scratch);
@@ -126,6 +140,13 @@ function seedForOperations(input: {
         path.join(termcraftDir, "pages", slug, "comments.jsonl"),
         '{"kind":"header"}\n',
       );
+  }
+  if (input.hasDesignSystem === true) {
+    fs.mkdirSync(path.join(termcraftDir, "design", "system"), { recursive: true });
+    fs.writeFileSync(
+      path.join(termcraftDir, "design", "system", "design-system.json"),
+      '{"schemaVersion":1,"hand-edited":true}',
+    );
   }
   const deps = nodeSafeFsDeps();
   const root = openManagedRoot({ kind: "project-migration", path: termcraftDir, deps });
@@ -284,5 +305,23 @@ describe("buildV1ToV2Operations (one transaction, writes before deletes)", () =>
     });
     if (built instanceof Error) throw built;
     expect(built.operations.some((op) => op.target.startsWith("pins/"))).toBe(false);
+  });
+
+  test("an existing design system on a format-1 project is preserved — the seed is not written, and backupFiles stays exact (ruling 4)", () => {
+    const { fsDeps, scanned } = seedForOperations({ slugs: ["dashboard"], hasDesignSystem: true });
+    expect(scanned.hasDesignSystem).toBe(true);
+    const built = buildV1ToV2Operations(fsDeps, {
+      scan: scanned,
+      kitApiVersion: 1,
+      newPayloadId: nextPayloadId,
+    });
+    if (built instanceof Error) throw built;
+    expect(built.operations.some((op) => op.target.startsWith("design/system/"))).toBe(false);
+    // "never a superset, never a subset" (V1ToV2OperationsV1's own doc comment): the untouched
+    // design-system.json must never appear in the backup set either.
+    expect(built.backupFiles.map((file) => file.relPath).sort()).toEqual([
+      "pages/dashboard/page.tsx",
+      "project.toml",
+    ]);
   });
 });

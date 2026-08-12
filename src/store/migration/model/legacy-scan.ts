@@ -1,6 +1,7 @@
 import * as errore from "errore";
 import { z } from "zod";
 
+import { DESIGN_SYSTEM_MANIFEST_RELPATH } from "entities/design-system";
 import { pageSlugSchema } from "entities/page";
 import type { PageSlug } from "entities/page";
 import { rfc3339UtcSchema } from "infrastructure/clock";
@@ -9,6 +10,7 @@ import { FsAccessError, isNotFound } from "store/safe-fs";
 import type { SafeProjectFs } from "store/safe-fs";
 import { PROJECT_MANIFEST_FILENAME, TARGET_STACKS, parseToml, readFormatVersion } from "store/toml";
 import type { TargetStack } from "store/toml";
+import { designFilePath } from "store/transaction";
 
 import type { LegacyPageV1, LegacyProjectV1 } from "../types";
 
@@ -156,6 +158,13 @@ export function scanLegacyProject(safeFs: SafeProjectFs): LegacyScanError | Lega
     });
   }
 
+  // A format-1 layout has no `design/` folder by construction, so this is normally `false` — but
+  // nothing on disk enforces that, and `buildV1ToV2Operations` must not clobber a design system a
+  // hand-edit, a third-party tool, or an abandoned earlier attempt already left in the tree
+  // (design-systems §9 ruling 4, the same rule `FormatTwoProjectV1.hasDesignSystem` carries).
+  const hasDesignSystem = probeLeaf(safeFs, designFilePath(DESIGN_SYSTEM_MANIFEST_RELPATH));
+  if (hasDesignSystem instanceof Error) return hasDesignSystem;
+
   return {
     formatVersion: LEGACY_PROJECT_FORMAT_VERSION,
     projectId: decoded.data.project_id,
@@ -163,5 +172,6 @@ export function scanLegacyProject(safeFs: SafeProjectFs): LegacyScanError | Lega
     createdAt: decoded.data.created_at,
     targetStack: decoded.data.target_stack satisfies TargetStack,
     pages,
+    hasDesignSystem,
   };
 }

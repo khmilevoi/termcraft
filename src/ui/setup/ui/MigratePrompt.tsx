@@ -31,9 +31,13 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
  *
  * DIVERGENCE (recorded, not silent): the mock's own three bullets are its sample content for a
  * different migration (`3 pages → current page.tsx`, `kit 2.1 · tweaks · pins · agent choice`).
- * §12.1's four facts are carried on the mock's three lines rather than growing the 16-row box,
- * because the box height is design and the sample copy is not: the third line pairs the pin logs
- * with the manifest rewrite, and states the rewrite alone when the project has no pin logs.
+ * §12.1's four facts were originally carried on three lines by pairing the pin logs with the
+ * manifest rewrite (stating the rewrite alone when the project has no pin logs); design-systems §9
+ * adds a genuine FOURTH line — the seeded design system, when `seedsDesignSystem` is true — rather
+ * than folding it into an existing bullet, because unlike the pin-log/manifest pairing there is no
+ * natural pairing for it. The 16-row box still fits four bullets plus the warning, lead-in and
+ * git-history lines comfortably (15 of 16 rows at this component's own fixed heights), so this
+ * stays a content divergence from the mock, not a layout one.
  *
  * `view.fromVersion === 2` draws the version-2 -> 3 bullets instead: no moves at all (ruling 1's
  * "no page source byte is edited" applies doubly here — a version-2 project's sources were

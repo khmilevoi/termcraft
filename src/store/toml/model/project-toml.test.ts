@@ -30,7 +30,7 @@ describe("encodeTomlString", () => {
 });
 
 describe("encodeProjectManifest", () => {
-  test("emits format_version = 2 and exactly the four semantic fields, in order", () => {
+  test("emits format_version = 3 and exactly the four semantic fields, in order", () => {
     const text = encodeProjectManifest(manifest);
     expect(text.trimEnd().split("\n")).toEqual([
       "format_version = 3",
@@ -152,7 +152,7 @@ describe("decodeProjectManifest", () => {
     }
   });
 
-  test("a version-2 manifest carrying `pages` is corrupt — pages.json is the only order", () => {
+  test("a version-3 manifest carrying `pages` is corrupt — pages.json is the only order", () => {
     const decoded = decodeProjectManifest(`${encodeProjectManifest(manifest)}pages = ["a"]\n`);
     expect(decoded).toBeInstanceOf(ManifestCorruptError);
     expect((decoded as ManifestCorruptError)._tag).toBe("ManifestCorruptError");
@@ -193,8 +193,11 @@ describe("decodeProjectManifest", () => {
 });
 
 // Task 5 brief's own sample, kept verbatim (values, structure) alongside the suite above,
-// which folds the same coverage into the file's established `manifest` fixture style.
-const V2 = [
+// which folds the same coverage into the file's established `manifest` fixture style. Renamed
+// from `V2` (2026-08-12 review Finding 3): this text is a format-3 manifest — `format_version`
+// was bumped in place when `PROJECT_MANIFEST_FORMAT_VERSION` moved to 3 — and the old name read
+// as a claim about which format this fixture represents.
+const CURRENT_MANIFEST = [
   "format_version = 3",
   'project_id = "019fa002-5f5b-7000-92e3-9931eebd6c52"',
   'name = "clock"',
@@ -204,7 +207,7 @@ const V2 = [
 ].join("\n");
 
 test("decodes a version-3 manifest with no pages field", () => {
-  const decoded = decodeProjectManifest(V2);
+  const decoded = decodeProjectManifest(CURRENT_MANIFEST);
   if (decoded instanceof Error) throw decoded;
   expect(decoded.formatVersion).toBe(3);
   expect(decoded.name).toBe("clock");
@@ -212,24 +215,28 @@ test("decodes a version-3 manifest with no pages field", () => {
 });
 
 test("a version-1 manifest is a migration-required refusal, not a shape error", () => {
-  const result = decodeProjectManifest(V2.replace("format_version = 3", "format_version = 1"));
+  const result = decodeProjectManifest(
+    CURRENT_MANIFEST.replace("format_version = 3", "format_version = 1"),
+  );
   expect(result).toBeInstanceOf(ManifestMigrationRequiredError);
   expect(String(result)).toContain("migrated");
 });
 
-test("a version-2 manifest carrying `pages` is corrupt — pages.json is the only order", () => {
-  const result = decodeProjectManifest(`${V2}pages = ["a"]\n`);
+test("a version-3 manifest carrying `pages` is corrupt — pages.json is the only order", () => {
+  const result = decodeProjectManifest(`${CURRENT_MANIFEST}pages = ["a"]\n`);
   expect(result).toBeInstanceOf(ManifestCorruptError);
 });
 
 test("a version-4 manifest is still too-new, not migration-required", () => {
-  const result = decodeProjectManifest(V2.replace("format_version = 3", "format_version = 4"));
+  const result = decodeProjectManifest(
+    CURRENT_MANIFEST.replace("format_version = 3", "format_version = 4"),
+  );
   expect(result).toBeInstanceOf(ManifestTooNewError);
   expect(result).not.toBeInstanceOf(ManifestMigrationRequiredError);
 });
 
 test("encode round-trips and omits pages", () => {
-  const decoded = decodeProjectManifest(V2);
+  const decoded = decodeProjectManifest(CURRENT_MANIFEST);
   if (decoded instanceof Error) throw decoded;
   const text = encodeProjectManifest(decoded);
   expect(text).not.toContain("pages");

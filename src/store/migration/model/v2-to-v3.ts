@@ -55,11 +55,25 @@ export interface V2ToV3OperationsV1 {
  *
  * AT MOST THREE WRITES, NO DELETES, AND `project.toml` IS LAST. That ordering is load-bearing for
  * the same reason `v1-to-v2.ts`'s writes-before-deletes ordering is: the engine applies operations
- * in index order and rolls forward idempotently after a crash, so a roll-forward that stops midway
- * has, at every point, either a project whose manifest still says 2 and whose tree may already hold
- * the seed — harmless, because the next open re-offers the migration and the seed is written to the
- * same bytes — or a fully migrated project. A `project.toml` written FIRST would open a window in
- * which the manifest claims a design system the tree does not have.
+ * in index order and CAN crash mid-roll-forward, e.g. between the two seed writes, leaving a
+ * `transactions.local/` directory that is `applied` but not yet `committed`.
+ *
+ * THE REAL SAFEGUARD IS NOT "the next open re-offers the migration and writes the same bytes" —
+ * a naive re-offer, if one ever read `format_version` first, could see `design-system.json`
+ * present without `tokens.ts` and, via `scanFormatTwoProject`'s `hasDesignSystem` check, skip the
+ * seed entirely, permanently stranding the tree half-seeded. What actually rules this out is
+ * ORDERING AT THE READ SITE, not disk-level idempotence: `recoverTransactions` runs BEFORE
+ * anything reads `format_version` on every path that can observe this project again —
+ * `openProject`'s step 4 (recover) precedes step 6 (schemas, which reads the manifest) in
+ * `factory.ts`, and `migrateProject`'s own `openMigrationContext` runs recovery before
+ * `migrateProject` ever calls `scanFormatTwoProject`. So any reader that reaches `format_version`
+ * has ALREADY rolled an interrupted transaction forward to its full committed state (both seed
+ * files and the rewritten `project.toml`) — it is never handed a half-seeded tree to misread.
+ *
+ * `project.toml` still goes LAST for its own, independent reason: a manifest written FIRST would
+ * open a window — observable only by something that skips recovery, which nothing in this codebase
+ * does, but the invariant should hold on its own terms — in which the manifest claims a design
+ * system the tree does not yet have.
  *
  * AN EXISTING DESIGN SYSTEM IS PRESERVED. A project that installed one before its `format_version`
  * moved must not have it silently replaced by the seed; the version bump is then the whole change.
