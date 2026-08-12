@@ -1,13 +1,18 @@
-// `core/design-systems` — the pure core of the install pipeline (project-design-systems design
+// `core/design-systems` — the design-system install pipeline (project-design-systems design
 // §8.3, §8.4, §8.5, §10.1 Wave 3 / P10): splicing an incoming package's `system/**` over the
 // canonical tree index, classifying the whole-tree Gate's answer into the picker's breakage
-// preview (decision D6), the grant-gated bounded-timeout multi-source list (D9, D10), and the
-// update check. No I/O — `model/install.ts` (a later task) is the impure orchestration that
-// calls into this module.
+// preview (decision D6), the grant-gated bounded-timeout multi-source list (D9, D10), the update
+// check, and (`model/install.ts`) the orchestration that threads trust -> fetch -> quarantine ->
+// candidate -> Gate -> preview -> commit through `core/ports`' ports. No DIRECT I/O anywhere in
+// this module — every effect crosses a port (`DesignSystemSource`, `DesignTreeReader`,
+// `GateRunner`, `DesignSystemQuarantinePort`, `DesignSystemInstallPort`), never a filesystem or
+// network call `core` makes itself.
 
 export type {
   DesignSystemBreakageItemV1,
   DesignSystemCandidateTreeV1,
+  DesignSystemInstallPortsV1,
+  DesignSystemPreparedInstallV1,
   DesignSystemPreviewV1,
   DesignSystemPreviewVerdictV1,
   DesignSystemUpdateV1,
@@ -29,3 +34,9 @@ export {
   listGrantedSources,
   sourceKindOf,
 } from "./model/sources";
+
+export {
+  commitDesignSystemInstall,
+  discardPreparedInstall,
+  prepareDesignSystemInstall,
+} from "./model/install";

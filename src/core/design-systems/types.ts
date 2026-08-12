@@ -4,11 +4,24 @@
  * {@link DesignSystemCandidateTreeV1}; its `summarizeGatePass` classifies the Gate's whole-tree
  * answer into {@link DesignSystemPreviewV1} (decision D6). `model/sources.ts`'s
  * `listGrantedSources` produces {@link SourceListingV1}; its `detectDesignSystemUpdate` produces
- * {@link DesignSystemUpdateV1} (decisions D9, D10).
+ * {@link DesignSystemUpdateV1} (decisions D9, D10). `model/install.ts`'s
+ * `prepareDesignSystemInstall` takes the ports bundle {@link DesignSystemInstallPortsV1} and
+ * produces {@link DesignSystemPreparedInstallV1} — the whole trust -> fetch -> quarantine ->
+ * candidate -> Gate -> preview pipeline, one immutable value `commitDesignSystemInstall` either
+ * commits or `discardPreparedInstall` throws away (§8.3, §8.5).
  */
 
-import type { DesignSystemSummaryV1 } from "core/ports";
+import type {
+  DesignSystemInstallPort,
+  DesignSystemQuarantinePort,
+  DesignSystemSource,
+  DesignSystemSummaryV1,
+  DesignTreeReader,
+  GateRunner,
+} from "core/ports";
+import type { Sha256Hex } from "core/protocol";
 import type { DesignSystemRef } from "entities/design-system-ref";
+import type { Clock } from "infrastructure/clock";
 
 /**
  * The candidate design tree, composed in memory over the canonical tree index (decision D5):
@@ -75,4 +88,41 @@ export interface DesignSystemUpdateV1 {
   readonly installedRef: DesignSystemRef;
   readonly available: DesignSystemSummaryV1;
   readonly reason: "different-version";
+}
+
+/**
+ * Every capability `model/install.ts`'s pipeline needs, bundled once so
+ * `prepareDesignSystemInstall`/`commitDesignSystemInstall`/`discardPreparedInstall` each take one
+ * argument instead of six. `quarantine` and `install` are `core/ports`' own ports (`core` may not
+ * import `store`); `source`, `designReader`, and `gateRunner` are the ports Tasks 3-7 already
+ * bind to.
+ */
+export interface DesignSystemInstallPortsV1 {
+  readonly source: DesignSystemSource;
+  readonly designReader: DesignTreeReader;
+  readonly gateRunner: GateRunner;
+  readonly quarantine: DesignSystemQuarantinePort;
+  readonly install: DesignSystemInstallPort;
+  readonly clock: Clock;
+  /**
+   * A UUIDv7 (D4): `store/design-systems`' quarantine treats the value as opaque and relies on
+   * create-new for collision safety, never on the value's own shape. The composition root (a
+   * later task) wires the real `uuidv7()`; any sufficiently-unique string works for a test.
+   */
+  readonly newInstallId: () => string;
+}
+
+/**
+ * One completed pass of the pipeline (§8.3, §8.5) — fetched, quarantined, composed into a
+ * candidate, and run through the whole-tree Gate once. Quarantine is DELIBERATELY still on
+ * disk at this point (`prepareDesignSystemInstall` never discards it): the caller either
+ * commits it (`commitDesignSystemInstall`) or abandons it (`discardPreparedInstall`).
+ */
+export interface DesignSystemPreparedInstallV1 {
+  readonly installId: string;
+  readonly ref: DesignSystemRef;
+  readonly contentHash: Sha256Hex;
+  readonly summary: DesignSystemSummaryV1;
+  readonly preview: DesignSystemPreviewV1;
+  readonly candidate: DesignSystemCandidateTreeV1;
 }

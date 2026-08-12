@@ -16,7 +16,9 @@ import {
 // OPERATIONAL_FAILURE_CODES_V1 itself, so this test cannot pass by construction the way
 // iterating the array under test always would. A misspelling such as `TURN_RUNNIG` (same
 // length, wrong spelling) fails this `toEqual`, where a length-only or Set-based check
-// would not.
+// would not. `DESIGN_SYSTEM_REJECTED` is appended last and is NOT from §11.2's table — it is
+// project-design-systems §8.3/§12's own code (decision D6), added to this same closed registry
+// rather than a second one (`core/protocol/model/failure.ts`'s own header explains why).
 const OPERATIONAL_FAILURE_CODES_V1_PER_SPEC = [
   "BACKEND_UNAVAILABLE",
   "BACKEND_FAILED",
@@ -48,12 +50,13 @@ const OPERATIONAL_FAILURE_CODES_V1_PER_SPEC = [
   "HOST_CIRCUIT_OPEN",
   "PERSISTENCE_FAILED",
   "RESOURCE_LIMIT_EXCEEDED",
+  "DESIGN_SYSTEM_REJECTED",
 ] as const;
 
 describe("OPERATIONAL_FAILURE_CODES_V1", () => {
-  test("has exactly the 30 codes kernel-command-contract §11.2 fixes", () => {
-    expect(OPERATIONAL_FAILURE_CODES_V1.length).toBe(30);
-    expect(OPERATIONAL_FAILURE_CODE_COUNT).toBe(30);
+  test("has exactly the 30 codes kernel-command-contract §11.2 fixes, plus DESIGN_SYSTEM_REJECTED", () => {
+    expect(OPERATIONAL_FAILURE_CODES_V1.length).toBe(31);
+    expect(OPERATIONAL_FAILURE_CODE_COUNT).toBe(31);
   });
 
   test("array length matches the exported count constant — the two cannot silently drift apart", () => {
@@ -64,7 +67,7 @@ describe("OPERATIONAL_FAILURE_CODES_V1", () => {
     expect(new Set(OPERATIONAL_FAILURE_CODES_V1).size).toBe(OPERATIONAL_FAILURE_CODES_V1.length);
   });
 
-  test("matches the §11.2 table verbatim, spelling and order pinned", () => {
+  test("matches the §11.2 table verbatim (plus DESIGN_SYSTEM_REJECTED appended last), spelling and order pinned", () => {
     expect(OPERATIONAL_FAILURE_CODES_V1).toEqual(OPERATIONAL_FAILURE_CODES_V1_PER_SPEC);
   });
 });

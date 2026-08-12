@@ -3,9 +3,10 @@ import { z } from "zod";
 /**
  * The closed v1 operational-failure code registry (kernel-command-contract §11.2),
  * transcribed verbatim from the table's "Code" column in table order — rows listing
- * several comma-separated codes expand to one entry each, still in left-to-right order.
- * Its length is asserted at 30 by the closure test so a member cannot be silently added
- * or dropped.
+ * several comma-separated codes expand to one entry each, still in left-to-right order —
+ * PLUS one code from a later spec, `DESIGN_SYSTEM_REJECTED` (project-design-systems §8.3/§12,
+ * appended last, see its own entry below for why this registry is no longer §11.2-only). Its
+ * length is asserted at 31 by the closure test so a member cannot be silently added or dropped.
  */
 export const OPERATIONAL_FAILURE_CODES_V1 = [
   "BACKEND_UNAVAILABLE",
@@ -38,12 +39,21 @@ export const OPERATIONAL_FAILURE_CODES_V1 = [
   "HOST_CIRCUIT_OPEN",
   "PERSISTENCE_FAILED",
   "RESOURCE_LIMIT_EXCEEDED",
+  // project-design-systems §8.3/§12, decision D6: the Gate refused the CANDIDATE ITSELF — a §7
+  // fatal inside `system/`, or a whole-tree fatal with no file attribution. Deliberately distinct
+  // from a package the Gate accepted that BREAKS PAGES: that is not a failure at all, it is a
+  // preview the designer confirms (§8.3, §12 — "surfaced before commit; not prevented"). Appended
+  // here (ahead of kernel-command-contract §11.2's own table, which this code is not part of)
+  // because `core/design-systems/model/install.ts`'s `commitDesignSystemInstall` needs it to
+  // type-check its own `FailureDtoV1` return; see that module's own header for the pipeline this
+  // closes.
+  "DESIGN_SYSTEM_REJECTED",
 ] as const;
 
 export type OperationalFailureCode = (typeof OPERATIONAL_FAILURE_CODES_V1)[number];
 
-/** The exact member count §11.2 fixes. A drifted union fails the closure test, not a review. */
-export const OPERATIONAL_FAILURE_CODE_COUNT = 30;
+/** The exact member count §11.2 fixes, PLUS `DESIGN_SYSTEM_REJECTED` (see its own entry above). A drifted union fails the closure test, not a review. */
+export const OPERATIONAL_FAILURE_CODE_COUNT = 31;
 
 const OPERATIONAL_FAILURE_CODE_SET: ReadonlySet<string> = new Set(OPERATIONAL_FAILURE_CODES_V1);
 

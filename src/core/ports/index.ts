@@ -121,6 +121,12 @@ export type {
   PublishReceiptV1,
 } from "./design-system-source";
 export type {
+  DesignSystemInstallFileV1,
+  DesignSystemInstallPort,
+  DesignSystemProvenanceRecordV1,
+  DesignSystemQuarantinePort,
+} from "./design-system-install";
+export type {
   DiagnosticsCache,
   DiagnosticsEntryV1,
   DiagnosticsKeyV1,
