@@ -56,7 +56,7 @@ describe("@termcraft/runtime facade contract (§11.1)", () => {
     expect(runtime.Fragment).toBeDefined();
   });
 
-  test("exports the full 20-component design-system catalog + the low-level Box escape hatch", () => {
+  test("exports the full 24-component design-system catalog + the low-level Box escape hatch", () => {
     for (const name of [
       "Row",
       "Column",
