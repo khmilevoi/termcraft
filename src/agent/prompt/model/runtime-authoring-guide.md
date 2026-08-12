@@ -11,7 +11,6 @@ alongside this file for the exact exported names and their types.
       kitApiVersion: 1,
       title: "Dashboard",
       minSize: { w: 80, h: 24 },
-      theme: "dark-default",
     })
 
     export default reatomComponent(function Page() {
@@ -26,6 +25,9 @@ alongside this file for the exact exported names and their types.
 component needs a stable, unique `id`; selection, pins, and chat references all address the
 design by id, and an id should survive edits across turns whenever the element itself
 survives.
+
+`meta.theme` is optional: omit it and the page renders in the project's default theme. Set it
+only to pin the page to a theme `design/system/design-system.json` actually declares.
 
 ## State
 
@@ -45,17 +47,40 @@ Layout is ordinary flexbox: `direction`, `grow`/`shrink`/`basis`, gaps, padding,
 alignment as style props on containers and primitives. `Row`/`Column` are flex-direction
 presets; `Spacer` is `flexGrow: 1`.
 
-Colors are semantic token names from one closed set — never raw hex. The complete set, and
-the only names that resolve:
+Colors are concrete values, read from this project's own design system. The names and the
+values live in `design/system/design-system.json`; `design/system/tokens.ts` is the typed
+accessor pages import.
 
-`background`, `surface`, `foreground`, `foregroundMuted`, `foregroundFaint`, `border`,
-`line`, `accent`, `accentHi`, `accentDim`, `selection`, `selectionFg`, `success`, `warning`,
-`danger`, `dangerDim`, `statusBg`.
+    import { useTokens } from "../system/tokens"
 
-`accent` is the primary highlight (amber); `success`/`warning`/`danger` are the semantic
-status hues; `foregroundMuted`/`foregroundFaint` are the de-emphasis steps. The MVP ships a
-single theme (`dark-default`), so a page cannot offer a real theme switch — it can only
-choose which of these tokens it uses.
+    export default reatomComponent(function Page() {
+      const t = useTokens()
+      return <Text id="title" color={t.accent}>Dashboard</Text>
+    })
+
+Call `useTokens()` **inside the component**, never at module scope: at module scope it captures
+one theme's values forever, and the Gate warns about it.
+
+A token name that the manifest does not declare is a fatal type error — `t.brandBlu` does not
+compile. That is the whole point: the set of names is the project's, not the runtime's, and it
+is still fully checked.
+
+Every theme declares these seventeen **core roles**, and the component catalog binds to them —
+`Panel` with no `borderColor` means `border`, a `Gauge` fill means `accent`, status semantics
+mean `success`/`warning`/`danger`:
+
+`background`, `surface`, `foreground`, `foregroundMuted`, `foregroundFaint`, `border`, `line`,
+`accent`, `accentHi`, `accentDim`, `selection`, `selectionFg`, `success`, `warning`, `danger`,
+`dangerDim`, `statusBg`.
+
+Beyond the core, a project may declare any number of its own names — `brandBlue`,
+`chartSeries1`, whatever the design needs. Read this turn's system prompt for the ones THIS
+project has, with their values. Adding one means editing `design-system.json`; a turn that adds
+a token and a turn that uses it can be the same turn.
+
+A raw hex string is legal where a `Color` is expected, but it is almost always the wrong answer:
+a hue written into a page is a hue no theme can change. Add it to the design system and read it
+as a token.
 
 ## Time and the sealed render
 
@@ -86,6 +111,9 @@ advance itself. That is the runtime's shape, not a missing feature.
 See "Time and the sealed render" above for the determinism rule. No imports beyond
 `@termcraft/runtime` — see `runtime.d.ts` and this turn's system prompt for the exact
 allowlist.
+
+A colour prop bound to a token _name_ (`color="accent"`) no longer type-checks. Write
+`color={t.accent}`.
 
 ## Element catalog additions
 

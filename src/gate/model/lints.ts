@@ -335,7 +335,7 @@ export function lintModuleScopeTokens(
       message:
         "`useTokens()` at module scope captures one theme's values forever — call it inside the " +
         "component body, so the read is tracked and a theme change re-renders the page; see " +
-        'RUNTIME.md\'s "Colors".',
+        'RUNTIME.md\'s "Layout and style".',
       ...lineColOf(source, t.pos),
     });
   }

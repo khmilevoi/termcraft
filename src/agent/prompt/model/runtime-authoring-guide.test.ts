@@ -2,64 +2,64 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
-import { DEFAULT_THEME_ID, themeTokens } from "runtime";
-
 import { DESIGN_CODE_RULES } from "./prose";
 
 const GUIDE_PATH = path.resolve(import.meta.dir, "runtime-authoring-guide.md");
 const GUIDE = fs.readFileSync(GUIDE_PATH, "utf8");
 
 /**
- * The palette paragraph, isolated by its own heading. Slicing the section rather than
- * scanning the whole file keeps `Row`/`Column`/`Spacer` and every other backticked
- * identifier in the document out of the comparison.
+ * THE MODEL THIS PINS (design-systems §4.3, §4.5; task 14, 2026-08-11). The guide used to teach
+ * "Colors are semantic token names from one closed set — never raw hex", then a closed list of
+ * seventeen names, then "The MVP ships a single theme". That is the model this branch replaces:
+ * colours are now concrete values read through `useTokens()` from a project-owned
+ * `design-system.json`, a raw hex is legal (if usually the wrong call), and a page may pin a
+ * theme or leave `meta.theme` unset. An authoring agent reading the old prose would write
+ * `color="accent"`, which no longer type-checks.
  */
-function paletteSection(): string {
-  const start = GUIDE.indexOf("## Layout and style");
-  expect(start).toBeGreaterThan(-1);
-  const end = GUIDE.indexOf("\n## ", start + 1);
-  return end === -1 ? GUIDE.slice(start) : GUIDE.slice(start, end);
-}
-
-/** Every backticked name in the palette section that looks like a token (not a prop or component). */
-function documentedTokens(): Set<string> {
-  const section = paletteSection();
-  const listStart = section.indexOf("the only names that resolve");
-  expect(listStart).toBeGreaterThan(-1);
-  const names = section.slice(listStart).matchAll(/`([A-Za-z][A-Za-z0-9]*)`/g);
-  return new Set([...names].map((m) => m[1]!));
-}
-
-/**
- * THE DEFECT THIS PINS (2026-07-27). This document used to list a palette that does not
- * exist: `text`, `text-muted`, `text-faint`, `primary`, `ok`, `error` — six invented names
- * out of eleven, none of them a key of `ThemeTokens`. It is the only colour reference an
- * authoring agent can read inside the turn fence, so every hue it named was a hue the page
- * could not resolve. CLAUDE.md's own rule covers exactly this: "Design is a source of truth
- * — never invent it."
- *
- * Comparing BOTH directions is the point. Checking only "documented ⊆ real" would let the
- * list quietly go stale as tokens are added; checking only the reverse would let an invented
- * name survive next to the real ones.
- */
-describe("RUNTIME.md's palette list against the real theme tokens", () => {
-  const real = new Set(Object.keys(themeTokens(DEFAULT_THEME_ID)));
-
-  test("every documented token name is a real ThemeTokens key", () => {
-    const invented = [...documentedTokens()].filter((name) => !real.has(name));
-    expect(invented).toEqual([]);
+describe("the colours section teaches the design-system model (design-systems §4.3, §4.5)", () => {
+  test("no longer forbids hex, and no longer claims a closed token set", () => {
+    expect(GUIDE).not.toContain("never raw hex");
+    expect(GUIDE).not.toContain("one closed set");
+    expect(GUIDE).not.toContain("the only names that resolve");
   });
 
-  test("every real ThemeTokens key is documented", () => {
-    const documented = documentedTokens();
-    const missing = [...real].filter((name) => !documented.has(name));
-    expect(missing).toEqual([]);
+  test("teaches the useTokens() import and read", () => {
+    expect(GUIDE).toContain('import { useTokens } from "../system/tokens"');
+    expect(GUIDE).toContain("const t = useTokens()");
+    expect(GUIDE).toContain("color={t.");
   });
 
-  test("the invented names the old list carried are gone", () => {
-    for (const gone of ["`text-muted`", "`text-faint`", "`primary`", "`ok`"]) {
-      expect(GUIDE).not.toContain(gone);
-    }
+  test("says where the token names come from", () => {
+    expect(GUIDE).toContain("design/system/design-system.json");
+  });
+
+  test("warns against a module-scope read, in the same words the Gate warns in", () => {
+    expect(GUIDE).toContain("inside the component");
+  });
+
+  test("the seventeen core roles are still named — they are the catalog's own defaults", () => {
+    for (const role of ["background", "foregroundFaint", "accentDim", "statusBg"])
+      expect(GUIDE).toContain(role);
+  });
+
+  test("no longer claims a single shipped theme", () => {
+    expect(GUIDE).not.toContain("The MVP ships a single theme");
+  });
+
+  test("meta.theme is documented as optional", () => {
+    expect(GUIDE).toContain("meta.theme");
+    expect(GUIDE).toContain("optional");
+  });
+
+  test("the minimal-shape example omits theme", () => {
+    // The example is what the agent copies. Leaving `theme: "dark-default"` in it would teach
+    // every new page to pin a theme name that a project's manifest may not declare.
+    expect(GUIDE).not.toContain('theme: "dark-default"');
+  });
+
+  test("the determinism section is untouched — it is still correct", () => {
+    expect(GUIDE).toContain("Time and the sealed render");
+    expect(GUIDE).toContain("requestAnimationFrame");
   });
 });
 
@@ -166,6 +166,34 @@ describe("RUNTIME.md's determinism vocabulary matches the Gate's own", () => {
   test("the guide states there is no tick", () => {
     expect(GUIDE).toMatch(/no tick/i);
     expect(GUIDE).toMatch(/renders once per commit/i);
+  });
+});
+
+/**
+ * THE ANCHOR-ROT GUARD (task 14, 2026-08-11). `lintModuleScopeTokens` (`gate/model/lints.ts`)
+ * cites RUNTIME.md by section name — `see RUNTIME.md's "<heading>"` — so a reader following the
+ * warning lands on the right prose. Before this task the cited heading was `"Colors"`, which has
+ * never existed in this guide (its headings are Minimal shape, State, Layout and style, Time and
+ * the sealed render, What not to do, Element catalog additions); the colour material actually
+ * lives under "Layout and style". Same text-only pairing discipline as the determinism block
+ * above — `LINTS_SOURCE` is read as TEXT, never imported, for the `agent -> core`, `gate -> core`
+ * DAG reason documented there — so this test re-derives the citation from the lint's own source
+ * and checks it against a real `## ` heading in the guide, instead of hardcoding the string on
+ * both sides where it could drift again.
+ */
+function extractRuntimeMdCitation(source: string, kind: string): string | null {
+  const kindIdx = source.indexOf(`kind: "${kind}"`);
+  if (kindIdx === -1) return null;
+  const after = source.slice(kindIdx);
+  const match = after.match(/RUNTIME\.md\\?'s "([^"]+)"/);
+  return match === null ? null : match[1]!;
+}
+
+describe("the Gate's RUNTIME.md citation names a heading the guide actually has", () => {
+  test("lintModuleScopeTokens's cited section exists in the guide", () => {
+    const citation = extractRuntimeMdCitation(LINTS_SOURCE, "module-scope-tokens");
+    expect(citation).not.toBeNull();
+    expect(GUIDE).toContain(`## ${citation}`);
   });
 });
 
