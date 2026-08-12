@@ -13,6 +13,7 @@ import {
   createFakeDesignStore,
   createFakeDesignSystemInstall,
   createFakeDesignSystemSource,
+  createFakeGateRunner,
 } from "core/ports/fakes";
 import type { DesignTreeFileSeedV1 } from "core/ports/fakes";
 import type { FailureDtoV1 } from "core/protocol";
@@ -107,6 +108,8 @@ interface FakePortsOptions {
   readonly gateErrors?: readonly GateErrorV1[];
   readonly quarantineRewritesTo?: string;
   readonly currentSystemFiles?: readonly string[];
+  /** Overrides `midnightPackageFiles()` — lets a test drive a package `composeDesignSystemCandidate` itself refuses (e.g. no manifest). */
+  readonly packageFiles?: readonly { relPath: string; bytes: Uint8Array }[];
 }
 
 /**
@@ -129,7 +132,7 @@ function createFakePorts(options: FakePortsOptions) {
     label: "Local library",
     canPublish: true,
   });
-  sourceFake.seed(MIDNIGHT_SUMMARY, midnightPackageFiles());
+  sourceFake.seed(MIDNIGHT_SUMMARY, options.packageFiles ?? midnightPackageFiles());
   if (options.fetchFailure !== undefined) sourceFake.failNext("fetch", options.fetchFailure);
   const source: DesignSystemSource = {
     ...sourceFake,
@@ -166,23 +169,25 @@ function createFakePorts(options: FakePortsOptions) {
 
   const designReader = buildDesignReader(options.currentSystemFiles);
 
-  // Queued in call order: readCanonicalTreeIndex's own pass over the CURRENT tree first (always
-  // clean here — these tests are about the INCOMING package, not the current tree), then the
-  // candidate pass, which carries `options.gateErrors` (decision D6).
-  const treeResults = [
-    { errors: [], warnings: [], closures: [] },
-    { errors: options.gateErrors ?? [], warnings: [], closures: [] },
-  ];
+  // The SHARED fake, layered with `trace` exactly like `source` above — `queueRunTreeResult` is
+  // an explicit FIFO queue (`core/ports/fakes/gate-runner.ts`), built precisely for scripting
+  // successive calls with different results, so no hand-rolled `GateRunner` is needed. Queued in
+  // call order: readCanonicalTreeIndex's own pass over the CURRENT tree first (always clean here
+  // — these tests are about the INCOMING package, not the current tree), then the candidate pass,
+  // which carries `options.gateErrors` (decision D6).
+  const gateRunnerFake = createFakeGateRunner();
+  gateRunnerFake.queueRunTreeResult({ errors: [], warnings: [], closures: [] });
+  gateRunnerFake.queueRunTreeResult({
+    errors: options.gateErrors ?? [],
+    warnings: [],
+    closures: [],
+  });
   const gateRunner: GateRunner = {
-    runManifestSlice: async () => ({ errors: [], slice: { pages: [], active: null } }),
-    runPage: async () => {
-      throw new Error("fixture bug: runPage is not exercised by the install pipeline");
-    },
-    runTree: async () => {
+    ...gateRunnerFake,
+    runTree: async (input) => {
       pushTrace("runTree");
-      return treeResults.shift() ?? { errors: [], warnings: [], closures: [] };
+      return gateRunnerFake.runTree(input);
     },
-    extractPageMeta: async () => ({ meta: null, errors: [] }),
   };
 
   let installCounter = 0;
@@ -258,6 +263,30 @@ describe("prepareDesignSystemInstall", () => {
       });
       const prepared = expectPrepared(await wrap(prepareDesignSystemInstall(ports, MIDNIGHT_REF)));
       expect(prepared.preview.verdict).toBe("blocked");
+    });
+  });
+
+  test("a package that fails CANDIDATE COMPOSITION (no manifest) is refused as DESIGN_SYSTEM_REJECTED, carrying the composition error's message, and quarantine is discarded", async () => {
+    await context.start(async () => {
+      const ports = createFakePorts({
+        // No `design-system.json` at all — `composeDesignSystemCandidate` itself refuses this
+        // (`DesignSystemCandidateError`: "the package has no manifest"), distinct from a Gate
+        // fatal (D6): the package never reaches the Gate at all.
+        packageFiles: [
+          {
+            relPath: "components/Button.tsx",
+            bytes: encode("export const Button = () => null;\n"),
+          },
+        ],
+      });
+      const result = await wrap(prepareDesignSystemInstall(ports, MIDNIGHT_REF));
+      expect(result).toHaveProperty("code", "DESIGN_SYSTEM_REJECTED");
+      expect(result).toMatchObject({
+        safeMessage: expect.stringContaining("the package has no manifest"),
+      });
+      // Exactly one `newInstallId()` call happened (the only preparation in this test), so its
+      // one quarantine directory is the one discarded.
+      expect(ports.discarded).toEqual(["install-1"]);
     });
   });
 });
