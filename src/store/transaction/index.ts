@@ -128,6 +128,7 @@ export {
 // `./model/wrappers.ts`'s header comment).
 export type {
   ChangedDesignFileOp,
+  DesignSystemInstallFile,
   ExportPublishInput,
   MigrationTransactionInput,
   PinEventInput,
@@ -145,12 +146,14 @@ export type {
 } from "./model/wrappers";
 export {
   ChatMutationLockedError,
+  DesignSystemInstallInputError,
   SourceChangedError,
   StaleError,
   TurnAlreadyTerminalError,
   TurnFinalizeInputError,
   TurnRecordNotFoundError,
   admitTurn,
+  buildDesignSystemInstallOperations,
   buildExportPublishTransaction,
   buildMigrationTransaction,
   buildPinEventOperations,

@@ -39,6 +39,7 @@ import type {
 } from "store/toml";
 import type {
   CommittedMarker,
+  DesignSystemInstallFile,
   JournalCorruptError,
   ProjectMutationInput,
   RecoveryOutcome,
@@ -423,6 +424,21 @@ export interface SetWorkspaceLocalInput {
   readonly createdAt: string;
 }
 
+/**
+ * `designSystem.install` (project-design-systems §8.3, §8.5): every incoming `system/**` file,
+ * every TREE-relative path the outgoing system had that the incoming one does not, and the
+ * provenance record — all committed together by {@link TransactionEngine.installDesignSystem}.
+ */
+export interface InstallDesignSystemInput {
+  readonly transactionId: string;
+  readonly actionId: string;
+  readonly nextFiles: readonly DesignSystemInstallFile[];
+  readonly removedTreeRelPaths: readonly string[];
+  /** `encodeDesignSystemProvenance`'s complete output (`store/design-systems`). */
+  readonly provenanceBytes: Uint8Array;
+  readonly createdAt: string;
+}
+
 export interface AdvanceSessionCheckpointInput {
   readonly transactionId: string;
   readonly actionId: string;
@@ -487,6 +503,14 @@ export interface TransactionEngine {
   setWorkspaceLocal(input: SetWorkspaceLocalInput): Promise<Error | CommittedMarker>;
   /** Checkpoint persistence (storage-identity §6.2): hashes the target chat's current prefix and durably records the advanced checkpoint. */
   advanceSessionCheckpoint(input: AdvanceSessionCheckpointInput): Promise<Error | CommittedMarker>;
+  /**
+   * `designSystem.install` (project-design-systems §8.3): replaces `design/system/**` and writes
+   * `.termcraft/design-system-source.json` in ONE `project-mutation`. Every operation carries a
+   * CAS `oldImage`, so a tree that changed between the Gate pass and the commit is refused rather
+   * than overwritten; a crash is rolled forward or discarded by the recovery scan that already
+   * runs at `openProject`, so a half-replaced system is not a reachable state.
+   */
+  installDesignSystem(input: InstallDesignSystemInput): Promise<Error | CommittedMarker>;
 
   /**
    * The v1 -> v2 mechanical migration's single transaction (turn-durability §11). Distinct from

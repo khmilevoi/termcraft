@@ -104,6 +104,7 @@ import {
   // `store/transaction` already does. `pageCommentsPath` was RENAMED, not deleted (pin logs
   // are still slug-keyed, design §3) — its call sites below use `pinsJsonlPath`, a
   // mechanical rename with no behavior change.
+  buildDesignSystemInstallOperations,
   buildMigrationTransaction,
   buildPinEventOperations,
   buildWorkspaceLocalPatchOperation,
@@ -144,6 +145,7 @@ import type {
   ChatStore,
   CreateChatInput,
   CreateProjectInput,
+  InstallDesignSystemInput,
   ManifestStore,
   MigrationOutcomeV1,
   OpenProject,
@@ -831,6 +833,36 @@ function makeTransactionEngine(
           mutationKind: "local-state-write",
           operations: [built.operation],
           payloads: payloadMapOf(built.payload),
+          createdAt: input.createdAt,
+        });
+      });
+    },
+
+    /**
+     * `designSystem.install` (project-design-systems §8.3): replaces `design/system/**` and
+     * writes `.termcraft/design-system-source.json` in ONE `project-mutation`. Every operation
+     * carries a CAS `oldImage`, so a tree that changed between the Gate pass and the commit is
+     * refused rather than overwritten; a crash is rolled forward or discarded by the recovery
+     * scan that already runs at `openProject`, so a half-replaced system is not a reachable
+     * state.
+     */
+    async installDesignSystem(input: InstallDesignSystemInput) {
+      return withPermit(mutex, async (permit) => {
+        const built = buildDesignSystemInstallOperations(wrapperDeps, {
+          nextFiles: input.nextFiles,
+          removedTreeRelPaths: input.removedTreeRelPaths,
+          provenanceBytes: input.provenanceBytes,
+        });
+        if (built instanceof Error) return built;
+
+        return runProjectMutation(wrapperDeps, {
+          mutex,
+          permit,
+          transactionId: input.transactionId,
+          actionId: input.actionId,
+          mutationKind: "design-system-install",
+          operations: indexPageOperations(built),
+          payloads: collectPagePayloads(built),
           createdAt: input.createdAt,
         });
       });

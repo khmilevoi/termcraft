@@ -8,9 +8,11 @@ import type {
   ChatSystemRestoreRecord,
   ChatUserRecord,
 } from "entities/chat";
+import { isInsideDesignSystem } from "entities/design-system";
 import { DESIGN_DIRNAME } from "entities/design-tree";
 import type { PageSlug } from "entities/page";
 import type { PinEvent, PinStatusEvent } from "entities/pin";
+import { DESIGN_SYSTEM_PROVENANCE_FILENAME } from "store/design-systems";
 import type { AppendBase, AppendBuilderDeps } from "store/jsonl";
 import {
   buildChatAppend,
@@ -792,7 +794,11 @@ export type ProjectMutationKind =
   // already-shipped kind's meaning:
   | "chat-creation"
   | "page-reorder"
-  | "page-remove";
+  | "page-remove"
+  // project-design-systems §8.3: installing a design system replaces `design/system/**` and
+  // writes the provenance record in ONE recoverable transaction, so "a crash mid-install cannot
+  // leave a half-replaced system". Appended without disturbing any already-shipped kind's meaning.
+  | "design-system-install";
 
 export interface ProjectMutationInput {
   readonly mutex: WriteMutex;
@@ -830,6 +836,95 @@ export async function runProjectMutation(
     plan,
     payloads: input.payloads,
   });
+}
+
+// ---- design-system install (project-design-systems §8.3, §8.5; D11) -------------------
+
+/** A design-system install operation-builder input {@link buildDesignSystemInstallOperations} refuses — containment onto `system/**` failed. */
+export class DesignSystemInstallInputError extends errore.createTaggedError({
+  name: "DesignSystemInstallInputError",
+  message: "design-system install refuses $relPath: $reason",
+}) {}
+
+/** One file of the incoming design system, at a TREE-relative path (`system/design-system.json`). */
+export interface DesignSystemInstallFile {
+  readonly treeRelPath: string;
+  readonly bytes: Uint8Array;
+}
+
+/**
+ * Every operation of a design-system install (project-design-systems §8.3, §8.5): a `replace` per
+ * incoming file, a `delete` per file the outgoing system had and the incoming one does not, and
+ * ONE `replace` of `.termcraft/design-system-source.json`.
+ *
+ * The provenance record rides the SAME plan as the files it describes. Two transactions would open
+ * a window in which the project claims an origin its bytes do not have — worse than no provenance
+ * at all, because it is a claim rather than a silence.
+ *
+ * CONTAINMENT IS ENFORCED HERE, not assumed from the caller: every path this builder touches is
+ * inside `system/` (the design system is the unit that moves, §3.1) or is the provenance record.
+ * An install that could reach a page would be an install that could rewrite the project.
+ *
+ * Module-DAG note (D11 open risk 5, resolved): `entities/design-system` is a leaf entity and
+ * `store/design-systems` imports only `store/safe-fs` plus entities/infrastructure — neither
+ * imports `store/transaction`, so importing both here (for `isInsideDesignSystem` and
+ * `DESIGN_SYSTEM_PROVENANCE_FILENAME`) closes no cycle. Verified by grep across both trees before
+ * writing this import, rather than falling back to the brief's duplicated-literal option.
+ */
+export function buildDesignSystemInstallOperations(
+  deps: TransactionWrapperDeps,
+  input: {
+    readonly nextFiles: readonly DesignSystemInstallFile[];
+    readonly removedTreeRelPaths: readonly string[];
+    readonly provenanceBytes: Uint8Array;
+  },
+) {
+  const built: BuiltOperation[] = [];
+
+  for (const file of input.nextFiles) {
+    if (!isInsideDesignSystem(file.treeRelPath))
+      return new DesignSystemInstallInputError({
+        relPath: file.treeRelPath,
+        reason: "outside system/",
+      });
+    const operation = buildChangedFileOperation(deps, {
+      relPath: file.treeRelPath,
+      change: "replace",
+      newBytes: file.bytes,
+    });
+    if (operation instanceof Error) return operation;
+    built.push(operation);
+  }
+
+  for (const relPath of input.removedTreeRelPaths) {
+    if (!isInsideDesignSystem(relPath))
+      return new DesignSystemInstallInputError({ relPath, reason: "outside system/" });
+    const operation = buildChangedFileOperation(deps, { relPath, change: "delete" });
+    if (operation instanceof Error) return operation;
+    built.push(operation);
+  }
+
+  const provenanceTarget = DESIGN_SYSTEM_PROVENANCE_FILENAME;
+  const oldImage = observeFileImage(deps.fs, provenanceTarget);
+  if (oldImage instanceof Error) return oldImage;
+  const payloadId = deps.append.newPayloadId();
+  built.push({
+    operation: {
+      index: 0,
+      target: provenanceTarget,
+      mode: "replace",
+      oldImage,
+      newImage: {
+        state: "file",
+        sha256: sha256Hex(input.provenanceBytes),
+        size: input.provenanceBytes.byteLength,
+      },
+      payloadId,
+    },
+    payload: [payloadId, input.provenanceBytes],
+  });
+
+  return built;
 }
 
 export interface StandalonePinEventInput {
