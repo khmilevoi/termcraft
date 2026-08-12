@@ -8,6 +8,7 @@ import {
   DesignSystemRefRejectedError,
   DesignSystemSourceIoError,
   DuplicatePackageFileError,
+  QuarantineFailedError,
   SourcesConfigInvalidError,
 } from "store/design-systems";
 import { JsonlMidFileCorruptionError } from "store/jsonl";
@@ -165,6 +166,17 @@ function isLeaseError(error: Error): boolean {
  * its own `RESOURCE_LIMIT_EXCEEDED` above. Everything else here is the same generic durable
  * read/write/decode fault every sibling on the `PERSISTENCE_FAILED` list is — the closed v1
  * union has no "design-system source" family of its own, and inventing one is forbidden.
+ *
+ * `QuarantineFailedError` (M1 fix) is included here too, though it is not itself a `SourceError`
+ * member: it is `store/design-systems`' OTHER tagged error, covering the mkdir/write/read-back
+ * faults `admitPackageThroughQuarantine` raises while staging a package (`quarantine.ts`). It is
+ * an ORDINARY, expected failure family, not a surprise — `store/adapters/design-system-install.ts`'s
+ * `quarantineFailureDto` already walks its `cause` chain for a `StorageLimitExceededError`/
+ * `DesignSystemPackageTooLargeError` BEFORE calling `toFailureDto`, so by the time one reaches
+ * here it is never a limit fault; the same generic `PERSISTENCE_FAILED` bucket every sibling
+ * above gets is correct. Without this line it fell through to the final "unmapped store error"
+ * branch below and logged a `console.warn` on every ordinary quarantine mkdir/write failure —
+ * this file's own header says a KNOWN store error must never reach that branch.
  */
 function isDesignSystemSourceError(error: Error): boolean {
   return (
@@ -173,7 +185,8 @@ function isDesignSystemSourceError(error: Error): boolean {
     error instanceof DesignSystemRefRejectedError ||
     error instanceof DesignSystemPublishRefusedError ||
     error instanceof SourcesConfigInvalidError ||
-    error instanceof DuplicatePackageFileError
+    error instanceof DuplicatePackageFileError ||
+    error instanceof QuarantineFailedError
   );
 }
 

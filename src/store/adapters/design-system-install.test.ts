@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import type { PackageFileV1 } from "core/ports";
 import { parseDesignSystemRef } from "entities/design-system-ref";
+import { log } from "infrastructure/debug-log";
 import { uuidv7 } from "infrastructure/uuid";
 import { sha256Hex } from "store/jsonl";
 
@@ -57,6 +58,27 @@ describe("createDesignSystemQuarantineAdapter — contract test (real quarantine
     const escaping: PackageFileV1 = { relPath: "../escape.json", bytes: bytesOf("{}") };
     const result = await adapter.admit({ installId: uuidv7(), files: [escaping] });
     expect(result).toHaveProperty("code", "PERSISTENCE_FAILED");
+  });
+
+  test("M1: an ordinary QuarantineFailedError is a KNOWN store error — no unmapped-error warn", async () => {
+    // `failure.ts`'s own header: "a KNOWN store error must never reach" the final unmapped-error
+    // branch, which logs `console.warn` on every hit — an ordinary, expected quarantine refusal
+    // (a package path escaping the package root, exactly like the test above) must not be logged
+    // as if it were a surprise. This reproduces the SAME scenario as "maps any other fault to
+    // PERSISTENCE_FAILED" above, but asserts the warn side effect too, not just the DTO code.
+    const warnSpy = spyOn(log, "warn");
+    warnSpy.mockClear();
+    try {
+      const adapter = createDesignSystemQuarantineAdapter({
+        userStateRoot: freshScratch("tc-quarantine-userstate-"),
+      });
+      const escaping: PackageFileV1 = { relPath: "../escape.json", bytes: bytesOf("{}") };
+      const result = await adapter.admit({ installId: uuidv7(), files: [escaping] });
+      expect(result).toHaveProperty("code", "PERSISTENCE_FAILED");
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("admits a well-formed package and reads its bytes back through the candidate", async () => {
